@@ -1,0 +1,53 @@
+name: Feature request
+description: Suggest a new MCP tool or convenience wrapper
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing — please skim [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md)
+        for what is **out of scope** (input pacing, behavioral modeling,
+        application-specific adapters, protocol changes). Feature
+        requests in those areas will be closed.
+
+  - type: textarea
+    id: use_case
+    attributes:
+      label: What are you trying to do?
+      description: Describe the workflow, not the implementation.
+      placeholder: |
+        I want my agent to drag a file from coordinate A to coordinate B
+        without having to manually script the mouse-down / move / mouse-
+        up sequence as three separate tool calls.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_tool
+    attributes:
+      label: Proposed MCP tool shape (optional)
+      description: |
+        Sketch the tool name, input schema, and what it would call
+        internally (build_*  helpers from `clawtouch_mcp.protocol`).
+      render: jsonc
+      placeholder: |
+        {
+          "name": "hid.drag",
+          "input_schema": {
+            "from": ["x", "y"],
+            "to":   ["x", "y"],
+            "button": "left"
+          }
+        }
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Why not as separate calls?
+      description: |
+        Every new tool is more LLM context and more code to maintain.
+        Convince us this can't be solved cleanly by chaining existing
+        tools in the agent prompt.
+    validations:
+      required: true

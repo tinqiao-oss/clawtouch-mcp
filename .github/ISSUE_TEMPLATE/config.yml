@@ -1,0 +1,16 @@
+blank_issues_enabled: true
+
+contact_links:
+  - name: 商务咨询 / Commercial inquiry
+    url: https://github.com/tinqiao-oss/clawtouch-mcp/blob/master/docs/COMMERCIAL_PRODUCT.md
+    about: |
+      For pricing, evaluation access, B2B deployment, or OEM hardware partnerships —
+      please see COMMERCIAL_PRODUCT.md first, then email support@tinqiao.com directly.
+      We respond within a few business days. (Commercial discussions stay off public
+      issue trackers — do not file sensitive info as a GitHub issue.)
+
+  - name: Email us / 发邮件咨询
+    url: mailto:support@tinqiao.com?subject=%5BCommercial%5D%20clawtouch-mcp
+    about: |
+      Direct email for commercial / OEM / enterprise inquiries.
+      Subject line is pre-filled with [Commercial] — feel free to edit.

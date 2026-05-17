@@ -1,0 +1,79 @@
+name: Bug report
+description: Something isn't working
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please fill out
+        the sections below — incomplete reports usually get a
+        "could you re-open with X" rather than a fix.
+
+  - type: input
+    id: version
+    attributes:
+      label: clawtouch-mcp version
+      description: Output of `pip show clawtouch-mcp | grep Version`
+      placeholder: "0.2.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Host OS + Python
+      placeholder: "macOS 14.5, Python 3.12.4"
+    validations:
+      required: true
+
+  - type: input
+    id: client
+    attributes:
+      label: MCP client
+      description: Which agent / IDE is launching the server?
+      placeholder: "Claude Desktop 0.7.0 / Cline 1.5.0 / OpenClaw 0.4.0 / Hermes Agent / custom"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: hardware
+    attributes:
+      label: Hardware
+      options:
+        - Real Pico 2 board
+        - Real ClawTouch turnkey unit
+        - --mock mode (no hardware)
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Minimal — please test with `--mock` first if possible so it's
+        clear the bug is in the server, not the firmware / hardware.
+      placeholder: |
+        1. `clawtouch-mcp --mock --screen 1920x1080`
+        2. Send `{"jsonrpc":"2.0","id":1,"method":"tools/call",...}`
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs (`--log-level DEBUG`)
+      description: |
+        Run with `--log-level DEBUG` and paste the relevant stderr
+        block. Redact anything sensitive — coordinates and typed text
+        are echoed in logs.
+      render: shell
