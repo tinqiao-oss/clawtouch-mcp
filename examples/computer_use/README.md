@@ -113,6 +113,25 @@ ClawTouch HID primitives:
 | `cursor_position` | Not supported (HID is fire-and-forget); returns `(0, 0)` |
 | `left_click_drag` | Limited (current bridge has no separate button-down) — best-effort move + click |
 
+## Regulatory note for deployments touching end users
+
+If you deploy a Computer Use agent that posts AI-generated content
+into chat apps, emails, comments, or other channels reaching end
+users, several jurisdictions now require **conspicuous labeling** of
+that content:
+
+- **China** — *Provisions on the Administration of Deep Synthesis
+  Internet Information Services* (互联网信息服务深度合成管理规定,
+  effective 2023-01-10), §16 / §17.
+- **EU** — *AI Act* Article 50 (deployers of generative AI systems
+  must disclose AI-generated text / image / audio / video).
+
+Typical implementations: prepend `[AI]` (or a localized equivalent)
+to outgoing text, embed a visible watermark in generated media, or
+expose a UI toggle that users can verify. These demos do **not** add
+such labels — your application is responsible for adding them
+before any AI output reaches a third-party platform or end user.
+
 ## Safety notes
 
 Computer Use loops will drive your real mouse and keyboard with no
