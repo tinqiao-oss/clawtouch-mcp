@@ -202,6 +202,13 @@ OS 级合成输入在某些受限环境(企业 EDR、kiosk 锁机、辅助技术
 键盘鼠标走完全相同的输入路径**。这点对辅助技术兼容性测试、kiosk 自动化、
 离线测试台架、跨设备 RPA 等场景至关重要。
 
+**能控制手机吗?**
+能 —— HID 设备是宿主无关的。通过 USB-OTG 把它插到手机(安卓或 iOS)上,
+同一套 `hid.*` 工具照常工作,手机看到的就是一个普通 USB 键鼠。无线接法
+(板子插手机、由 PC 通过 Wi-Fi 发命令)见 `clawtouch-hid` 仓的
+[Wi-Fi 传输指南](https://github.com/tinqiao-oss/clawtouch-hid/blob/master/docs/wifi-transport.zh-CN.md)。
+开箱即用、由感知驱动的手机自动化属于商业产品,不在本 server 范围内。
+
 **有 JavaScript / TypeScript 版本吗?**
 暂时没有。`clawtouch-bridge-sdk`(Python + Node 双语言)在规划中 — 见路线图。
 
