@@ -1,0 +1,38 @@
+clawtouch-mcp
+Copyright (c) 2026 Tinqiao Technology (Beijing) Co., Ltd.
+
+This product is licensed under the MIT License — see LICENSE for the full
+text.
+
+
+==============================================================================
+Third-party Python dependencies
+==============================================================================
+
+pyserial (>= 3.5, required runtime dependency)
+    Cross-platform serial port communication library.
+    Copyright (c) 2001-present Chris Liechti
+    Licensed under the BSD 3-Clause License.
+    Upstream:  https://github.com/pyserial/pyserial
+    pyserial is not bundled in this repository; it is installed at runtime
+    via pip as a normal PyPI dependency. The BSD-3 license text is
+    available in the upstream LICENSE file or at
+    https://opensource.org/licenses/BSD-3-Clause.
+
+mss (>= 9.0, optional dependency under `screenshot` extra)
+    Cross-platform multi-screen screenshot library.
+    Copyright (c) 2013-present Mickaël Schoentgen
+    Licensed under the MIT License.
+    Upstream:  https://github.com/BoboTiG/python-mss
+    mss is only installed when the user opts in via
+    `pip install clawtouch-mcp[screenshot]`; it is not bundled.
+
+
+==============================================================================
+No bundled third-party source code
+==============================================================================
+
+clawtouch-mcp itself does not redistribute third-party source code or
+binaries; all dependencies above are pulled in by pip at install time.
+The above acknowledgements are kept here for downstream compliance review
+(BSD-3 attribution requirement for pyserial in particular).
