@@ -273,4 +273,3 @@ combos:
 | Intel x86_64 | _not yet tested_ | Should work — same code paths |
 | macOS 12-13 | _not yet tested_ | `mss` permission flow may differ pre-14 |
 | Pico 2 (RP2350) | Yes | VID `0x2E8A`, PID `0x000B` enumerated correctly |
-| Pico W (RP2040) | _not yet tested_ | Shares VID `0x2E8A` so detection works as-is. May need single-CDC fallback if its firmware enumerates only one port — handled by `list_pico_ports()` already. |

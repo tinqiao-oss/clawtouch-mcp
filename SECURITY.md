@@ -45,10 +45,6 @@ the next patch release (typically within 2 weeks for confirmed issues).
 - **Physical security of the Pico hardware.** Anyone with physical
   access to the device can do anything its USB HID profile allows
   regardless of this server.
-- **Detection of automated input by third-party applications.** This
-  server intentionally generates real HID input; whether or not a
-  specific application's anti-automation logic recognizes it is out
-  of scope and we don't make claims either way.
 
 ## Disclosure
 

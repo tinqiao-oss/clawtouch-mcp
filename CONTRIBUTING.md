@@ -22,10 +22,10 @@ Knowing what we will and won't take a PR for saves everyone's time.
 
 ## What we won't take
 
-- **Low-level input timing or behavioral-modeling layers.** This is
-  intentionally a thin HID primitive layer. Anything that shapes the
-  cadence or pattern of input belongs in your agent code, not here. We
-  will close such PRs without review.
+- **Agent-loop logic and application-level features.** This is
+  intentionally a thin HID primitive layer. Anything that decides
+  *what* to do or *when* to do it belongs in your agent code, not
+  here. We will close such PRs without review.
 - **Application-specific adapters** (WeChat selectors, Discord
   shortcuts, etc.). Those live in agent / RPA frameworks built on top.
 - **Wire-protocol changes.** The protocol is owned by the

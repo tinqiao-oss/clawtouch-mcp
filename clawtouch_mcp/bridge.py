@@ -1,8 +1,8 @@
 """Async serial bridge to a Pico 2 running the ClawTouch HID firmware.
 
-Thin wrapper over pyserial; raw protocol only, no input-pacing or
-timing logic at this layer. Higher layers (ClawTouch, OpenClaw, Hermes)
-add their own scheduling.
+Thin wrapper over pyserial; raw protocol only — no agent-loop logic
+at this layer. Higher layers (ClawTouch, OpenClaw, Hermes) add their
+own scheduling and orchestration.
 """
 from __future__ import annotations
 

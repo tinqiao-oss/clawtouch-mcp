@@ -12,18 +12,17 @@ software-synthesized mouse/keyboard with real USB HID input.
 
 ## Why bother?
 
-Both providers' Computer Use loops normally use software input
-synthesis (`xdotool`, `pyautogui`, browser DOM events). These demos
-replace **only the action execution path** with the ClawTouch USB
-device. Perception (screenshots) and reasoning (the LLM) are
-unchanged.
+These demos replace the action execution path of Computer Use loops
+with a real USB HID device. Perception (screenshots) and reasoning
+(the LLM) are unchanged — only the way the agent's actions reach the
+operating system changes.
 
 What this gets you:
 
 - Input events traverse the OS HID driver stack at the USB layer —
   identical to plugging in a real keyboard/mouse — useful for
   compatibility testing, accessibility scenarios, or environments
-  where synthetic input is blocked.
+  where no software can be installed on the target.
 - Same agent prompts, same reasoning model, same loop shape as the
   vanilla demos — just a different action sink.
 
@@ -170,7 +169,7 @@ and application-specific adapters are still your job.
 
 The ClawTouch desktop product packages that whole loop end-to-end:
 vision-based UI element detection, multi-step task orchestration, and
-built-in adapters for WeChat / browser / common desktop apps — no glue
-code required. That's the closed-source side of the open-core split.
+built-in adapters for popular Chinese-market apps — no glue code
+required. That's the closed-source side of the open-core split.
 See [clawtouch.cn](https://clawtouch.cn) or write `support@tinqiao.com`
 for evaluation access.

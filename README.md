@@ -28,16 +28,14 @@ translates `hid.click` / `hid.type` / `hid.scroll` tool calls into real HID
 reports that travel through the OS HID driver stack on **the same input path
 as any plugged-in external keyboard or mouse**.
 
-**Why care?** Most "AI controls your computer" demos require an agent
-process running on the target machine and route through OS-level synthetic
-event APIs. Those approaches don't fit locked-down kiosks, embedded test
-harnesses, or cross-machine RPA where the target must stay clean. A
-physical USB HID peripheral routes input through the standard OS HID
-driver stack — the same path as any plug-in keyboard or mouse — and
-needs zero software installed on the target.
+**Why care?** A physical USB HID peripheral routes input through the
+standard OS HID driver stack — the same path as any plug-in keyboard
+or mouse — and needs zero software installed on the target. That fits
+locked-down kiosks, embedded test harnesses, cross-machine RPA, and
+any scenario where the target machine must stay clean.
 
-> 📦 MIT-licensed. No ClawTouch backend, no LLM, no input-pacing layer. Just
-> the raw HID plumbing so other agent stacks can talk to real hardware.
+> 📦 MIT-licensed. No ClawTouch backend, no LLM, no agent loop on top —
+> just the raw HID plumbing so other agent stacks can talk to real hardware.
 
 ## Scope — what this is and isn't
 
@@ -63,9 +61,9 @@ We support these scenarios:
 We do **not** support, document, or assist with:
 
 - **Mass account creation / multi-account operations** on consumer
-  platforms (WeChat, Douyin, Instagram, etc.) — a single-host tethered
-  peripheral is structurally a poor fit, and the use case is regulatory
-  red-line territory in most jurisdictions.
+  platforms — a single-host tethered peripheral is structurally a poor
+  fit, and the use case is regulatory red-line territory in most
+  jurisdictions.
 - **Application-specific scripted shortcuts** (selectors, fixed-flow
   scripts for a particular site or app). Those belong in agent / RPA
   frameworks built on top of this primitive layer.
@@ -230,14 +228,12 @@ Yes — buy an $8 Raspberry Pi Pico 2, flash the open-source
 [clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid) firmware,
 and the server will talk to it the same way as the turnkey device.
 
-**Why HID and not just OS-level mouse / keyboard APIs (pyautogui etc.)?**
-OS-level synthetic input requires an agent process on the target machine
-and may behave differently from real input in locked-down kiosks, embedded
-test harnesses, or accessibility-tech compatibility rigs. A USB HID
-peripheral routes through the standard OS HID driver stack and works in
-environments where no software can be installed on the target — kiosk
-automation, offline test rigs, accessibility tooling, and cross-machine
-RPA.
+**Why HID instead of OS-level mouse/keyboard APIs?**
+OS-level input APIs require an agent process to be running on the
+target machine and only work where such an agent can be installed. A
+USB HID peripheral routes through the standard OS HID driver stack
+and needs zero software on the target — fitting kiosk automation,
+offline test rigs, accessibility tooling, and cross-machine RPA.
 
 **Is there a JavaScript / TypeScript version?**
 Not yet. `clawtouch-bridge-sdk` (Python + Node) is planned — see roadmap.
@@ -304,8 +300,8 @@ PRs are welcome for: new MCP tools that map to existing HID primitives, bug
 fixes, additional client integration examples, doc improvements,
 non-English README translations.
 
-We're _not_ taking PRs for: low-level input timing or behavioral-modeling
-layers (intentionally out of scope — see [open source roadmap](#open-source-roadmap)),
+We're _not_ taking PRs for: agent-loop logic or application-level
+features (intentionally out of scope — see [open source roadmap](#open-source-roadmap)),
 adapters for specific applications (those live in the closed-source
 desktop app).
 

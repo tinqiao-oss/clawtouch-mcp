@@ -245,6 +245,5 @@ monitors regardless of the clamp rectangle.
 | Windows 10 1809+ | _not yet tested_ | Same code paths — should work |
 | Windows 10 pre-1809 | unsupported | `SetProcessDpiAwareness(2)` (per-monitor v2) needs 1809+. v1 fallback works on older |
 | Pico 2 (RP2350) | Yes | VID `0x2E8A`, PID `0x000B` enumerated correctly |
-| Pico W (RP2040) | _not yet tested_ | Shares VID `0x2E8A` so detection works as-is. May need single-CDC fallback if its firmware enumerates only one port — handled by `list_pico_ports()` already. |
 | Claude Code VS Code extension 2.1.x | 2.1.143 verified | Earlier versions may have different MCP loading semantics |
 | Claude Desktop (Windows) | _not yet tested_ | Reads config from `%APPDATA%\Claude\claude_desktop_config.json` — same `mcpServers` shape |

@@ -7,9 +7,9 @@ body:
     attributes:
       value: |
         Before filing — please skim [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md)
-        for what is **out of scope** (input pacing, behavioral modeling,
-        application-specific adapters, protocol changes). Feature
-        requests in those areas will be closed.
+        for what is **out of scope** (agent-loop logic, application-
+        specific adapters, protocol changes). Feature requests in those
+        areas will be closed.
 
   - type: textarea
     id: use_case
