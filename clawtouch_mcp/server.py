@@ -38,6 +38,7 @@ logger = logging.getLogger("clawtouch_mcp.server")
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
 MAX_TYPE_LEN = 4096
+_MODIFIER_NAMES = frozenset({"ctrl", "shift", "alt", "gui", "win", "cmd"})
 
 
 def _detect_screen() -> Optional[tuple[int, int]]:
@@ -523,11 +524,24 @@ class ClawTouchMcpServer:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "key": {"type": "string", "description": "named key (enter/tab/f1…) or single char"},
+                    "key": {
+                        "type": "string",
+                        "description": (
+                            "Named key (enter/tab/f1…), a single character, "
+                            "or shortcut shorthand like 'ctrl+c' or 'ctrl+alt+l' "
+                            "— modifiers in the prefix are split out and combined "
+                            "with the modifiers array."
+                        ),
+                    },
                     "modifiers": {
                         "type": "array",
                         "items": {"type": "string", "enum": ["ctrl", "shift", "alt", "gui", "win", "cmd"]},
                         "default": [],
+                        "description": (
+                            "Explicit modifier list. Combined with any modifiers "
+                            "parsed from the key shorthand. Optional when the key "
+                            "field already encodes the modifiers (e.g. 'ctrl+c')."
+                        ),
                     },
                 },
                 "required": ["key"],
@@ -615,10 +629,19 @@ class ClawTouchMcpServer:
 
     async def _tool_key(self, **kw) -> dict:
         self.rate.check()
-        ok = await self.bridge.key_combo(
-            list(kw.get("modifiers", [])) or [],
-            str(kw["key"]),
-        )
+        key_str = str(kw["key"])
+        modifiers = [m.lower() for m in (kw.get("modifiers") or [])]
+        # Shortcut shorthand: "ctrl+c" / "ctrl+alt+l" — split modifiers
+        # from the prefix when every "+"-separated head token is a known
+        # modifier name. Keeps "+" itself usable as a literal key.
+        if "+" in key_str and len(key_str) > 1:
+            parts = key_str.split("+")
+            head, tail = parts[:-1], parts[-1]
+            if tail and all(p.lower() in _MODIFIER_NAMES for p in head):
+                merged = list(dict.fromkeys(modifiers + [p.lower() for p in head]))
+                modifiers = merged
+                key_str = tail
+        ok = await self.bridge.key_combo(modifiers, key_str)
         return {"ok": ok}
 
     async def _tool_release_all(self, **_kw) -> dict:

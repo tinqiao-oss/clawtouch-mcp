@@ -108,6 +108,81 @@ class TestDispatch:
         assert result is None
 
 
+class TestKeyShortcut:
+    """`hid.key` accepts both structured `{key, modifiers}` and shorthand
+    like `"ctrl+c"` / `"ctrl+alt+l"` in the `key` field. The handler
+    splits the shorthand prefix into modifiers before calling the bridge.
+    """
+
+    def _last_key_call(self, server):
+        return [c for c in server.bridge._calls if c[0] == "key"][-1][1]
+
+    def test_structured_form_unchanged(self, server):
+        result = _run(server.dispatch({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "hid.key",
+                       "arguments": {"key": "c", "modifiers": ["ctrl"]}},
+        }))
+        assert json.loads(result["result"]["content"][0]["text"])["ok"] is True
+        call = self._last_key_call(server)
+        assert call == {"modifiers": ["ctrl"], "key": "c"}
+
+    def test_shorthand_single_modifier(self, server):
+        _run(server.dispatch({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "hid.key", "arguments": {"key": "ctrl+c"}},
+        }))
+        assert self._last_key_call(server) == {"modifiers": ["ctrl"], "key": "c"}
+
+    def test_shorthand_multiple_modifiers(self, server):
+        _run(server.dispatch({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "hid.key", "arguments": {"key": "ctrl+alt+l"}},
+        }))
+        assert self._last_key_call(server) == {
+            "modifiers": ["ctrl", "alt"], "key": "l",
+        }
+
+    def test_shorthand_merges_with_explicit_modifiers_no_dupes(self, server):
+        _run(server.dispatch({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "hid.key",
+                       "arguments": {"key": "ctrl+c", "modifiers": ["ctrl", "shift"]}},
+        }))
+        # explicit + shorthand combined, dedup, "ctrl" kept once
+        call = self._last_key_call(server)
+        assert call["key"] == "c"
+        assert sorted(call["modifiers"]) == ["ctrl", "shift"]
+
+    def test_named_key_with_plus_in_modifier_prefix(self, server):
+        _run(server.dispatch({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "hid.key", "arguments": {"key": "shift+enter"}},
+        }))
+        assert self._last_key_call(server) == {
+            "modifiers": ["shift"], "key": "enter",
+        }
+
+    def test_literal_plus_is_not_split(self, server):
+        """If the prefix isn't all modifiers, treat the whole string as
+        the key name (firmware will reject if unknown, but we don't
+        eat the '+')."""
+        _run(server.dispatch({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "hid.key", "arguments": {"key": "foo+bar"}},
+        }))
+        assert self._last_key_call(server) == {"modifiers": [], "key": "foo+bar"}
+
+    def test_case_insensitive_modifier_prefix(self, server):
+        _run(server.dispatch({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "hid.key", "arguments": {"key": "CTRL+ALT+L"}},
+        }))
+        assert self._last_key_call(server) == {
+            "modifiers": ["ctrl", "alt"], "key": "L",
+        }
+
+
 class TestSafety:
     def test_coords_clamped_to_screen(self, server):
         result = _run(server.dispatch({

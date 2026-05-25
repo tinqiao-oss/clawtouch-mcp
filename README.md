@@ -190,7 +190,7 @@ SLA, see [`docs/COMMERCIAL_PRODUCT.md`](docs/COMMERCIAL_PRODUCT.md).
 | `hid.move`        | Move mouse (absolute or relative)             |
 | `hid.hover`       | Move, then idle                               |
 | `hid.type`        | Type a UTF-8 string                           |
-| `hid.scroll`      | Wheel scroll (positive = down, negative = up) |
+| `hid.scroll`      | Wheel scroll (positive = up, negative = down) |
 | `hid.key`         | Named key / shortcut (`enter`, `ctrl+c`, …)   |
 | `hid.release_all` | Panic stop — release every held button / key  |
 | `hid.screenshot`  | PNG screenshot of primary monitor (opt-in)    |

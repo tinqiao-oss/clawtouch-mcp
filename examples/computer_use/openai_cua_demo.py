@@ -20,11 +20,20 @@ NOTE — CUA API is preview and shape may shift
     current Computer Use docs:
     https://platform.openai.com/docs/guides/tools-computer-use
 
+SAFETY CHECKS
+    OpenAI CUA may return `pending_safety_check` items on a
+    `computer_call`; per spec they must be echoed back as
+    `acknowledged_safety_checks` on the next `computer_call_output`
+    before the model will continue. By default this demo **aborts**
+    when a pending safety check arrives — that is the safe default
+    for a reference script. Pass `--acknowledge-safety-checks` to
+    auto-ack and continue (use only in trusted sandbox environments;
+    production deployments must surface the check to a human and
+    only ack after explicit confirmation).
+
 NOT INCLUDED
     - Multi-machine setups (screenshot stays local)
     - Drag (current bridge has no separate button-down/up)
-    - Safety checks ack roundtrip (OpenAI may return `pending_safety_checks`
-      requiring acknowledgement; this demo treats them as informational)
 """
 from __future__ import annotations
 
@@ -155,8 +164,18 @@ async def execute(
 # ─────────────────────────── Main loop ───────────────────────────
 
 async def run(task: str, bridge: Any, screen_w: int, screen_h: int,
-              max_iterations: int = 25) -> None:
-    """CUA Responses API loop: send → computer_call → execute → computer_call_output."""
+              max_iterations: int = 25, *,
+              acknowledge_safety_checks: bool = False) -> None:
+    """CUA Responses API loop: send → computer_call → execute → computer_call_output.
+
+    Per OpenAI CUA spec, when a `computer_call` carries
+    `pending_safety_checks`, the next `computer_call_output` must
+    include `acknowledged_safety_checks` mirroring them. When
+    ``acknowledge_safety_checks`` is False (default), this loop
+    aborts on the first pending check — the safe default for a
+    reference script. When True, the checks are echoed back so the
+    model can continue.
+    """
     client = AsyncOpenAI()
 
     # Initial request
@@ -194,6 +213,20 @@ async def run(task: str, bridge: Any, screen_w: int, screen_h: int,
         # Execute each action, then capture screenshot, then send back
         inputs: list[dict] = []
         for call in calls:
+            pending = list(getattr(call, "pending_safety_checks", None) or [])
+            if pending and not acknowledge_safety_checks:
+                logger.error(
+                    "CUA returned %d pending_safety_check(s) — aborting. "
+                    "Re-run with --acknowledge-safety-checks to opt into "
+                    "automatic acknowledgement (trusted sandbox only).",
+                    len(pending),
+                )
+                for c in pending:
+                    logger.error("  safety check: code=%s message=%s",
+                                 getattr(c, "code", "?"),
+                                 getattr(c, "message", "?"))
+                return
+
             try:
                 await execute(bridge, call.action.model_dump()
                               if hasattr(call.action, "model_dump")
@@ -204,14 +237,31 @@ async def run(task: str, bridge: Any, screen_w: int, screen_h: int,
 
             # Always reply with a fresh screenshot — CUA expects it
             screenshot_b64 = _take_screenshot_b64()
-            inputs.append({
+            output_item: dict = {
                 "call_id": call.call_id,
                 "type": "computer_call_output",
                 "output": {
                     "type": "computer_screenshot",
                     "image_url": f"data:image/png;base64,{screenshot_b64}",
                 },
-            })
+            }
+            if pending:
+                # Echo pending checks back per OpenAI CUA spec; without
+                # this the model refuses to continue.
+                output_item["acknowledged_safety_checks"] = [
+                    {
+                        "id": getattr(c, "id", None),
+                        "code": getattr(c, "code", None),
+                        "message": getattr(c, "message", None),
+                    }
+                    for c in pending
+                ]
+                logger.warning(
+                    "auto-acknowledged %d safety check(s) — "
+                    "--acknowledge-safety-checks is set",
+                    len(pending),
+                )
+            inputs.append(output_item)
 
         # Continue the conversation
         response = await client.responses.create(
@@ -259,6 +309,12 @@ def main() -> int:
     p.add_argument("--screen", default="1920x1080")
     p.add_argument("--max-iterations", type=int, default=25)
     p.add_argument("--log-level", default="INFO")
+    p.add_argument(
+        "--acknowledge-safety-checks",
+        action="store_true",
+        help=("Auto-acknowledge CUA pending_safety_checks (trusted sandbox "
+              "only). Default: abort on first safety check."),
+    )
     args = p.parse_args()
 
     logging.basicConfig(level=args.log_level,
@@ -273,7 +329,10 @@ def main() -> int:
     async def go():
         bridge = await make_bridge(args.mock, args.port)
         try:
-            await run(args.task, bridge, screen_w, screen_h, args.max_iterations)
+            await run(
+                args.task, bridge, screen_w, screen_h, args.max_iterations,
+                acknowledge_safety_checks=args.acknowledge_safety_checks,
+            )
         finally:
             await bridge.close()
 
