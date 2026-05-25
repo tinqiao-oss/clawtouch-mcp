@@ -135,19 +135,11 @@ default for privacy.)
 
 ## Use with other MCP clients
 
-Copy-pasteable config snippets for 7 verified clients live in
-[`examples/integrations/`](examples/integrations/):
-
-- [Claude Desktop / Claude Code](examples/integrations/claude_desktop.md)
-- [Cursor](examples/integrations/cursor.md)
-- [OpenClaw](examples/integrations/openclaw.md)
-- [Hermes Agent (NousResearch)](examples/integrations/hermes_agent.md)
-- [ChatGPT Desktop + OpenAI Codex CLI](examples/integrations/openai.md)
-- [Cherry Studio 🇨🇳](examples/integrations/cherry_studio.md)
-- [Trae IDE (ByteDance) 🇨🇳](examples/integrations/trae_ide.md)
-
-Each file has the verify-it-works steps and common gotchas for that
-client. PRs adding new clients welcome.
+Copy-pasteable config for 7 verified clients (Claude Desktop / Code,
+Cursor, OpenClaw, Hermes Agent, ChatGPT Desktop / Codex CLI,
+Cherry Studio, Trae IDE) — see
+[`examples/integrations/INTEGRATIONS.md`](examples/integrations/INTEGRATIONS.md).
+PRs adding new clients welcome.
 
 ## Use with Computer Use loops
 
@@ -238,8 +230,8 @@ Not yet. `clawtouch-bridge-sdk` (Python + Node) is planned — see roadmap.
 
 **How is this different from the closed-source ClawTouch desktop app?**
 This MCP server is the bottom HID primitive layer. The desktop product
-is a separate closed-source agent on top of the same hardware — see
-[`docs/COMMERCIAL_PRODUCT.md`](docs/COMMERCIAL_PRODUCT.md).
+is a separate closed-source agent on top of the same hardware; contact
+`support@tinqiao.com` for details.
 
 ## Open source roadmap
 
@@ -252,7 +244,7 @@ are open, the integrated commercial product stays closed.
 | **[clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** (firmware + frozen v1.0 protocol) | ✅ Released |
 | **[clawtouch-skills](https://github.com/tinqiao-oss/clawtouch-skills)** (markdown skill files for LLM agents) | ✅ Released |
 | **clawtouch-bridge-sdk** (Python + Node HID SDK)   | 🔵 Future       |
-| Backend / desktop app / adapters / vision models   | 🔒 Closed source — [what's in it](docs/COMMERCIAL_PRODUCT.md) |
+| Backend / desktop app / adapters / vision models   | 🔒 Closed source — contact `support@tinqiao.com` |
 
 The dates aren't fixed — we ship when each piece is properly polished. Star
 the org [@tinqiao-oss](https://github.com/tinqiao-oss) to get notified.
@@ -278,9 +270,6 @@ the org [@tinqiao-oss](https://github.com/tinqiao-oss) to get notified.
                                                  │  Linux)             │
                                                  └─────────────────────┘
 ```
-
-See [`docs/TECHNICAL_WALKTHROUGH.md`](docs/TECHNICAL_WALKTHROUGH.md) for a
-frame-by-frame trace of what happens when an agent calls `hid.click`.
 
 For the bigger picture — how this MCP server fits into the larger
 Perception → Decision → Action loop ClawTouch uses, where data goes, and
