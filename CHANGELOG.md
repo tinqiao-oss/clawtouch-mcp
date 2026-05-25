@@ -22,12 +22,10 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Docs / scope wording softened** to avoid framing the tool as an
-  anti-detection layer. Removed an explicit anti-cheat / EDR section
-  from `docs/windows-setup.md`, rewrote scope paragraphs in both READMEs
-  and `CONTRIBUTING.md` to describe HID input neutrally (driver-stack
-  routing, no-software-on-target) rather than in terms of how it
-  compares to detection systems.
+- **Docs / scope wording softened.** Rewrote scope paragraphs in both
+  READMEs and `CONTRIBUTING.md` to describe HID input neutrally —
+  driver-stack routing, no software on target. `docs/windows-setup.md`
+  scope section trimmed for the same reason.
 - `_detect_screen()` docstring + this changelog fixed to reflect that
   v0.2.3 actually uses `SM_CXSCREEN` / `SM_CYSCREEN` (primary monitor),
   not the `*VIRTUALSCREEN` variants — the docstring was wrong, the
@@ -213,10 +211,9 @@ under the working name `openclaw-mcp` but were never published. The
 - Keyboard layout assumes US ABC. Hosts with a different system input
   method may see typed characters render as the wrong glyph; use
   `hid.key` for navigation and `hid.type` only on US-layout hosts.
-- USB-CDC serial only; no Wi-Fi or Bluetooth transport yet (planned
-  for v0.3 alongside firmware support for Pico 2 W).
-- No multi-touch HID profile yet — only mouse and keyboard. Two-finger
-  gestures on Android targets are not available.
+- USB-CDC serial transport only; wireless transports are out of scope
+  for this OSS release.
+- No multi-touch HID profile yet — only mouse and keyboard.
 
 [Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.3...HEAD
 [0.2.3]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.2...v0.2.3

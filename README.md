@@ -212,9 +212,9 @@ This server can talk to:
 
 1. **ClawTouch HID device** — turnkey hardware, drop-shipped, plug-and-play.
    Order or get a sample at [clawtouch.cn](https://clawtouch.cn).
-2. **Any RP2350 board running [clawtouch-hid-firmware](#open-source-roadmap)** —
-   coming soon as a separate open-source repo. Buy a Pico 2 (~$8), flash the
-   firmware, you're done.
+2. **Any RP2350 board running [clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** —
+   the OSS firmware + frozen v1.0 protocol live in their own public repo.
+   Buy a Pico 2 (~$8), flash the firmware, you're done.
 
 The wire protocol is the same for both — the server doesn't care which one it
 talks to.
@@ -226,9 +226,9 @@ No. This server only speaks USB serial to the HID board. There's no network
 call. No data leaves your machine.
 
 **Can I use this without buying ClawTouch hardware?**
-Once `clawtouch-hid-firmware` lands (see roadmap), yes — an $8 Raspberry Pi
-Pico 2 flashed with the firmware will work. Right now you need either the
-turnkey hardware or wait for the firmware release.
+Yes — buy an $8 Raspberry Pi Pico 2, flash the open-source
+[clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid) firmware,
+and the server will talk to it the same way as the turnkey device.
 
 **Why HID and not just OS-level mouse / keyboard APIs (pyautogui etc.)?**
 OS-level synthetic input requires an agent process on the target machine
@@ -257,8 +257,8 @@ are open, the integrated commercial product stays closed.
 | Component                              | Status                       |
 |----------------------------------------|------------------------------|
 | **clawtouch-mcp**                      | ✅ Released (this repo)      |
-| **clawtouch-hid-firmware** (CircuitPython, RP2350) | 🟡 Coming soon  |
-| **clawtouch-hid-protocol** (USB-CDC spec)          | 🟡 Coming soon  |
+| **[clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** (firmware + frozen v1.0 protocol) | ✅ Released |
+| **[clawtouch-skills](https://github.com/tinqiao-oss/clawtouch-skills)** (markdown skill files for LLM agents) | ✅ Released |
 | **clawtouch-bridge-sdk** (Python + Node HID SDK)   | 🔵 Future       |
 | Backend / desktop app / adapters / vision models   | 🔒 Closed source — [what's in it](docs/COMMERCIAL_PRODUCT.md) |
 
