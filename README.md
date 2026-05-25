@@ -61,9 +61,9 @@ We support these scenarios:
 We do **not** support, document, or assist with:
 
 - **Mass account creation / multi-account operations** on consumer
-  platforms — a single-host tethered peripheral is structurally a poor
-  fit, and the use case is regulatory red-line territory in most
-  jurisdictions.
+  platforms — a single-host tethered peripheral is structurally a
+  poor fit. Users are responsible for checking applicable laws and
+  platform policies in their own jurisdiction before any such use.
 - **Application-specific scripted shortcuts** (selectors, fixed-flow
   scripts for a particular site or app). Those belong in agent / RPA
   frameworks built on top of this primitive layer.
@@ -176,9 +176,7 @@ market apps where LLM training data is thin and the delta between
 - WPS Office, Feishu / Lark, DingTalk —
   see [`tinqiao-oss/clawtouch-skills`](https://github.com/tinqiao-oss/clawtouch-skills)
 
-Skills are soft guidance (the LLM still decides), not deterministic
-execution. For guaranteed deterministic flows with audit trail and
-SLA, see [`docs/COMMERCIAL_PRODUCT.md`](docs/COMMERCIAL_PRODUCT.md).
+Skills are soft guidance — the LLM still decides what to do.
 
 ## Tools exposed
 
@@ -239,10 +237,8 @@ offline test rigs, accessibility tooling, and cross-machine RPA.
 Not yet. `clawtouch-bridge-sdk` (Python + Node) is planned — see roadmap.
 
 **How is this different from the closed-source ClawTouch desktop app?**
-This MCP server is just the bottom layer — raw HID primitives — so
-other agent stacks can use ClawTouch hardware without adopting the
-whole ClawTouch product. → For what the desktop product adds on top
-(vision, orchestration, app adapters, B2B layer), see
+This MCP server is the bottom HID primitive layer. The desktop product
+is a separate closed-source agent on top of the same hardware — see
 [`docs/COMMERCIAL_PRODUCT.md`](docs/COMMERCIAL_PRODUCT.md).
 
 ## Open source roadmap

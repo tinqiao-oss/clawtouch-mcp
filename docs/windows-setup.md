@@ -121,8 +121,10 @@ layer).
 ## Integrating with Claude Code (VS Code extension)
 
 The Claude Code VS Code extension **does not** read `~/.claude.json`
-top-level `mcpServers` even though the CLI does (as of 2.1.143). Use
-a project-scoped `.mcp.json` instead.
+top-level `mcpServers` even though the CLI does (verified on extension
+version 2.1.143 in late 2026 — please re-verify against the current
+extension version before assuming the gotcha still applies). Use a
+project-scoped `.mcp.json` instead.
 
 ### Step 1 — write `.mcp.json` in your project root
 
