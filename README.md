@@ -239,15 +239,6 @@ environments where no software can be installed on the target — kiosk
 automation, offline test rigs, accessibility tooling, and cross-machine
 RPA.
 
-**Can it control a phone?**
-Yes — the HID device is host-agnostic. Plug it into a phone (Android or
-iOS) over USB-OTG and the same `hid.*` tools work; the phone sees an
-ordinary USB keyboard + mouse. For the wireless setup — board on the
-phone, commands sent from a PC over Wi-Fi — see the
-[Wi-Fi transport guide](https://github.com/tinqiao-oss/clawtouch-hid/blob/master/docs/wifi-transport.md)
-in `clawtouch-hid`. Turnkey, perception-driven phone automation is part
-of the commercial product, not this server.
-
 **Is there a JavaScript / TypeScript version?**
 Not yet. `clawtouch-bridge-sdk` (Python + Node) is planned — see roadmap.
 
