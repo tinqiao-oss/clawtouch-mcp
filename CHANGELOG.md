@@ -7,6 +7,24 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — second-pass code audit (codex round 3)
+
+- **`examples/computer_use/claude_demo.py` — `ctrl+l` typed as bare
+  'l' instead of triggering shortcut.** The "key" action fall-back
+  used `key_name if not mods else key_name` (both branches identical),
+  so any single-character key name with modifiers silently went to
+  `bridge.type_text()` and missed the shortcut. Now only fall-back to
+  `type_text` when there are no modifiers; with modifiers route to
+  `bridge.key_combo(mods, key_name)` which can translate printable
+  chars to keycodes, with a graceful `ValueError` catch for truly
+  unknown keys.
+- **`keycodes.py` missing punctuation-name aliases** like `plus`,
+  `equal`, `minus`, `comma`, `period`, etc. — skill files (e.g.
+  `clawtouch-skills/wps-office.md`) using
+  `hid.key("ctrl+shift+plus")` would raise `ValueError unknown key:
+  'plus'`. Added the common worded aliases so skills can reference
+  punctuation by name; existing `=` / `+` literal usage still works.
+
 ### Terminology
 
 - **Outward-facing copy: "LLM agent" → "AI agent"** in README hero,

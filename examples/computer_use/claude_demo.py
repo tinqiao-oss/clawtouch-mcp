@@ -121,12 +121,21 @@ async def execute_action(
     if action == "key":
         mods, key_name = _parse_key(params["text"])
         keycode = name_to_keycode(key_name)
-        if keycode is None and len(key_name) == 1:
-            # Single character — fall back to type_text
-            await bridge.type_text(key_name if not mods else key_name)
+        if keycode is None and len(key_name) == 1 and not mods:
+            # No modifiers and no named keycode — fall back to type_text.
+            # (With modifiers we MUST stay in key_combo so the bridge can
+            #  press the modifier + emit the key as a HID report, otherwise
+            #  e.g. "ctrl+l" would type a bare 'l' and miss the shortcut.)
+            await bridge.type_text(key_name)
             return "typed (no keycode)"
         if keycode is None:
-            return f"unknown key: {params['text']}"
+            # Single char + modifiers: let the bridge handle the combo —
+            # key_combo translates printable chars to their keycodes too.
+            try:
+                await bridge.key_combo(mods, key_name)
+                return f"pressed {params['text']}"
+            except ValueError as e:
+                return f"unknown key: {params['text']} ({e})"
         await bridge.key_combo(mods, key_name)
         return f"pressed {params['text']}"
 

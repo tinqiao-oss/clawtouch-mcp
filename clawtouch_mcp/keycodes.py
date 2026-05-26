@@ -40,6 +40,15 @@ _KEY_NAME_TO_HID: dict[str, int] = {
     "up": 0x52, "down": 0x51, "left": 0x50, "right": 0x4F,
     "home": 0x4A, "end": 0x4D, "pageup": 0x4B, "pagedown": 0x4E,
     "insert": 0x49,
+    # Punctuation aliases that show up in app shortcuts as worded names —
+    # without these, `hid.key("ctrl+shift+plus")` would fail to parse.
+    "plus": 0x2E, "equal": 0x2E, "equals": 0x2E,
+    "minus": 0x2D, "hyphen": 0x2D, "dash": 0x2D,
+    "comma": 0x36, "period": 0x37, "dot": 0x37,
+    "slash": 0x38, "backslash": 0x31,
+    "semicolon": 0x33, "apostrophe": 0x34, "quote": 0x34,
+    "grave": 0x35, "backtick": 0x35, "tilde": 0x35,
+    "leftbracket": 0x2F, "rightbracket": 0x30,
     **{f"f{i}": 0x3A + i - 1 for i in range(1, 13)},
 }
 
