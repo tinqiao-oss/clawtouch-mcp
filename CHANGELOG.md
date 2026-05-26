@@ -7,10 +7,50 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
+### Compliance — second-pass audit (codex round 2)
 
-- **`TRADEMARKS.md`** — bilingual (English + 简体中文) nominative
-  trademark notice covering Tinqiao-owned marks (ClawTouch, Tinqiao)
+A follow-up codex audit on the first compliance pass surfaced six
+issues, all fixed below. The compliance scope is unchanged; wording
+and packaging metadata are now stricter:
+
+- **`## Acceptable use` reworded to scope-of-support, not a use
+  restriction.** Replaced "you may not configure it to" with "this
+  project does not support, document, or assist with". Added an
+  explicit sentence that the section describes maintainer support
+  scope only and is **not** an additional restriction on top of the
+  MIT License's grant of code-level rights. Avoids the "MIT + use
+  ban" structural conflict.
+- **PRC Anti-Unfair Competition Law Art. 13 dating corrected.**
+  Was "as amended 2025-10-15", which conflates promulgation and
+  effective dates. Now reads "promulgated 2025-06-27, effective
+  2025-10-15" (the latter is when the amendment takes effect, per
+  the SPC publication). The substantive description was also
+  broadened from the narrow "improper acquisition of others' data"
+  to the statutory phrasing covering circumvention of technical
+  management measures, fraud, and coercion as means.
+- **`pyproject.toml` upgraded to PEP 639 license metadata.** Replaced
+  `license = { text = "MIT" }` (deprecated table form) with
+  `license = "MIT"` (SPDX expression). Added `license-files =
+  ["LICENSE", "LICENSE.zh-CN.md", "NOTICE", "TRADEMARKS.md"]` so all
+  four legal documents ship in the PyPI sdist/wheel `.dist-info/`
+  directory. Bumped `setuptools>=77` (PEP 639 baseline). Removed the
+  legacy `License :: OSI Approved :: MIT License` classifier per
+  PyPA's PEP 639 migration guidance.
+- **TRADEMARKS — owned-mark policy reworded to separate copyright
+  and trademark grants.** The previous "non-commercial
+  interoperability only" wording was ambiguous and could be read as
+  restricting commercial use of the MIT-licensed code. Now states
+  explicitly that MIT grants full commercial rights to the source
+  code, that the marks are governed separately by trademark law,
+  and that the only practical constraint on commercial forks is the
+  trademark / naming requirement (rename, do not imply endorsement).
+- **TRADEMARKS — official mark-owner attribution statements added.**
+  New `### Official trademark attribution` subsection cites the
+  attribution wording requested by Raspberry Pi Ltd., Adafruit
+  Industries, Microsoft, Apple, Anthropic, and OpenAI per their
+  respective trademark policies. Bilingual (English + 简体中文).
+
+### Added
   and third-party marks referenced for descriptive purposes
   (Claude, OpenAI, Cursor, OpenClaw, Hermes, Cherry Studio, Trae IDE,
   Raspberry Pi, CircuitPython, Windows, macOS, etc.). PRC Trademark

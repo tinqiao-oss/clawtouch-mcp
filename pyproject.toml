@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,11 @@ name = "clawtouch-mcp"
 version = "0.2.3"
 description = "MCP stdio server exposing HID mouse/keyboard tools backed by ClawTouch Pico hardware."
 readme = "README.md"
-license = { text = "MIT" }
+# PEP 639: SPDX expression form (setuptools >= 77). Avoid the deprecated
+# `license = { text = "MIT" }` table form and the legacy
+# `License :: OSI Approved :: MIT License` classifier.
+license = "MIT"
+license-files = ["LICENSE", "LICENSE.zh-CN.md", "NOTICE", "TRADEMARKS.md"]
 authors = [
     { name = "Tinqiao Technology", email = "support@tinqiao.com" },
 ]
@@ -18,7 +22,6 @@ dependencies = [
 # 关键字保留 openclaw / hermes — 目标用户搜这些 LLM agent 名也能找到
 keywords = ["mcp", "hid", "clawtouch", "openclaw", "hermes", "claude", "agent", "tool-use"]
 classifiers = [
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Topic :: System :: Hardware",
 ]
