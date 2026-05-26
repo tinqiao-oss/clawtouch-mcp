@@ -39,6 +39,12 @@ logger = logging.getLogger("clawtouch_mcp.server")
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
 MAX_TYPE_LEN = 4096
+# Upper bound on the Content-Length header of an incoming framed
+# JSON-RPC message. The MCP spec allows arbitrary message sizes but in
+# practice every reasonable tool call fits in well under 1 MB; capping
+# at 16 MB keeps a single bad/malicious header from making _read_exact
+# allocate gigabytes before EOF. Returns -32700 parse error on overrun.
+MAX_FRAME_LEN = 16 * 1024 * 1024
 _MODIFIER_NAMES = frozenset({"ctrl", "shift", "alt", "gui", "win", "cmd"})
 
 
@@ -452,7 +458,17 @@ class ClawTouchMcpServer:
             pass
 
     async def _idle_watch(self) -> None:
-        """周期检查 idle 阈值. 触发 release 后退出, 下次 tool call 重新启动."""
+        """周期检查 idle 阈值. 触发 release 后退出, 下次 tool call 重新启动.
+
+        Unhandled exceptions inside this task used to be swallowed silently
+        by ``asyncio.Task``'s exception machinery: the task would die,
+        ``_idle_task.done()`` would return True, and the next tool call's
+        ``_ensure_idle_watch_started()`` would refuse to restart it because
+        the slot was still occupied by a finished task. Net effect: the
+        serial port would be held forever, never released back to the bus.
+        We now log + reset the slot so the next tool call restarts the
+        watcher and the release-on-idle invariant is restored.
+        """
         if self.config.idle_check_interval > 0:
             check_interval = self.config.idle_check_interval
         else:
@@ -466,6 +482,13 @@ class ClawTouchMcpServer:
                     await self._idle_release_now()
                     return  # release 后 bridge 是 UnavailableBridge, 退出
         except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception(
+                "_idle_watch crashed unexpectedly — resetting slot so the next "
+                "tool call can restart the watcher (HID stays held until then)"
+            )
+            self._idle_task = None
             return
 
     async def _idle_release_now(self) -> None:
@@ -1026,6 +1049,17 @@ def _write_message(writer: io.TextIOBase, msg: dict, *, framed: bool) -> None:
 
 
 async def _read_framed(length: int) -> dict:
+    # Reject obviously bogus lengths before allocating. Negative is
+    # nonsense, zero would never carry a JSON-RPC payload, and anything
+    # over MAX_FRAME_LEN is either a runaway client or a tampered header.
+    # ValueError propagates up to run_stdio's parse-error handler and
+    # becomes a JSON-RPC -32700, keeping the session alive.
+    if length <= 0:
+        raise ValueError(f"invalid Content-Length: {length}")
+    if length > MAX_FRAME_LEN:
+        raise ValueError(
+            f"Content-Length {length} exceeds MAX_FRAME_LEN ({MAX_FRAME_LEN}B)"
+        )
     body = await _read_exact(length)
     return json.loads(body)
 

@@ -234,6 +234,14 @@ class SerialHidBridge:
             ),
         )
         self._connected_at = time.time()
+        # Reset seq counter on every (re)connect. A physical USB unplug
+        # then replug means the firmware end resets its own seq state
+        # too — if the host kept its counter advancing, the first request
+        # after reconnect could carry a high seq while firmware is back
+        # near zero, raising the chance of stale-ACK ambiguity. round 4
+        # added wrap-skip-0 + seq_id verify on the wire; this resets the
+        # source so the wire-level defenses see a clean counter.
+        self._seq = 0
         # Drain any residual bytes
         await asyncio.sleep(0.1)
         if self._serial.in_waiting:

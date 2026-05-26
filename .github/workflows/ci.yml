@@ -33,6 +33,57 @@ jobs:
       - name: Run tests
         run: pytest tests/ -q
 
+  # tests/test_cross_repo_protocol.py uses pytest.importorskip to silently
+  # skip when the sister repo clawtouch-hid isn't installed. The default
+  # `test` job above only installs clawtouch-mcp, so those 22 byte-equality
+  # tests were quietly skipped on every CI run — defeating the whole point
+  # of having a cross-repo regression net for protocol drift. This job
+  # explicitly installs both packages and asserts the cross-repo suite is
+  # not skipped.
+  cross-repo:
+    name: cross-repo protocol byte-equality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout clawtouch-mcp
+        uses: actions/checkout@v4
+
+      - name: Checkout clawtouch-hid (sister repo)
+        uses: actions/checkout@v4
+        with:
+          repository: tinqiao-oss/clawtouch-hid
+          path: _sister_hid
+        continue-on-error: true
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install both packages
+        id: install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[screenshot]"
+          pip install pytest pytest-asyncio
+          if [ -d _sister_hid ]; then
+            pip install -e ./_sister_hid
+            echo "sister_installed=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "sister_installed=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::clawtouch-hid sister repo not accessible — cross-repo suite will skip"
+          fi
+
+      - name: Run cross-repo suite
+        run: pytest tests/test_cross_repo_protocol.py -v --no-header
+
+      - name: Assert cross-repo suite actually ran (not all skipped)
+        if: steps.install.outputs.sister_installed == '1'
+        run: |
+          # If clawtouch-hid is installed but suite is fully skipped, fail loudly.
+          out=$(pytest tests/test_cross_repo_protocol.py -q 2>&1 | tail -3)
+          echo "$out"
+          echo "$out" | grep -qE "passed|failed" || (echo "::error::cross-repo suite fully skipped despite sister repo installed"; exit 1)
+
   lint:
     name: ruff
     runs-on: ubuntu-latest
