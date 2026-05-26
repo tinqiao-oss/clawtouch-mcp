@@ -2,7 +2,7 @@
 
 # clawtouch-mcp
 
-> **Give your LLM agent real hands.**
+> **Give your AI agent real hands.**
 > An MCP server that turns any MCP-compatible client — [Claude Desktop](https://claude.ai/download),
 > [Cline](https://github.com/cline/cline), [Continue](https://github.com/continuedev/continue),
 > [Cursor](https://www.cursor.com/), [OpenClaw](https://github.com/openclaw),
@@ -15,7 +15,7 @@
 [![Commercial: clawtouch.cn](https://img.shields.io/badge/commercial-clawtouch.cn-orange.svg)](https://clawtouch.cn)
 
 <p align="center">
-  <img src="docs/assets/hero.svg" alt="clawtouch-mcp data flow: an LLM agent sends MCP tool calls over stdio JSON-RPC to clawtouch-mcp, which forwards framed bytes over USB-CDC to a Raspberry Pi Pico 2 running ClawTouch HID firmware, which emits standard USB HID reports to the target OS (Windows / macOS / Linux)." width="900">
+  <img src="docs/assets/hero.svg" alt="clawtouch-mcp data flow: an AI agent sends MCP tool calls over stdio JSON-RPC to clawtouch-mcp, which forwards framed bytes over USB-CDC to a Raspberry Pi Pico 2 running ClawTouch HID firmware, which emits standard USB HID reports to the target OS (Windows / macOS / Linux)." width="900">
 </p>
 
 ---
@@ -23,7 +23,7 @@
 ## What is this?
 
 A standalone Python process that speaks **Model Context Protocol** (MCP) over
-stdio and exposes mouse / keyboard primitives to whatever LLM agent you have.
+stdio and exposes mouse / keyboard primitives to whatever AI agent you have.
 Under the hood it talks to a **ClawTouch HID device** — a Raspberry Pi Pico 2
 running the open [ClawTouch HID firmware](#hardware) over USB serial — and
 translates `hid.click` / `hid.type` / `hid.scroll` tool calls into real HID
@@ -53,7 +53,7 @@ We support these scenarios:
   can't install software on, a kiosk shell, an industrial PC running
   an unsupported OS, or a phone in your QA lab.
 - **Accessibility** — let a disabled user drive their own computer via
-  a screen reader plus an LLM agent issuing HID commands, instead of
+  a screen reader plus an AI agent issuing HID commands, instead of
   fighting with synthetic-input compatibility on each app.
 - **Compatibility testing** — verify your software treats external HID
   input correctly, which can differ from injected synthetic input.
@@ -367,7 +367,7 @@ desktop app).
 
 `clawtouch-mcp` is maintained by **Tinqiao Technology** — the team behind
 **ClawTouch** ([clawtouch.cn](https://clawtouch.cn)), building plug-in USB
-devices that let LLM agents operate real Windows / macOS / Linux desktops
+devices that let AI agents operate real Windows / macOS / Linux desktops
 at the HID layer. This MCP server is the open, primitive piece of that
 stack — see the [open source roadmap](#open-source-roadmap) for what's
 open vs. closed.

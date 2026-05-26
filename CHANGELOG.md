@@ -7,6 +7,25 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Terminology
+
+- **Outward-facing copy: "LLM agent" → "AI agent"** in README hero,
+  hero SVG alt text + diagram comment, `## What is this?`,
+  Scope · Accessibility use case, `## About`, the Computer Use
+  example README, and this changelog's own diagram description.
+  Tracks the broader 2025 industry shift (Anthropic / OpenAI /
+  Cursor / Cline now all default to "AI agent" in their public
+  docs), and is what HN / GitHub / VC / B2B audiences search for.
+- **Technical / compliance copy unchanged.** "LLM agent" is
+  retained in: the `## Content generation` and `## Acceptable use`
+  sections (legal precision — the LLM is the AI-content-generating
+  party, not "any AI"), `SECURITY.md` (security-policy precision),
+  `pyproject.toml` keyword comment (maintainer note), and the
+  `clawtouch-skills` cross-link row on the Open source roadmap
+  (matches the skills repo's internal wording, since markdown
+  skills are LLM-specific by design — non-LLM agents have no use
+  for prose prompts).
+
 ### Docs trim
 
 - Removed redundant `🌐 clawtouch.cn` top-of-README link line —
@@ -21,7 +40,7 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Visual / docs uplift
 
-- **`docs/assets/hero.svg`** — flat-design hero diagram (LLM agent →
+- **`docs/assets/hero.svg`** — flat-design hero diagram (AI agent →
   clawtouch-mcp → Pico 2 → target OS) embedded at the top of the
   English and Chinese READMEs. Highlights `clawtouch-mcp` as the
   "this repo" node and labels each transport hop (MCP stdio JSON-RPC

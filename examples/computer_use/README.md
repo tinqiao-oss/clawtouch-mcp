@@ -2,7 +2,7 @@
 
 Two reference demos showing how to wire LLM Computer Use loops to a
 physical ClawTouch HID device. Both run on a **single machine** (the
-LLM agent and the target are the same PC) — the value is replacing
+AI agent and the target are the same PC) — the value is replacing
 software-synthesized mouse/keyboard with real USB HID input.
 
 | Demo | Provider | File | API |
