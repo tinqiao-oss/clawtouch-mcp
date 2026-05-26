@@ -260,9 +260,9 @@ Skills are soft guidance — the LLM still decides what to do.
 
 | Tool              | Purpose                                       |
 |-------------------|-----------------------------------------------|
-| `hid.click`       | Click at absolute (x, y)                      |
-| `hid.move`        | Move mouse (absolute or relative)             |
-| `hid.hover`       | Move, then idle                               |
+| `hid.click`       | Click at (x, y). Absolute by default (server queries the OS cursor via Win32 / CoreGraphics / X11, computes a delta, sends a relative move to the firmware); pass `relative=true` to skip the OS query and send a raw pixel delta. Wayland / OS-query failures → explicit error |
+| `hid.move`        | Move mouse to (x, y). Same absolute-by-default semantics as `hid.click`; `relative=true` sends a raw pixel delta |
+| `hid.hover`       | Move (absolute), then idle                    |
 | `hid.type`        | Type a UTF-8 string                           |
 | `hid.scroll`      | Wheel scroll (positive = up, negative = down) |
 | `hid.key`         | Named key / shortcut (`enter`, `ctrl+c`, …)   |

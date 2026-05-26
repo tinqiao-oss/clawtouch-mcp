@@ -222,9 +222,9 @@ Skill 是软性指导 —— LLM 仍然自己决定怎么走。
 
 | 工具              | 用途                                          |
 |-------------------|-----------------------------------------------|
-| `hid.click`       | 在绝对坐标 (x, y) 点击                        |
-| `hid.move`        | 移动鼠标 (绝对/相对)                          |
-| `hid.hover`       | 移动后停留                                    |
+| `hid.click`       | 在 (x, y) 点击。默认绝对坐标语义 (server 通过 Win32 / CoreGraphics / X11 查 OS 光标, 算 delta, 发相对移动给固件); 传 `relative=true` 跳过 OS 查询发原始像素 delta。Wayland / OS 查询失败 → 明确报错 |
+| `hid.move`        | 移动鼠标到 (x, y)。默认绝对坐标语义同 `hid.click`; `relative=true` 发原始像素 delta |
+| `hid.hover`       | 移动 (绝对) 后停留                            |
 | `hid.type`        | 输入 UTF-8 字符串                             |
 | `hid.scroll`      | 滚轮滚动 (正数上滚 / 负数下滚)                |
 | `hid.key`         | 命名键 / 快捷键 (`enter`, `ctrl+c` 等)        |

@@ -33,6 +33,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from . import __version__
 from .bridge import SerialHidBridge, auto_detect_port, auto_detect_ports, list_pico_ports
+from .cursor import availability_hint, get_cursor_position
 
 logger = logging.getLogger("clawtouch_mcp.server")
 
@@ -457,7 +458,19 @@ class ClawTouchMcpServer:
     def _register_tools(self) -> None:
         self._register(Tool(
             name="hid.click",
-            description="Click mouse at an absolute screen coordinate.",
+            description=(
+                "Click mouse. Default semantics: (x, y) is an ABSOLUTE "
+                "screen coordinate — the server queries the OS for the "
+                "current cursor position (Win32 GetCursorPos / macOS "
+                "CGEventGetLocation / Linux/X11 XQueryPointer via ctypes) "
+                "and emits a relative move so the firmware (which is a "
+                "USB Boot Mouse and only supports relative deltas) lands "
+                "at the target. Pass relative=true to skip the OS query "
+                "and send (x, y) directly as a pixel delta. On Wayland "
+                "and on hosts where the OS cursor query fails, absolute "
+                "mode returns an error and the caller must use "
+                "relative=true."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
@@ -465,6 +478,8 @@ class ClawTouchMcpServer:
                     "y": {"type": "integer"},
                     "button": {"type": "string", "enum": ["left", "right", "middle"], "default": "left"},
                     "double": {"type": "boolean", "default": False},
+                    "relative": {"type": "boolean", "default": False,
+                                 "description": "If true, x/y are pixel deltas; absolute mode is skipped."},
                 },
                 "required": ["x", "y"],
             },
@@ -472,7 +487,14 @@ class ClawTouchMcpServer:
         ))
         self._register(Tool(
             name="hid.move",
-            description="Move mouse to absolute or relative coordinate.",
+            description=(
+                "Move mouse. Default semantics: (x, y) is an ABSOLUTE "
+                "screen coordinate (see hid.click for how absolute mode "
+                "works under the hood). Pass relative=true to send "
+                "(x, y) as a pixel delta directly. On hosts where the "
+                "OS cursor query is unavailable, absolute mode returns "
+                "an error."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
@@ -586,32 +608,85 @@ class ClawTouchMcpServer:
 
     # ── Tool handlers ──
 
+    def _absolute_to_relative(self, target_x: int, target_y: int) -> tuple[int, int] | None:
+        """Translate an absolute target coordinate into a relative
+        delta the firmware can actually execute, by querying the OS
+        cursor position. Returns ``None`` when OS cursor tracking is
+        unavailable on the current platform — callers should surface
+        a clear error and ask the agent to use ``relative=True``.
+
+        See `cursor.py` for the per-OS implementation; the firmware
+        itself is a USB Boot Mouse and can only emit relative deltas.
+        """
+        current = get_cursor_position()
+        if current is None:
+            return None
+        cur_x, cur_y = current
+        return (target_x - cur_x, target_y - cur_y)
+
+    async def _move_to_absolute(self, target_x: int, target_y: int) -> dict[str, Any]:
+        """Shared helper for click/move/hover: clamp, translate to
+        delta via OS cursor query, send relative move. Returns a
+        result dict; if ``"error"`` is in the dict the caller should
+        return it as the tool error without continuing."""
+        target_x, target_y = self._clamp(target_x, target_y)
+        delta = self._absolute_to_relative(target_x, target_y)
+        if delta is None:
+            return {
+                "error": (
+                    "Absolute coordinates require OS-level cursor "
+                    "tracking, which is unavailable on this host. "
+                    + availability_hint()
+                    + " As a workaround, call hid.move / hid.click "
+                    "with `relative=true` and supply pixel deltas."
+                ),
+                "x": target_x, "y": target_y,
+            }
+        dx, dy = delta
+        ok = await self.bridge.mouse_move(dx, dy, relative=True)
+        return {"ok": ok, "x": target_x, "y": target_y, "dx": dx, "dy": dy}
+
     async def _tool_click(self, **kw) -> dict:
         self.rate.check()
-        x, y = self._clamp(kw["x"], kw["y"])
-        await self.bridge.mouse_move(x, y, relative=False)
+        relative = bool(kw.get("relative", False))
+        if relative:
+            # Agent wants raw relative move — skip the cursor query.
+            dx, dy = int(kw["x"]), int(kw["y"])
+            await self.bridge.mouse_move(dx, dy, relative=True)
+            result: dict[str, Any] = {"dx": dx, "dy": dy, "relative": True}
+        else:
+            moved = await self._move_to_absolute(kw["x"], kw["y"])
+            if "error" in moved:
+                return moved
+            result = moved
         ok = await self.bridge.mouse_click(
             button=kw.get("button", "left"),
             double=bool(kw.get("double", False)),
         )
-        return {"ok": ok, "x": x, "y": y}
+        result["ok"] = ok
+        return result
 
     async def _tool_move(self, **kw) -> dict:
         self.rate.check()
         relative = bool(kw.get("relative", False))
         if relative:
             x, y = int(kw["x"]), int(kw["y"])
-        else:
-            x, y = self._clamp(kw["x"], kw["y"])
-        ok = await self.bridge.mouse_move(x, y, relative=relative)
-        return {"ok": ok, "x": x, "y": y, "relative": relative}
+            ok = await self.bridge.mouse_move(x, y, relative=True)
+            return {"ok": ok, "x": x, "y": y, "relative": True}
+        moved = await self._move_to_absolute(kw["x"], kw["y"])
+        if "error" in moved:
+            return moved
+        moved["relative"] = False
+        return moved
 
     async def _tool_hover(self, **kw) -> dict:
         self.rate.check()
-        x, y = self._clamp(kw["x"], kw["y"])
-        await self.bridge.mouse_move(x, y, relative=False)
+        moved = await self._move_to_absolute(kw["x"], kw["y"])
+        if "error" in moved:
+            return moved
         await asyncio.sleep(min(10_000, int(kw.get("duration_ms", 500))) / 1000.0)
-        return {"ok": True, "x": x, "y": y}
+        moved["ok"] = True
+        return moved
 
     async def _tool_type(self, **kw) -> dict:
         self.rate.check()

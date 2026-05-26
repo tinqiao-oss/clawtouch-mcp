@@ -7,6 +7,59 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — absolute-coordinate semantics (codex round 3 P0/P1 #1)
+
+- **`hid.click(x, y)` / `hid.move(x, y)` were not absolute.** Before
+  this commit, `_tool_click` sent the raw target `(x, y)` to the
+  firmware as a MOUSE_MOVE with `relative=False` flag set; the
+  firmware's `_handle_mouse_move` ignored the flag entirely (USB HID
+  Boot Mouse has no absolute-coordinate report) and treated `(x, y)`
+  as a relative delta. An agent calling `hid.click(500, 300)` would
+  see the cursor jump 500 px right and 300 px down from its current
+  position, not land at the absolute (500, 300). Any Computer Use
+  loop driving Claude Desktop / Cursor / Cline through this server
+  would have mis-clicked on every call.
+
+  **Fix architecture:** absolute coordinate semantics now live where
+  they belong — on the host, not the firmware. New module
+  `clawtouch_mcp/cursor.py` queries the OS for the current cursor
+  position via `ctypes`:
+    - Windows → `user32.GetCursorPos`
+    - macOS   → `CoreGraphics.CGEventGetLocation` (via ctypes — no
+      pyobjc dep)
+    - Linux/X11 → `libX11.XQueryPointer`
+    - Linux/Wayland → unsupported (no public unprivileged API);
+      returns None deliberately
+  `_tool_click` / `_tool_move` / `_tool_hover` now compute `(dx, dy)
+  = (target - cursor)` and send a *relative* move that the firmware
+  can actually execute. The firmware code path is unchanged and is
+  now correctly documented as relative-only.
+
+  **Failure path:** when the OS cursor query is unavailable (Wayland,
+  unloadable libX11, GetCursorPos failure), the tool returns a
+  structured error containing the platform-specific reason and the
+  `relative=true` workaround — agents get a clear actionable message,
+  not silent mis-clicks.
+
+  **New `relative` parameter on `hid.click` / `hid.move`** lets an
+  agent bypass the OS cursor query entirely and send raw pixel deltas
+  — useful for headless / Wayland hosts and for sub-pixel scroll-like
+  motion.
+
+  **Test hook:** `CLAWTOUCH_FAKE_CURSOR=x,y` env var bypasses the OS
+  query and returns the parsed coordinates instead, used by
+  `tests/conftest.py` so the suite runs deterministically on headless
+  CI without an X display.
+
+  **Coverage:** new `tests/test_cursor.py` (16 tests) locks the env
+  hook semantics, the delta math, the missing-cursor error path, the
+  `relative=true` fast path, and `hid.move` / `hid.hover` parity.
+  Total mcp test count: 118 (was 102).
+
+  **README + tool descriptions** updated to spell out: default
+  absolute via OS cursor query, `relative=true` opt-out, Wayland
+  caveat, and the firmware-is-relative-only invariant.
+
 ### Fixed — second-pass code audit (codex round 3)
 
 - **`examples/computer_use/claude_demo.py` — `ctrl+l` typed as bare
