@@ -22,6 +22,7 @@ from .keycodes import (
 )
 from .protocol import (
     CommandType,
+    ErrorCode,
     FRAME_HEADER,
     HidCommand,
     ModifierKey,
@@ -35,6 +36,47 @@ from .protocol import (
     build_type_string,
     modifiers_to_mask,
 )
+
+
+# ── Bridge exceptions / diagnostics ──
+
+class BridgeError(RuntimeError):
+    """Base class for `SerialHidBridge` IO / protocol failures.
+
+    Distinct from generic `RuntimeError` so server-side tool handlers
+    can surface a clear, actionable message to the agent instead of a
+    bare ``ok: false``. Server returns these as ``isError: true``
+    content blocks per MCP spec.
+    """
+
+
+class BridgeAckTimeout(BridgeError):
+    """No frame at all came back inside the bridge's timeout window."""
+
+
+class BridgeAckMismatch(BridgeError):
+    """A frame came back but its seq_id did not match the request — the
+    line may be carrying a stale ACK from a prior aborted request.
+    """
+
+
+class BridgeProtocolError(BridgeError):
+    """A frame came back but failed parse (bad checksum, short payload)."""
+
+
+class BridgeErrorResponse(BridgeError):
+    """The firmware returned an ERROR frame instead of an ACK.
+
+    ``code`` is the parsed ``ErrorCode`` (UNKNOWN_COMMAND /
+    INVALID_PAYLOAD / CHECKSUM_MISMATCH / EXECUTION_TIMEOUT /
+    DEVICE_BUSY); ``detail`` is the firmware's optional text suffix.
+    """
+
+    def __init__(self, code: "ErrorCode | int", detail: str = ""):
+        self.code = code
+        self.detail = detail
+        name = code.name if hasattr(code, "name") else f"0x{int(code):02x}"
+        super().__init__(f"firmware error {name}: {detail}" if detail else f"firmware error {name}")
 
 logger = logging.getLogger("clawtouch_mcp.bridge")
 
@@ -161,9 +203,16 @@ class SerialHidBridge:
         self.baudrate = baudrate
         self.timeout = timeout
         self._serial: Optional[serial.Serial] = None
+        # Seq counter starts at 0 so the first `_next_seq()` returns 1.
+        # We deliberately skip 0 on wrap (see `_next_seq`) so a stale
+        # in-flight default-seq frame can never collide with a fresh
+        # request after the 16-bit counter wraps around.
         self._seq = 0
         self._lock = asyncio.Lock()
         self._connected_at: Optional[float] = None
+        # Diagnostic for the most recent failed _send_raw — server-side
+        # tool handlers read this to enrich their isError content.
+        self._last_error_detail: Optional[str] = None
 
     # ── Lifecycle ──
 
@@ -200,8 +249,21 @@ class SerialHidBridge:
     # ── Low-level IO ──
 
     def _next_seq(self) -> int:
-        self._seq = (self._seq + 1) & 0xFFFF
+        # 16-bit counter. After 0xFFFF wraps to 0 — skip 0 so a stale
+        # frame built with the protocol's default ``seq_id=0`` can
+        # never be mistaken for the response to a real request.
+        nxt = (self._seq + 1) & 0xFFFF
+        if nxt == 0:
+            nxt = 1
+        self._seq = nxt
         return self._seq
+
+    @property
+    def last_error_detail(self) -> Optional[str]:
+        """Human-readable reason for the most recent ``_send_raw``
+        failure (timeout / seq mismatch / parse error / firmware ERROR
+        response). Cleared on the next successful send."""
+        return self._last_error_detail
 
     async def _send_raw(self, cmd: HidCommand, *, wait_ack: bool = True) -> Optional[HidCommand]:
         if not self.is_connected:
@@ -210,14 +272,65 @@ class SerialHidBridge:
         loop = asyncio.get_running_loop()
         data = cmd.serialize()
         async with self._lock:
+            # Reset pyserial's input buffer BEFORE writing so any stale
+            # bytes left over from an aborted prior request (timeout,
+            # parser desync) cannot be mistaken for this request's ACK.
+            # Without this, a stray 0xAA byte in payload from the old
+            # request can re-sync the parser onto mid-frame data and
+            # surface as a "frame parse error" or — worse — a stale
+            # ACK matched to the new request's seq_id.
+            try:
+                self._serial.reset_input_buffer()
+            except Exception as e:
+                logger.warning("reset_input_buffer failed: %s", e)
+
             await loop.run_in_executor(None, self._serial.write, data)
             await loop.run_in_executor(None, self._serial.flush)
             if not wait_ack:
+                self._last_error_detail = None
                 return None
-            return await loop.run_in_executor(None, self._read_one_frame)
+            resp = await loop.run_in_executor(None, self._read_one_frame)
+            if resp is None:
+                # `_read_one_frame` already set `_last_error_detail`
+                # with the specific reason (timeout / short / parse).
+                return None
+            # ACK seq_id must match the request's. Mismatch = the
+            # response we just read belongs to a previous, abandoned
+            # request — the line is desynchronised and we should NOT
+            # treat this as success.
+            if resp.seq_id != cmd.seq_id:
+                self._last_error_detail = (
+                    f"seq mismatch: request seq={cmd.seq_id} "
+                    f"got seq={resp.seq_id} (stale ACK from prior request?)"
+                )
+                logger.warning(self._last_error_detail)
+                return None
+            # Firmware can answer ERROR (cmd_type=0x41) carrying an
+            # ErrorCode in payload[0] — surface that to callers via
+            # last_error_detail so they don't see a generic "ok=False".
+            if resp.cmd_type == CommandType.ERROR and resp.payload:
+                try:
+                    code = ErrorCode(resp.payload[0])
+                    code_name = code.name
+                except (ValueError, IndexError):
+                    code_name = f"0x{resp.payload[0]:02x}"
+                tail = resp.payload[1:].decode("ascii", errors="replace") if len(resp.payload) > 1 else ""
+                self._last_error_detail = (
+                    f"firmware ERROR {code_name}" + (f": {tail}" if tail else "")
+                )
+                # Return the response so callers can still test
+                # `resp.cmd_type == ACK`, which will correctly be False.
+                return resp
+            self._last_error_detail = None
+            return resp
 
     def _read_one_frame(self) -> Optional[HidCommand]:
-        """Blocking read: sync on header, parse one frame."""
+        """Blocking read: sync on header, parse one frame.
+
+        Sets ``self._last_error_detail`` on every failure path so
+        ``_send_raw`` can surface a specific reason to callers (which
+        the server then forwards to the agent as ``isError`` content).
+        """
         assert self._serial is not None
         deadline = time.monotonic() + self.timeout
         buf = bytearray()
@@ -229,20 +342,33 @@ class SerialHidBridge:
                 buf = bytearray(b)
                 break
         if not buf:
+            self._last_error_detail = (
+                f"ACK timeout after {self.timeout:.1f}s "
+                "(no frame header received from firmware)"
+            )
             return None
         # Need: 2 seq + 1 cmd + 2 plen = 5 more bytes
         remaining = self._serial.read(5)
         if len(remaining) < 5:
+            self._last_error_detail = (
+                f"truncated frame: got header but only {len(remaining)}/5 "
+                "preamble bytes before timeout"
+            )
             return None
         buf.extend(remaining)
         plen = int.from_bytes(buf[4:6], "little")
         rest = self._serial.read(plen + 1)  # payload + checksum
         if len(rest) < plen + 1:
+            self._last_error_detail = (
+                f"truncated frame: plen={plen} but only got "
+                f"{len(rest)}/{plen + 1} payload+csum bytes"
+            )
             return None
         buf.extend(rest)
         try:
             return HidCommand.deserialize(bytes(buf))
         except ProtocolError as e:
+            self._last_error_detail = f"frame parse error: {e}"
             logger.warning("frame parse error: %s", e)
             return None
 
@@ -277,8 +403,35 @@ class SerialHidBridge:
         )
         return resp is not None and resp.cmd_type == CommandType.ACK
 
-    async def type_text(self, text: str, *, chunk_size: int = 32) -> bool:
-        """Send text in UTF-8 chunks; firmware handles keyboard emulation."""
+    async def type_text(
+        self, text: str, *, chunk_size: int = 32,
+        allow_control: bool = False,
+    ) -> bool:
+        """Send text in UTF-8 chunks; firmware handles keyboard emulation.
+
+        Control characters (``\\n``, ``\\r``, ``\\t``, ``\\x00``-``\\x1f``)
+        are stripped by default. An LLM agent drafting a multi-line
+        message into a chat input would otherwise have its draft
+        accidentally submitted by the ``\\n`` being typed as Enter on
+        the host. Pass ``allow_control=True`` to opt in to the raw
+        behaviour (e.g. when intentionally driving a terminal app).
+        """
+        if not allow_control:
+            # Drop control bytes (incl. \n, \r, \t, NUL). Tab is in
+            # the printable HID set but typing it into a chat input
+            # has the same "accidental submit" risk as newline in
+            # some apps, so we strip it too.
+            cleaned = "".join(
+                ch for ch in text
+                if not (ch < " " or ch == "\x7f")
+            )
+            if cleaned != text:
+                logger.info(
+                    "type_text stripped %d control character(s); "
+                    "pass allow_control=True to keep them",
+                    len(text) - len(cleaned),
+                )
+            text = cleaned
         ok = True
         for i in range(0, len(text), chunk_size):
             resp = await self._send_raw(

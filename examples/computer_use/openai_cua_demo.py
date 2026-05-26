@@ -140,9 +140,15 @@ async def execute(
     if t == "scroll":
         dy = int(action.get("scroll_y", 0))
         if dy:
-            # CUA scroll_y is in pixels; HID scroll is in wheel ticks.
-            # Convert with a rough factor (10 px ≈ 1 tick).
-            await bridge.mouse_scroll(-(dy // 10) if dy > 0 else -(dy // 10))
+            # CUA scroll_y is in pixels (positive = scroll down per CUA
+            # convention); HID scroll is in wheel ticks (positive = up).
+            # Convert with a rough factor (10 px ≈ 1 tick) and flip
+            # sign so direction matches. Use int() of the float divide
+            # rather than `//`, which on negatives floors toward
+            # -infinity (e.g. -15 // 10 == -2, not -1) and would
+            # over-scroll upward; the previous ternary had identical
+            # branches anyway and never flipped sign at all.
+            await bridge.mouse_scroll(int(-dy / 10))
         return
 
     if t == "wait":

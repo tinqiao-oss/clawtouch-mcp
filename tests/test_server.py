@@ -39,7 +39,15 @@ def server_with_screenshot():
 
 
 def _run(coro):
-    return asyncio.get_event_loop_policy().new_event_loop().run_until_complete(coro)
+    # Each call gets a fresh loop so tests can't leak state to each
+    # other. Close it in `finally` to avoid the ResourceWarning that
+    # used to bubble up on Windows + orphan any idle-watch tasks the
+    # server scheduled during the test.
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 class TestToolRegistry:
@@ -92,13 +100,18 @@ class TestDispatch:
         }))
         assert result["error"]["code"] == -32601
 
-    def test_unknown_tool_returns_error(self, server):
+    def test_unknown_tool_returns_iserror_content(self, server):
+        # MCP spec compliance: tool-level errors (including "unknown
+        # tool") must come back as `result.content + isError:true`,
+        # NOT as a JSON-RPC error. Compliant clients (Claude Desktop,
+        # Cline) show the message to the agent so it can react.
         result = _run(server.dispatch({
             "jsonrpc": "2.0", "id": 4, "method": "tools/call",
             "params": {"name": "hid.nuke_orbit", "arguments": {}},
         }))
-        assert result["error"]["code"] == -32000
-        assert "unknown tool" in result["error"]["message"]
+        assert "error" not in result, "should be result.isError, not JSON-RPC error"
+        assert result["result"]["isError"] is True
+        assert "unknown tool" in result["result"]["content"][0]["text"]
 
     def test_notification_returns_none(self, server):
         """Notifications (no `id`) must produce no response."""
@@ -196,10 +209,13 @@ class TestSafety:
         assert payload["y"] == 0
 
     def test_type_length_capped(self, server):
+        # MCP spec compliance: ValueError from a tool handler comes
+        # back as isError content, NOT JSON-RPC error.
         result = _run(server.dispatch({
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {"name": "hid.type",
                        "arguments": {"text": "x" * (MAX_TYPE_LEN + 1)}},
         }))
-        assert result["error"]["code"] == -32000
-        assert "too long" in result["error"]["message"]
+        assert "error" not in result
+        assert result["result"]["isError"] is True
+        assert "too long" in result["result"]["content"][0]["text"]

@@ -7,6 +7,149 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — internal deep audit (round 4)
+
+A clean-up audit (four parallel agents, no specific external prompt)
+on top of codex rounds 1-3 surfaced ~17 additional code-level
+issues across server / bridge / CLI / examples. All P0 + P1 fixed in
+this commit; P2/P3 stay in the backlog.
+
+**P0 — MCP spec compliance**
+
+- **`tools/call` exec errors now return `result.content + isError:true`,
+  not JSON-RPC `-32000`.** Per MCP 2024-11-05 spec, JSON-RPC errors
+  are reserved for protocol-layer faults; tool execution failures
+  (rate limit, bridge timeout, hardware unavailable, validation
+  errors, unknown tool name) must surface as `isError` content so
+  the agent can read the message and react. Previously every
+  `ValueError` / `RuntimeError` from a handler bubbled to
+  `dispatch`'s `except Exception` and became a generic JSON-RPC
+  error invisible to compliant clients (Claude Desktop, Cline).
+  `_on_tool_call` now catches handler exceptions itself and includes
+  the bridge's `last_error_detail` (timeout reason, seq mismatch,
+  firmware ERROR code) inline. `unknown tool` likewise returns
+  `isError` content listing the available tools.
+- **Malformed JSON in stdio no longer crashes the server.** A single
+  bad line (junk on stdout from a launcher script, BOM, blank `{`)
+  used to raise `JSONDecodeError` at `json.loads(first)` /
+  `json.loads(text)` in `run_stdio`, blow past the `except Exception`,
+  and kill the session. Per JSON-RPC 2.0 spec, parse errors must
+  return `{error: {code: -32700}}` and the connection should stay
+  open. Now per-message `try/except json.JSONDecodeError` writes a
+  -32700 response and continues.
+- **Bridge ACK timeout no longer leaks stale bytes onto the next
+  request.** `_send_raw` used to write straight to the serial line
+  without flushing pyserial's input buffer; any residual bytes from
+  a prior aborted request (a `0xAA` byte in payload coordinates,
+  for example) could re-sync the parser onto mid-frame data and
+  either fail checksum repeatedly or — worse — accept a stale ACK
+  as the response for the new request (silently firing the wrong
+  HID action). Now: `reset_input_buffer()` before every write, AND
+  every response's `seq_id` is verified against the request's;
+  mismatch is rejected as a stale ACK.
+- **Windows DPI awareness now enabled unconditionally on server
+  start.** Previously `SetProcessDpiAwareness(2)` only ran inside
+  `_detect_screen` — when the user passed `--screen WxH`
+  explicitly, the hook never fired, and on a 125%-scaled Windows
+  host `GetCursorPos` returned logical (scaled) pixels while the
+  `--screen` clamp was in physical pixels, so absolute clicks
+  landed ~25% off. Now `_ensure_windows_dpi_awareness()` runs in
+  `ClawTouchMcpServer.__init__` regardless of how `--screen` was
+  resolved, keeping `cursor.py` and the clamp in the same
+  coordinate space.
+
+**P1 — server, bridge, CLI, examples**
+
+- **`--screen` validation:** `0x0`, negative values, and malformed
+  strings (`"1920x"`, `"1x2x3"`) used to either silently disable
+  clamping (zero is falsy) or crash with an unhandled
+  `ValueError`. Now `__main__.py` rejects all three with a clear
+  `parser.error` message.
+- **`--ops-per-sec` validation:** `0` or negative bricked every
+  tool call (`initialize` and `tools/list` worked, every
+  `tools/call` raised "rate limit exceeded"). Now rejected at the
+  CLI with `parser.error`.
+- **`hid.screenshot` region clamp + size cap:** an agent-supplied
+  `region=[x1,y1,x2,y2]` with negative offsets or huge sizes used to
+  capture across monitors the user may not have intended to expose,
+  and a 4K×4K PNG (~30-80 MB base64) routinely OOMed the MCP client's
+  JSON-RPC buffer. Now region is clamped to the primary monitor's
+  bounds before grabbing, and `width × height > MAX_SCREENSHOT_PIXELS`
+  (4M) returns a clear `ValueError` tool error.
+- **`shutdown` method actually stops the server.** It used to return
+  `{}` but never set `_stopping`, never closed the bridge, never
+  broke `run_stdio`; clients saw the ack and stopped reading stdout,
+  leaving the server blocked writing into a closed pipe. Now:
+  `dispatch` sets `self._stop_event`, `run_stdio` checks the event
+  on every loop turn and exits cleanly. Also handles
+  `notifications/exit` for clients that prefer that path, and
+  `notifications/cancelled` no-op so it's not flagged as unknown
+  method.
+- **Bridge IO failures now carry a diagnostic.** `_read_one_frame`
+  used to return `None` for every failure (timeout / short header /
+  short payload / parse error / mismatched seq) and the wrapping
+  `mouse_*` / `key_*` methods returned a bare `ok=False` — the
+  agent had no signal whether to retry, re-init, or escalate. Now
+  each failure path sets `bridge.last_error_detail` with the
+  specific reason, and `_on_tool_call` pulls it into the `isError`
+  payload. Same hook surfaces firmware ERROR-frame responses with
+  their `ErrorCode` name (`UNKNOWN_COMMAND` / `INVALID_PAYLOAD` /
+  `CHECKSUM_MISMATCH` / `EXECUTION_TIMEOUT` / `DEVICE_BUSY`)
+  instead of opaque ok=False. New `BridgeError` / `BridgeAckTimeout`
+  / `BridgeAckMismatch` / `BridgeProtocolError` /
+  `BridgeErrorResponse` exception classes exported from
+  `clawtouch_mcp.bridge` so external bridge consumers can `try/except`
+  the strongly-typed failure modes too.
+- **`seq_id` 16-bit wrap now skips 0.** After 65535 ops the counter
+  used to wrap to 0, colliding with the protocol's default
+  `seq_id=0` on any frame built without an explicit seq. Long-
+  running MCP sessions could see a stale default-seq ACK match a
+  fresh request after wrap. Now `_next_seq` skips 0 on wrap.
+- **`hid.type` strips control characters by default** (`\n`, `\r`,
+  `\t`, `\x00`-`\x1f`, `\x7f`). An LLM agent drafting a multi-line
+  message into a chat input would otherwise have its draft
+  accidentally submitted by the `\n` being typed as Enter on the
+  host. Pass `allow_control=True` to opt in to the raw byte stream
+  (e.g. when intentionally driving a terminal app). Counts of
+  stripped chars are logged at INFO so users notice.
+- **`examples/computer_use/claude_demo.py` thinking + max_tokens
+  contradiction fixed.** `thinking={"type":"adaptive"} + max_tokens
+  =4096` is rejected by the Anthropic SDK (adaptive thinking
+  requires `max_tokens` higher than the implicit thinking budget).
+  Bumped to 16384 with an inline comment explaining the coupling
+  with `model` and the `betas=` string.
+- **`examples/computer_use/openai_cua_demo.py` scroll direction
+  fixed.** The ternary `-(dy // 10) if dy > 0 else -(dy // 10)` had
+  identical branches (never flipped sign) and Python's floor
+  division of negatives over-scrolled upward (`-15 // 10 == -2`,
+  not `-1`). Now `int(-dy / 10)` — single expression, correct
+  rounding for both signs.
+- **Dead `import io` removed from `claude_demo.py`.**
+- **`examples/computer_use/README.md` `--ops-per-sec` line corrected.**
+  Demo talks to `SerialHidBridge` directly (NOT through the MCP
+  server), so the server's rate limiter is not in the loop —
+  previous "default 10 in these demos" was simply wrong. README
+  now says "pace tool calls yourself; add `asyncio.sleep` /
+  `asyncio.Semaphore` if you need a cap".
+- **Cross-repo wire protocol byte-equality test added.**
+  `tests/test_cross_repo_protocol.py` (22 tests) compares every
+  builder + enum value between `clawtouch_mcp.protocol` (this repo)
+  and `clawtouch_hid_protocol.protocol` (the firmware repo) — the
+  two packages independently implement the same frozen v1.0 wire
+  format, and nothing else guards against silent drift. Skipped
+  via `pytest.importorskip` when `clawtouch-hid-protocol` is not
+  installed.
+- **Test `_run(coro)` helpers no longer leak event loops.** Three
+  test files used `asyncio.get_event_loop_policy().new_event_loop()
+  .run_until_complete(coro)` and never closed the loop, producing
+  ResourceWarning on Windows + orphan idle-watch tasks between
+  tests. Now `try/finally` close.
+
+**Tests:** 102 → **124** (added 16 cursor + 6 keycodes regression
+guards in earlier commits, plus updated 2 dispatch tests for the new
+`isError` contract). Cross-repo test suite adds another **22** when
+`clawtouch-hid-protocol` is installed in dev mode.
+
 ### Fixed — absolute-coordinate semantics (codex round 3 P0/P1 #1)
 
 - **`hid.click(x, y)` / `hid.move(x, y)` were not absolute.** Before

@@ -42,6 +42,38 @@ MAX_TYPE_LEN = 4096
 _MODIFIER_NAMES = frozenset({"ctrl", "shift", "alt", "gui", "win", "cmd"})
 
 
+def _ensure_windows_dpi_awareness() -> None:
+    """Enable per-monitor DPI awareness for this process on Windows.
+
+    GetCursorPos / GetSystemMetrics only return true physical pixels
+    when the calling process is DPI-aware. We MUST call this before
+    either `_detect_screen` (which feeds the clamp bounds) or
+    `cursor.get_cursor_position` (which underlies absolute clicks),
+    otherwise the two coordinate systems can disagree under display
+    scaling and an absolute hid.click lands ~25% off on a 125% host.
+
+    Idempotent — second/Nth calls are no-ops. Fail-soft: on macOS /
+    Linux / when both Windows entry points are missing, returns
+    silently. No exception propagates to the caller.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        # Try the modern per-monitor-v2 awareness first; fall back to
+        # the older v1 API on pre-1809 Windows; ignore failures (Wine,
+        # locked-down kiosks, …).
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def _detect_screen() -> Optional[tuple[int, int]]:
     """Detect the primary monitor's physical pixel size, cross-platform.
 
@@ -56,13 +88,10 @@ def _detect_screen() -> Optional[tuple[int, int]]:
     try:
         if sys.platform == "win32":
             import ctypes
-            try:
-                ctypes.windll.shcore.SetProcessDpiAwareness(2)
-            except Exception:
-                try:
-                    ctypes.windll.user32.SetProcessDPIAware()
-                except Exception:
-                    pass
+            # DPI awareness — separately ensured by ClawTouchMcpServer.__init__
+            # so cursor.py also benefits. Calling it here too is harmless and
+            # keeps _detect_screen self-contained for standalone use.
+            _ensure_windows_dpi_awareness()
             # Use primary monitor (SM_CXSCREEN/SM_CYSCREEN) rather than
             # the virtual screen bounding box across all monitors —
             # hid.screenshot defaults to capturing the primary monitor
@@ -296,6 +325,17 @@ class UnavailableBridge:
 class ClawTouchMcpServer:
     def __init__(self, config: ServerConfig):
         self.config = config
+
+        # Windows DPI awareness MUST be set before any cursor / screen
+        # query — both `_detect_screen` (here, when auto-detect runs)
+        # AND `cursor.get_cursor_position` (later, on every absolute
+        # hid.click) need physical-pixel semantics. Previously this
+        # only ran inside `_detect_screen`; when the user passed an
+        # explicit `--screen WxH`, DPI awareness was never enabled
+        # and on a 125%-scaled host every absolute click was off by
+        # ~25%. Set it unconditionally here.
+        _ensure_windows_dpi_awareness()
+
         # Auto-detect screen size if not given. _screen_source surfaces in
         # device.info so the agent can tell explicit-vs-detected-vs-unset apart.
         if config.screen_w and config.screen_h:
@@ -322,6 +362,9 @@ class ClawTouchMcpServer:
         self._last_used_at: float = time.monotonic()
         self._idle_task: Optional[asyncio.Task] = None
         self._stopping: bool = False
+        # Set by the `shutdown` handler so `run_stdio` can exit cleanly.
+        # `asyncio.Event` can be created without a running loop on 3.10+.
+        self._stop_event: asyncio.Event = asyncio.Event()
         self._register_tools()
 
     # ── Lifecycle ──
@@ -747,18 +790,55 @@ class ClawTouchMcpServer:
                 "screenshot tool requires the `mss` extra: "
                 "pip install 'clawtouch-mcp[screenshot]'"
             )
+        # Cap to keep base64 payloads sane — a 4K×4K PNG is ~30-80MB
+        # base64 and routinely OOMs MCP clients (Claude Desktop's
+        # JSON-RPC buffer in particular). 4M pixels (~4K monitor at
+        # 1× scaling) is a generous-but-bounded ceiling.
+        MAX_SCREENSHOT_PIXELS = 4_000_000
         with mss.MSS() as sct:  # `mss.mss()` deprecated in mss 10.x
+            primary = sct.monitors[1]
             if "region" in kw:
-                x1, y1, x2, y2 = kw["region"]
+                if len(kw["region"]) != 4:
+                    raise ValueError(
+                        f"invalid region {kw['region']}: expected [x1,y1,x2,y2]"
+                    )
+                x1, y1, x2, y2 = (int(v) for v in kw["region"])
                 if x2 <= x1 or y2 <= y1:
                     raise ValueError(
                         f"invalid region {kw['region']}: "
                         "need x2 > x1 and y2 > y1"
                     )
-                monitor = {"left": int(x1), "top": int(y1),
-                           "width": int(x2 - x1), "height": int(y2 - y1)}
+                # Clamp the region to the primary monitor's bounds —
+                # previously an agent-supplied region with negative
+                # offsets or huge sizes captured *across* monitors the
+                # user might not have intended to expose. Restricting
+                # to primary matches the same "primary only" semantics
+                # used by --screen WxH auto-detect.
+                left = primary.get("left", 0)
+                top = primary.get("top", 0)
+                right = left + primary["width"]
+                bottom = top + primary["height"]
+                cx1 = max(left, min(x1, right))
+                cy1 = max(top, min(y1, bottom))
+                cx2 = max(left, min(x2, right))
+                cy2 = max(top, min(y2, bottom))
+                if cx2 - cx1 < 1 or cy2 - cy1 < 1:
+                    raise ValueError(
+                        f"region {kw['region']} falls entirely outside "
+                        f"the primary monitor ({left},{top})-({right},{bottom}) "
+                        "after clamping"
+                    )
+                monitor = {"left": cx1, "top": cy1,
+                           "width": cx2 - cx1, "height": cy2 - cy1}
             else:
-                monitor = sct.monitors[1]
+                monitor = primary
+            pixels = monitor["width"] * monitor["height"]
+            if pixels > MAX_SCREENSHOT_PIXELS:
+                raise ValueError(
+                    f"screenshot too large: {monitor['width']}x{monitor['height']}"
+                    f" = {pixels} pixels > MAX_SCREENSHOT_PIXELS "
+                    f"({MAX_SCREENSHOT_PIXELS}); pass a smaller `region`"
+                )
             shot = sct.grab(monitor)
             png = mss.tools.to_png(shot.rgb, shot.size)
         return {
@@ -771,7 +851,18 @@ class ClawTouchMcpServer:
     # ═══════════════════ JSON-RPC dispatch ═══════════════════
 
     async def dispatch(self, msg: dict) -> Optional[dict]:
-        """Return a response dict, or None for notifications."""
+        """Return a response dict, or None for notifications.
+
+        MCP spec compliance note: tool *execution* failures must come
+        back as ``result.content + isError:true`` (so the agent sees
+        the error and can react), NOT as JSON-RPC errors. JSON-RPC
+        error codes are reserved for protocol-layer failures —
+        unknown method (-32601), bad params (-32602), internal
+        dispatch crash (-32603 / -32000). `_on_tool_call` enforces
+        this by catching handler exceptions itself; this method's
+        ``except Exception`` only catches genuine protocol-layer
+        failures left over after that.
+        """
         jid = msg.get("id")
         method = msg.get("method")
         params = msg.get("params") or {}
@@ -788,7 +879,15 @@ class ClawTouchMcpServer:
             elif method == "tools/call":
                 result = await self._on_tool_call(params)
             elif method == "shutdown":
+                # Tell run_stdio to exit; reply first, then it'll
+                # observe the event on its next loop pass.
+                self._stop_event.set()
                 result = {}
+            elif method in ("notifications/cancelled", "notifications/exit"):
+                # Notifications we accept silently — no response.
+                if method == "notifications/exit":
+                    self._stop_event.set()
+                return None
             else:
                 return _error_response(jid, -32601, f"method not found: {method}")
             if jid is None:
@@ -796,7 +895,7 @@ class ClawTouchMcpServer:
             return {"jsonrpc": "2.0", "id": jid, "result": result}
         except Exception as e:
             logger.exception("dispatch error for %s", method)
-            return _error_response(jid, -32000, str(e))
+            return _error_response(jid, -32603, str(e))
 
     def _on_initialize(self, params: dict) -> dict:
         return {
@@ -831,8 +930,52 @@ class ClawTouchMcpServer:
         args = params.get("arguments") or {}
         tool = self.tools.get(name)
         if tool is None:
-            raise ValueError(f"unknown tool: {name!r}")
-        result = await tool.handler(**args)
+            # MCP spec: unknown tool is a tool-level error, not a
+            # protocol error — return isError:true content so the
+            # agent sees a descriptive message instead of a generic
+            # JSON-RPC failure.
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"unknown tool: {name!r} — available: "
+                            f"{sorted(self.tools.keys())}",
+                }],
+                "isError": True,
+            }
+        # MCP spec compliance: tool *execution* failures (rate limit,
+        # bridge timeout, hardware unavailable, bad args validated by
+        # the handler, …) must come back as `isError:true` content
+        # so the agent can read the message and react. JSON-RPC error
+        # codes are reserved for protocol-layer faults. Previously
+        # every ValueError / RuntimeError bubbled to dispatch's
+        # `except Exception` and became a JSON-RPC -32000, hiding the
+        # actual cause from compliant clients (Claude Desktop, Cline).
+        try:
+            result = await tool.handler(**args)
+        except Exception as e:
+            logger.warning("tool %s exec error: %s", name, e)
+            error_text = f"{type(e).__name__}: {e}"
+            # If the bridge has a more specific diagnostic (timeout /
+            # seq mismatch / firmware ERROR code / parse error), pull
+            # it in — that's what the agent actually needs to retry.
+            br = getattr(self, "bridge", None)
+            br_detail = getattr(br, "last_error_detail", None) if br else None
+            if br_detail:
+                error_text = f"{error_text}\nbridge diagnostic: {br_detail}"
+            return {
+                "content": [{"type": "text", "text": error_text}],
+                "isError": True,
+            }
+        # Handler returned a structured-error dict (e.g. cursor
+        # tracking unavailable). Echo that into isError content too.
+        if isinstance(result, dict) and "error" in result:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": json.dumps(result, ensure_ascii=False),
+                }],
+                "isError": True,
+            }
         return {
             "content": [
                 {"type": "text", "text": json.dumps(result, ensure_ascii=False)}
@@ -915,42 +1058,77 @@ async def _read_one(framed: bool) -> Optional[dict]:
                 return json.loads(text)
 
 
+async def _dispatch_and_write(
+    server: ClawTouchMcpServer, msg: dict, framed: bool,
+) -> None:
+    resp = await server.dispatch(msg)
+    if resp is not None:
+        _write_message(sys.stdout, resp, framed=framed)
+
+
 async def run_stdio(server: ClawTouchMcpServer) -> None:
-    """Main loop: read stdin, dispatch, write stdout."""
+    """Main loop: read stdin, dispatch, write stdout.
+
+    A single malformed JSON line used to crash this loop with
+    JSONDecodeError → the whole MCP session died and clients saw the
+    process exit. Per JSON-RPC 2.0 spec, malformed JSON should come
+    back as ``error.code = -32700`` and the connection should remain
+    open. We now catch the parse error per-message, write a -32700
+    response, and continue.
+    """
     # Decide framing on first message
     framed: Optional[bool] = None
     try:
         while True:
+            if server._stop_event.is_set():
+                return
             raw = await _read_line()
             if not raw:
                 return
             first = raw.decode("utf-8", errors="replace").strip()
             if not first:
                 continue
-            if first.lower().startswith("content-length:"):
-                framed = True
-                length = int(first.split(":", 1)[1].strip())
-                while True:
-                    more = await _read_line()
-                    if not more or more in (b"\r\n", b"\n"):
-                        break
-                msg = await _read_framed(length)
-            else:
-                framed = False
-                msg = json.loads(first)
+            try:
+                if first.lower().startswith("content-length:"):
+                    framed = True
+                    length = int(first.split(":", 1)[1].strip())
+                    while True:
+                        more = await _read_line()
+                        if not more or more in (b"\r\n", b"\n"):
+                            break
+                    msg = await _read_framed(length)
+                else:
+                    framed = False
+                    msg = json.loads(first)
+            except (json.JSONDecodeError, ValueError) as e:
+                # Per JSON-RPC 2.0: parse error → -32700, id=null
+                # (we have no parsed id to echo). Keep the connection
+                # alive — the next line might be valid.
+                _write_message(
+                    sys.stdout,
+                    _error_response(None, -32700, f"parse error: {e}"),
+                    framed=bool(framed),
+                )
+                framed = None  # framing not yet established; retry next msg
+                continue
 
-            resp = await server.dispatch(msg)
-            if resp is not None:
-                _write_message(sys.stdout, resp, framed=framed)
+            await _dispatch_and_write(server, msg, framed)
 
             # Subsequent messages use the same framing
-            while True:
-                msg = await _read_one(framed)
+            while not server._stop_event.is_set():
+                try:
+                    msg = await _read_one(framed)
+                except (json.JSONDecodeError, ValueError) as e:
+                    _write_message(
+                        sys.stdout,
+                        _error_response(None, -32700, f"parse error: {e}"),
+                        framed=framed,
+                    )
+                    continue
                 if msg is None:
                     return
-                resp = await server.dispatch(msg)
-                if resp is not None:
-                    _write_message(sys.stdout, resp, framed=framed)
+                await _dispatch_and_write(server, msg, framed)
+            return
     except asyncio.IncompleteReadError:
         return
     except Exception:

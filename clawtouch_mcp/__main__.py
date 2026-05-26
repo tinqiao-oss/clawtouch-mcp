@@ -38,6 +38,14 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    # --ops-per-sec: 0 or negative would brick every tool call. Was
+    # silent before — server accepted initialize / tools/list then
+    # rejected every tools/call with "rate limit exceeded".
+    if args.ops_per_sec <= 0:
+        parser.error(
+            f"--ops-per-sec must be positive (got {args.ops_per_sec})"
+        )
+
     cfg = ServerConfig(
         port=args.port,
         baudrate=args.baudrate,
@@ -47,11 +55,25 @@ def main() -> int:
         idle_close_after=args.idle_close_after,
     )
     if args.screen:
+        # --screen used to crash on "1920x" (int("") raises outside the
+        # try) or silently disable clamping on "0x0" (zero is falsy).
+        # Validate explicitly so the user gets a clear error.
         try:
-            w, h = args.screen.lower().split("x", 1)
-            cfg.screen_w, cfg.screen_h = int(w), int(h)
-        except ValueError:
-            parser.error(f"invalid --screen {args.screen!r}, expected e.g. 1920x1080")
+            parts = args.screen.lower().split("x")
+            if len(parts) != 2:
+                raise ValueError("must be exactly one 'x' separator")
+            w, h = int(parts[0]), int(parts[1])
+        except (ValueError, TypeError) as e:
+            parser.error(
+                f"invalid --screen {args.screen!r}, expected e.g. 1920x1080 "
+                f"({e})"
+            )
+        if w <= 0 or h <= 0:
+            parser.error(
+                f"invalid --screen {args.screen!r}: width and height must be "
+                f"positive (got {w}x{h})"
+            )
+        cfg.screen_w, cfg.screen_h = w, h
 
     async def _run() -> None:
         server = ClawTouchMcpServer(cfg)

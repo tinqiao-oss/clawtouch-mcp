@@ -24,7 +24,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
-import io
 import logging
 import os
 import sys
@@ -170,11 +169,21 @@ async def run(task: str, bridge: Any, screen_w: int, screen_h: int,
 
     for iteration in range(max_iterations):
         logger.info("─── iteration %d ───", iteration + 1)
-        # Use streaming for high max_tokens (>16K) — per claude-api skill guidance.
-        # adaptive thinking is recommended; Computer Use is still beta.
+        # Notes on the request shape:
+        # - `max_tokens=16384`: adaptive extended-thinking requires a
+        #   higher cap than the default 4096 (the SDK enforces a floor
+        #   above the implicit thinking budget). Use 16K as a safe
+        #   default for Computer Use loops.
+        # - `thinking={"type":"adaptive"}`: lets Claude decide how much
+        #   reasoning budget each step needs. Drop this field if your
+        #   model variant doesn't expose extended thinking.
+        # - `model` and `betas` are coupled — the beta string changes
+        #   with each Computer Use model release; check Anthropic docs
+        #   before pinning. As of 2026 mid: claude-opus-4-7 + beta
+        #   `computer-use-2025-01-24` is the GA pairing.
         async with client.beta.messages.stream(
             model="claude-opus-4-7",
-            max_tokens=4096,
+            max_tokens=16384,
             thinking={"type": "adaptive"},
             tools=[{
                 "type": "computer_20250124",

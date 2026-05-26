@@ -134,8 +134,12 @@ human in between. Best practices:
 - **Set explicit screen bounds.** Pass `--screen WxH` matching your
   actual display; the demo clamps coordinates so the agent can't move
   the cursor to bogus pixel positions.
-- **Keep `--ops-per-sec` modest while iterating.** Default is 10 in
-  these demos; raise after you trust the agent.
+- **Pace tool calls yourself.** Both demos talk to `SerialHidBridge`
+  directly — they do **not** go through the `clawtouch-mcp` server,
+  so the server's `--ops-per-sec` rate limiter (default 20) is not in
+  the loop. If you need a rate cap during early iteration, add an
+  explicit `asyncio.sleep` or `asyncio.Semaphore` in your action
+  handler.
 - **Have a panic stop ready.** Unplugging the Pico's USB cable is
   instant and safe.
 - **Don't leave it unattended.** The vanilla demo loops will happily
