@@ -70,6 +70,39 @@ We do **not** support, document, or assist with:
 
 If you're looking for either of the above, this isn't the right tool.
 
+## Content generation — out of scope
+
+`clawtouch-mcp` exposes hardware HID actions (mouse / keyboard / scroll
+/ key combos / screenshot) as MCP tools. It does **not** generate,
+synthesize, recommend, or otherwise produce text, image, audio, or
+video content. The calling LLM agent is the content-generating party
+and is solely responsible for any generated content and for
+compliance with any content-labeling or content-moderation
+obligations applicable in its jurisdiction (e.g. PRC *AI Generated
+Content Labeling Measure* effective 2025-09-01).
+
+## Acceptable use
+
+This server is built for legitimate uses — accessibility, RPA, test
+automation, cross-machine workflows where the target machine must
+stay clean. It is **not** intended to, and you may not configure it
+to:
+
+- Bypass, evade, or interfere with any target platform's anti-fraud,
+  anti-abuse, rate-limiting, or risk-control measures.
+- Operate accounts the user does not lawfully own or have explicit
+  authorization to operate.
+- Conduct activities prohibited by the target application's Terms
+  of Service in the user's jurisdiction.
+- Conduct activities that violate applicable law — including, but
+  not limited to, PRC *Anti-Unfair Competition Law* Art. 13 (as
+  amended 2025-10-15) on improper acquisition of others' data,
+  *Personal Information Protection Law*, *Cybersecurity Law*, and
+  equivalent laws in other jurisdictions.
+
+Users are independently responsible for evaluating their specific
+use case against applicable laws and the target platform's ToS.
+
 ## Install
 
 ```bash
@@ -301,7 +334,15 @@ open vs. closed.
 
 ## License
 
-MIT © Tinqiao Technology (Beijing) Co., Ltd. See [LICENSE](LICENSE).
+MIT © Tinqiao Technology (Beijing) Co., Ltd. — see [LICENSE](LICENSE)
+(English, authoritative) and [LICENSE.zh-CN.md](LICENSE.zh-CN.md)
+(non-official Chinese translation, for reference).
+
+Third-party dependencies and their licenses are listed in
+[NOTICE](NOTICE). Trademarks (ClawTouch, Tinqiao, and third-party
+marks referenced in this repository) are covered separately in
+[TRADEMARKS.md](TRADEMARKS.md) — the MIT License does **not** grant
+any trademark rights.
 
 For commercial deployments at scale, enterprise support, or OEM hardware
 discussion: `support@tinqiao.com`.

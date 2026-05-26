@@ -7,6 +7,40 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`TRADEMARKS.md`** — bilingual (English + 简体中文) nominative
+  trademark notice covering Tinqiao-owned marks (ClawTouch, Tinqiao)
+  and third-party marks referenced for descriptive purposes
+  (Claude, OpenAI, Cursor, OpenClaw, Hermes, Cherry Studio, Trae IDE,
+  Raspberry Pi, CircuitPython, Windows, macOS, etc.). PRC Trademark
+  Law Art. 59 nominative-fair-use disclaimer included.
+- **`LICENSE.zh-CN.md`** — non-official Chinese translation of the
+  MIT License with explicit "English version prevails in case of
+  conflict" disclaimer; references PRC open-source contract-law
+  precedents (数字天堂诉柚子科技 / 罗盒诉风灵).
+- **README `## Content generation — out of scope` section** —
+  explicit declaration that this package does not generate any
+  text/image/audio/video content, separating compliance scope from
+  PRC *AI Generated Content Labeling Measure* (effective 2025-09-01)
+  and the *Interim Measures for Generative AI Services*.
+- **README `## Acceptable use` section** — explicit prohibition on
+  bypassing target platforms' anti-fraud / risk-control / rate-limit
+  measures and on operating accounts the user does not lawfully
+  own; references PRC *Anti-Unfair Competition Law* Art. 13 (as
+  amended 2025-10-15).
+- **README License section** — added cross-links to
+  `LICENSE.zh-CN.md`, `NOTICE`, and `TRADEMARKS.md`; clarified that
+  MIT does not grant trademark rights.
+
+### Changed
+
+- **Test fixture USB serial numbers replaced with a synthetic value**
+  (`E660000000000000`) instead of a real test-device serial; the
+  affected test docstring rewritten to describe the technical
+  reproduction scenario in neutral terms (no internal-date
+  references).
+
 ### Fixed
 
 - **`build_key_release()` now sends `[0x00, 0x00]` payload** instead of

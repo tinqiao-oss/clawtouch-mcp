@@ -68,12 +68,14 @@ class TestDualCdcDetection:
     """The real bug: two ports same serial → highest-numbered is data."""
 
     def test_macos_dual_cdc_picks_higher_numbered_port(self):
-        """Reproduces the 2026-05-17 mac mini issue exactly."""
+        """macOS exposes Pico's two USB-CDC interfaces as paired ports
+        with identical serial numbers; the higher-numbered one is the
+        data channel (lower is the REPL console)."""
         with _mock_comports([
             FakePort(device="/dev/cu.usbmodem21201", vid=_PICO_VID, pid=11,
-                     serial_number="65299B0D5CCFDECF"),
+                     serial_number="E660000000000000"),
             FakePort(device="/dev/cu.usbmodem21203", vid=_PICO_VID, pid=11,
-                     serial_number="65299B0D5CCFDECF"),
+                     serial_number="E660000000000000"),
         ]):
             ports = list_pico_ports()
             console = next(p for p in ports if "21201" in p["device"])
