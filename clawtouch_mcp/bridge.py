@@ -290,7 +290,17 @@ class SerialHidBridge:
     async def key_combo(self, modifiers: list[str], key: str) -> bool:
         mask = modifiers_to_mask(modifiers)
         kc = name_to_keycode(key)
-        if kc is None and len(key) == 1:
+        if kc is not None:
+            # Named key — OR SHIFT in when the name refers to the
+            # SHIFTED glyph (plus / tilde / quote). Without this,
+            # `hid.key("plus")` would emit `=` because the underlying
+            # HID keycode 0x2E is the un-shifted key for `=` / `+`.
+            if name_needs_shift(key):
+                mask |= int(ModifierKey.SHIFT)
+        elif len(key) == 1:
+            # Single-char fallback (e.g. agent passed "ctrl+a" or
+            # "ctrl++"). Look the char up in the printable-glyph
+            # tables and force SHIFT for shifted glyphs.
             if char_needs_shift(key):
                 mask |= int(ModifierKey.SHIFT)
             kc = char_to_keycode(key)

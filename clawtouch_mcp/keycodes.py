@@ -52,14 +52,47 @@ _KEY_NAME_TO_HID: dict[str, int] = {
     **{f"f{i}": 0x3A + i - 1 for i in range(1, 13)},
 }
 
+# Worded names whose corresponding US-layout glyph is the SHIFTED form
+# of the underlying HID keycode. ``hid.key("plus")`` must emit the
+# physical key for ``=`` AND hold SHIFT — otherwise it would type ``=``
+# instead of ``+``. Likewise ``tilde`` (shift+`) and ``quote`` (shift+').
+# Everything else in ``_KEY_NAME_TO_HID`` (equal, minus, comma, ...) is
+# the *non-shifted* glyph and must NOT have shift forced.
+_SHIFTED_NAMES: frozenset[str] = frozenset({
+    "plus",      # shift+= → '+'
+    "tilde",     # shift+` → '~'
+    "quote",     # shift+' → '"' (apostrophe is the un-shifted alias)
+})
+
 
 def char_needs_shift(ch: str) -> bool:
     return ch in _SHIFT_CHAR_TO_HID
 
 
 def char_to_keycode(ch: str) -> int | None:
-    return _SHIFT_CHAR_TO_HID.get(ch) or _CHAR_TO_HID.get(ch)
+    # Prefer the shifted table (uppercase letters / shifted punctuation),
+    # fall back to the non-shifted table. Use an explicit ``is None``
+    # check rather than ``or`` so a future keycode value of 0 would not
+    # be silently dropped.
+    shifted = _SHIFT_CHAR_TO_HID.get(ch)
+    if shifted is not None:
+        return shifted
+    return _CHAR_TO_HID.get(ch)
 
 
 def name_to_keycode(name: str) -> int | None:
     return _KEY_NAME_TO_HID.get(name.strip().lower())
+
+
+def name_needs_shift(name: str) -> bool:
+    """Whether the named key represents the *shifted* form of its
+    underlying HID keycode — callers that build a combo must OR the
+    SHIFT modifier in when this is True.
+
+    True for ``plus`` / ``tilde`` / ``quote`` (and their case
+    variants). False for everything else, including ``equal`` /
+    ``minus`` / ``apostrophe`` (which are the un-shifted glyphs of
+    the same physical key) and all the navigation / function-key
+    names (whose keycodes don't have a SHIFT interpretation at all).
+    """
+    return name.strip().lower() in _SHIFTED_NAMES

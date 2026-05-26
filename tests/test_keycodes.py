@@ -10,6 +10,7 @@ from __future__ import annotations
 from clawtouch_mcp.keycodes import (
     char_needs_shift,
     char_to_keycode,
+    name_needs_shift,
     name_to_keycode,
 )
 
@@ -69,3 +70,66 @@ class TestNamedKeys:
 
     def test_unknown_name_returns_none(self):
         assert name_to_keycode("turbofunction") is None
+
+    def test_punctuation_aliases_keycode(self):
+        # Worded aliases for punctuation keys (added in v0.2.3 codex
+        # round 3 #4) — keycode is the physical key, the SHIFT
+        # interpretation is carried separately by name_needs_shift().
+        for alias, expected in [
+            ("plus", 0x2E), ("equal", 0x2E), ("equals", 0x2E),
+            ("minus", 0x2D), ("hyphen", 0x2D), ("dash", 0x2D),
+            ("comma", 0x36), ("period", 0x37), ("dot", 0x37),
+            ("slash", 0x38), ("backslash", 0x31),
+            ("semicolon", 0x33), ("apostrophe", 0x34), ("quote", 0x34),
+            ("grave", 0x35), ("backtick", 0x35), ("tilde", 0x35),
+            ("leftbracket", 0x2F), ("rightbracket", 0x30),
+        ]:
+            assert name_to_keycode(alias) == expected, alias
+
+
+class TestNameNeedsShift:
+    """Worded aliases that name the *shifted* glyph must report
+    needs_shift=True so callers (bridge.key_combo) can OR the SHIFT
+    modifier in. The non-shifted aliases must NOT — adding SHIFT to
+    `ctrl+equal` would silently change it to `ctrl++` (= shift+=)."""
+
+    def test_shifted_aliases_need_shift(self):
+        for alias in ["plus", "tilde", "quote"]:
+            assert name_needs_shift(alias) is True, alias
+            # case-insensitive + whitespace tolerant
+            assert name_needs_shift(alias.upper()) is True
+            assert name_needs_shift(f"  {alias}  ") is True
+
+    def test_unshifted_aliases_do_not_need_shift(self):
+        for alias in [
+            "equal", "equals", "minus", "hyphen", "dash",
+            "comma", "period", "dot",
+            "slash", "backslash",
+            "semicolon", "apostrophe",
+            "grave", "backtick",
+            "leftbracket", "rightbracket",
+            # navigation / function keys never need shift via this path
+            "enter", "tab", "escape", "f1", "f12",
+        ]:
+            assert name_needs_shift(alias) is False, alias
+
+    def test_unknown_name_does_not_claim_shift(self):
+        assert name_needs_shift("totally-fake-key") is False
+
+
+class TestCharToKeycodeFallback:
+    """char_to_keycode now uses an explicit ``is None`` check rather
+    than ``or`` — guards against a future keycode value of 0 being
+    silently dropped. All current HID keycodes start at 0x04 so the
+    old code worked by accident, but the new code is explicit."""
+
+    def test_shifted_takes_precedence_over_unshifted(self):
+        # 'A' is in both tables (both at 0x04) — shifted entry wins.
+        # Equality holds because they map to the same keycode, but
+        # the lookup ordering is now explicit and stable.
+        assert char_to_keycode("A") == 0x04
+
+    def test_unshifted_when_shifted_absent(self):
+        assert char_to_keycode("a") == 0x04
+        assert char_to_keycode("1") == 0x1E
+        assert char_to_keycode(" ") == 0x2C
