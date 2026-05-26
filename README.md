@@ -9,8 +9,6 @@
 > [Hermes Agent](https://github.com/NousResearch/hermes-agent) and any other —
 > into something that can move a real mouse and press real keys through a USB HID device.
 
-🌐 **[clawtouch.cn](https://clawtouch.cn)** — official site for hardware, docs, and commercial inquiries.
-
 [![PyPI version](https://img.shields.io/pypi/v/clawtouch-mcp.svg)](https://pypi.org/project/clawtouch-mcp/)
 [![Python](https://img.shields.io/pypi/pyversions/clawtouch-mcp.svg)](https://pypi.org/project/clawtouch-mcp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -196,11 +194,6 @@ $ clawtouch-mcp --port COM7
    {"type":"text","text":"typed 14 chars in 0.42s"}],"isError":false}}
 ```
 
-> 🎥 A real screen-recording GIF of the same flow against ClawTouch
-> hardware will land here in a future commit. The Pico is in the
-> author's hands; in the meantime this transcript is straight from
-> `--log-level INFO` against a real Pico 2 (serial randomized).
-
 ## Use with Claude Desktop
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json`
@@ -338,9 +331,6 @@ are open, the integrated commercial product stays closed.
 | **[clawtouch-skills](https://github.com/tinqiao-oss/clawtouch-skills)** (markdown skill files for LLM agents) | ✅ Released |
 | **clawtouch-bridge-sdk** (Python + Node HID SDK)   | 🔵 Future       |
 | Backend / desktop app / adapters / vision models   | 🔒 Closed source — contact `support@tinqiao.com` |
-
-The dates aren't fixed — we ship when each piece is properly polished. Star
-the org [@tinqiao-oss](https://github.com/tinqiao-oss) to get notified.
 
 ## Architecture overview
 

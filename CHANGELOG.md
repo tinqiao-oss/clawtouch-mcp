@@ -7,6 +7,18 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Docs trim
+
+- Removed redundant `🌐 clawtouch.cn` top-of-README link line —
+  felt out-of-place above the badges (the same link still lives in
+  the `## About` and `## License` sections).
+- Removed the "🎥 a real screen-recording GIF will land here..."
+  placeholder under `## See it in action`. The annotated stdio
+  transcript stands on its own; no GIF promise to deliver on.
+- Removed the "The dates aren't fixed — we ship when each piece is
+  properly polished. Star the org..." sentence under
+  `## Open source roadmap` — pure boilerplate, no information value.
+
 ### Visual / docs uplift
 
 - **`docs/assets/hero.svg`** — flat-design hero diagram (LLM agent →
