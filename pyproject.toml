@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clawtouch-mcp"
-version = "0.2.3"
+version = "0.2.4"
 description = "MCP stdio server exposing HID mouse/keyboard tools backed by ClawTouch Pico hardware."
 readme = "README.md"
 # PEP 639: SPDX expression form (setuptools >= 77). Avoid the deprecated

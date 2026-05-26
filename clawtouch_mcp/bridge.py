@@ -18,6 +18,7 @@ import serial.tools.list_ports  # type: ignore
 from .keycodes import (
     char_needs_shift,
     char_to_keycode,
+    name_needs_shift,
     name_to_keycode,
 )
 from .protocol import (

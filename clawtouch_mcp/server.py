@@ -368,6 +368,15 @@ class ClawTouchMcpServer:
         self._last_used_at: float = time.monotonic()
         self._idle_task: Optional[asyncio.Task] = None
         self._stopping: bool = False
+        # Counter of in-flight tool handlers. _idle_watch must not
+        # close the serial port while a handler is mid-stream (a slow
+        # type_text or a stalled hardware response can easily outlive
+        # the idle_close_after deadline; cutting the bridge mid-command
+        # leaves the firmware in an inconsistent state and surfaces as
+        # a cryptic "ACK timeout" to the caller). The counter is
+        # incremented before tool.handler runs and decremented after,
+        # regardless of exception.
+        self._inflight_handlers: int = 0
         # Set by the `shutdown` handler so `run_stdio` can exit cleanly.
         # `asyncio.Event` can be created without a running loop on 3.10+.
         self._stop_event: asyncio.Event = asyncio.Event()
@@ -479,6 +488,16 @@ class ClawTouchMcpServer:
                 if not isinstance(self.bridge, SerialHidBridge):
                     return  # bridge 已不是真 serial (e.g. 被 stop), 退出
                 if time.monotonic() - self._last_used_at >= self.config.idle_close_after:
+                    # In-flight protection: a slow handler (4096-char
+                    # type_text, stalled hardware) can outlive the
+                    # deadline. Releasing the bridge mid-command leaves
+                    # the firmware in a bad state. Defer the release
+                    # until the handler returns; the loop will re-check
+                    # on the next tick. _on_tool_call refreshes
+                    # _last_used_at on the way out so we won't fire
+                    # right after either.
+                    if self._inflight_handlers > 0:
+                        continue
                     await self._idle_release_now()
                     return  # release 后 bridge 是 UnavailableBridge, 退出
         except asyncio.CancelledError:
@@ -657,7 +676,18 @@ class ClawTouchMcpServer:
         if self.config.allow_screenshot:
             self._register(Tool(
                 name="hid.screenshot",
-                description="Take a screenshot (requires --allow-screenshot + mss).",
+                description=(
+                    "Take a screenshot (requires --allow-screenshot + mss). "
+                    "COORDINATE-SPACE WARNING: screenshot returns physical "
+                    "pixels. hid.click and cursor.get_cursor_position use "
+                    "the logical-point space the OS reports. On macOS "
+                    "Retina the ratio is 2.0; on Windows/Linux at >100% DPI "
+                    "it varies. The returned scale_x / scale_y fields give "
+                    "the ratio (screenshot_pixel / click_point). Agents "
+                    "should divide screenshot coordinates by these factors "
+                    "before passing them to hid.click — otherwise clicks "
+                    "land at scale_x x the intended position."
+                ),
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -665,7 +695,7 @@ class ClawTouchMcpServer:
                             "type": "array",
                             "items": {"type": "integer"},
                             "minItems": 4, "maxItems": 4,
-                            "description": "[x1,y1,x2,y2]",
+                            "description": "[x1,y1,x2,y2] in screenshot pixel coordinates",
                         }
                     },
                 },
@@ -864,10 +894,29 @@ class ClawTouchMcpServer:
                 )
             shot = sct.grab(monitor)
             png = mss.tools.to_png(shot.rgb, shot.size)
+            # Report the scale between screenshot pixels and the
+            # coordinate space hid.click / cursor.get_cursor_position
+            # use. On macOS Retina this is 2.0 (or 1.something with
+            # fractional scaling). On Windows / Linux at any DPI mss
+            # reports physical pixels and the configured screen size
+            # in physical pixels too, so the ratio collapses to 1.0 —
+            # but we compute it the same way so agents can apply a
+            # single normalisation rule across platforms:
+            #     click_x = screenshot_x / scale_x
+            #     click_y = screenshot_y / scale_y
+            scale_x = 1.0
+            scale_y = 1.0
+            if self.config.screen_w and self.config.screen_h and not kw.get("region"):
+                # Only meaningful for full-screen captures; with a
+                # region the ratio is between the region and itself.
+                scale_x = shot.width / self.config.screen_w
+                scale_y = shot.height / self.config.screen_h
         return {
             "mime_type": "image/png",
             "width": shot.width,
             "height": shot.height,
+            "scale_x": round(scale_x, 4),
+            "scale_y": round(scale_y, 4),
             "base64": base64.b64encode(png).decode("ascii"),
         }
 
@@ -973,8 +1022,15 @@ class ClawTouchMcpServer:
         # every ValueError / RuntimeError bubbled to dispatch's
         # `except Exception` and became a JSON-RPC -32000, hiding the
         # actual cause from compliant clients (Claude Desktop, Cline).
+        self._inflight_handlers += 1
         try:
-            result = await tool.handler(**args)
+            try:
+                result = await tool.handler(**args)
+            finally:
+                self._inflight_handlers -= 1
+                # Refresh idle timestamp on exit too — a long-running
+                # handler shouldn't be "stale" the instant it returns.
+                self._last_used_at = time.monotonic()
         except Exception as e:
             logger.warning("tool %s exec error: %s", name, e)
             error_text = f"{type(e).__name__}: {e}"
@@ -996,6 +1052,31 @@ class ClawTouchMcpServer:
                 "content": [{
                     "type": "text",
                     "text": json.dumps(result, ensure_ascii=False),
+                }],
+                "isError": True,
+            }
+        # Bridge-level failure (timeout / seq mismatch / firmware ERROR /
+        # parse error) currently surfaces as ``{"ok": False, ...}`` from
+        # the high-level bridge methods — they swallow the underlying
+        # exception and return False so adapter code can keep flowing.
+        # That's the right call at the bridge layer, but at the MCP
+        # boundary it would let a hardware failure ride out as
+        # ``isError: false`` and the agent would think the click landed.
+        # MCP spec § Tool Result requires execution failures be flagged
+        # as ``isError: true``. We pull the specific diagnostic from
+        # ``bridge.last_error_detail`` (set by ``_send_raw``) so the
+        # agent sees *why* the call failed, not just that ``ok`` was
+        # False.
+        if isinstance(result, dict) and result.get("ok") is False:
+            br = getattr(self, "bridge", None)
+            br_detail = getattr(br, "last_error_detail", None) if br else None
+            payload = dict(result)
+            if br_detail:
+                payload["bridge_diagnostic"] = br_detail
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": json.dumps(payload, ensure_ascii=False),
                 }],
                 "isError": True,
             }

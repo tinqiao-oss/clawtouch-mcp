@@ -34,9 +34,35 @@ import anthropic
 # Direct bridge import — these demos talk to the HID device without
 # going through the clawtouch-mcp server subprocess.
 from clawtouch_mcp.bridge import SerialHidBridge, auto_detect_port
+from clawtouch_mcp.cursor import availability_hint, get_cursor_position
 from clawtouch_mcp.protocol import MouseButton, modifiers_to_mask
 from clawtouch_mcp.keycodes import name_to_keycode
 from clawtouch_mcp.server import MockBridge
+
+
+async def _move_to_absolute(bridge: Any, target_x: int, target_y: int) -> bool:
+    """Translate a Computer Use screen-absolute coordinate to a relative bridge move.
+
+    The Pico firmware always interprets ``(x, y)`` as a relative pixel
+    delta — USB Boot Mouse has no absolute-coordinate HID report, and
+    ``firmware/code.py`` explicitly discards the ``relative`` flag.
+    Calling ``bridge.mouse_move(x, y, relative=False)`` therefore
+    silently sends the screen coordinate AS A DELTA, which sends the
+    cursor flying off-screen on the first click. The MCP server's
+    ``hid.click`` tool handles this conversion internally; demos that
+    talk to the bridge directly must do it themselves. Reads OS cursor
+    position and emits a relative delta. Raises if cursor tracking
+    isn't available on this host.
+    """
+    current = get_cursor_position()
+    if current is None:
+        raise RuntimeError(
+            "Claude Computer Use absolute coordinates require OS cursor "
+            "tracking, which is unavailable on this host. "
+            + availability_hint()
+        )
+    cx, cy = current
+    return await bridge.mouse_move(target_x - cx, target_y - cy, relative=True)
 
 logger = logging.getLogger("clawtouch.cu.claude")
 
@@ -98,7 +124,7 @@ async def execute_action(
         x, y = params["coordinate"]
         x = max(0, min(x, screen_w - 1))
         y = max(0, min(y, screen_h - 1))
-        await bridge.mouse_move(x, y, relative=False)
+        await _move_to_absolute(bridge, x, y)
         return "moved"
 
     if action in ("left_click", "right_click", "middle_click", "double_click"):
@@ -107,7 +133,7 @@ async def execute_action(
             x, y = params["coordinate"]
             x = max(0, min(x, screen_w - 1))
             y = max(0, min(y, screen_h - 1))
-            await bridge.mouse_move(x, y, relative=False)
+            await _move_to_absolute(bridge, x, y)
         button = {"left_click": "left", "right_click": "right",
                   "middle_click": "middle", "double_click": "left"}[action]
         await bridge.mouse_click(button=button, double=(action == "double_click"))

@@ -48,8 +48,33 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from clawtouch_mcp.bridge import SerialHidBridge, auto_detect_port
+from clawtouch_mcp.cursor import availability_hint, get_cursor_position
 from clawtouch_mcp.keycodes import name_to_keycode
 from clawtouch_mcp.server import MockBridge
+
+
+async def _move_to_absolute(bridge: Any, target_x: int, target_y: int) -> bool:
+    """Translate a CUA screen-absolute coordinate to a relative bridge move.
+
+    The Pico firmware always interprets ``(x, y)`` as a relative pixel
+    delta — USB Boot Mouse has no absolute-coordinate HID report, and
+    ``firmware/code.py`` explicitly discards the ``relative`` flag.
+    Calling ``bridge.mouse_move(x, y, relative=False)`` therefore
+    silently sends the screen coordinate AS A DELTA, which sends the
+    cursor flying off-screen on the first click. The MCP server's
+    ``hid.click`` tool handles this conversion internally; demos that
+    talk to the bridge directly must do it themselves. Reads OS cursor
+    position and emits a relative delta. Raises if cursor tracking
+    isn't available on this host.
+    """
+    current = get_cursor_position()
+    if current is None:
+        raise RuntimeError(
+            "CUA absolute coordinates require OS cursor tracking, "
+            "which is unavailable on this host. " + availability_hint()
+        )
+    cx, cy = current
+    return await bridge.mouse_move(target_x - cx, target_y - cy, relative=True)
 
 logger = logging.getLogger("clawtouch.cu.openai")
 
@@ -94,7 +119,7 @@ async def execute(
     if t == "click":
         x = max(0, min(int(action["x"]), screen_w - 1))
         y = max(0, min(int(action["y"]), screen_h - 1))
-        await bridge.mouse_move(x, y, relative=False)
+        await _move_to_absolute(bridge, x, y)
         button = action.get("button", "left")
         await bridge.mouse_click(button=button)
         return
@@ -102,14 +127,14 @@ async def execute(
     if t == "double_click":
         x = max(0, min(int(action["x"]), screen_w - 1))
         y = max(0, min(int(action["y"]), screen_h - 1))
-        await bridge.mouse_move(x, y, relative=False)
+        await _move_to_absolute(bridge, x, y)
         await bridge.mouse_click(button="left", double=True)
         return
 
     if t == "move":
         x = max(0, min(int(action["x"]), screen_w - 1))
         y = max(0, min(int(action["y"]), screen_h - 1))
-        await bridge.mouse_move(x, y, relative=False)
+        await _move_to_absolute(bridge, x, y)
         return
 
     if t == "type":
