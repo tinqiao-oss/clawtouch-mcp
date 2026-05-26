@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 240" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">clawtouch-mcp data flow</title>
+  <desc id="desc">An LLM agent (Claude, Cline, Cursor, OpenClaw, or any MCP client) talks to the clawtouch-mcp server over stdio JSON-RPC. The server forwards framed commands over USB-CDC to a Raspberry Pi Pico 2 running ClawTouch HID firmware, which emits standard USB HID reports to the target operating system (Windows, macOS, or Linux).</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <!-- LLM agent (left) -->
+  <g>
+    <rect x="20" y="60" width="170" height="110" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+    <text x="105" y="98" text-anchor="middle" font-size="17" font-weight="700" fill="#1e3a8a">LLM Agent</text>
+    <text x="105" y="125" text-anchor="middle" font-size="11" fill="#1e40af">Claude Desktop /</text>
+    <text x="105" y="141" text-anchor="middle" font-size="11" fill="#1e40af">Cline / Cursor /</text>
+    <text x="105" y="157" text-anchor="middle" font-size="11" fill="#1e40af">OpenClaw / Hermes...</text>
+  </g>
+
+  <!-- Arrow 1 -->
+  <line x1="195" y1="115" x2="245" y2="115" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="220" y="103" text-anchor="middle" font-size="10" fill="#475569">MCP stdio</text>
+  <text x="220" y="130" text-anchor="middle" font-size="10" fill="#475569">JSON-RPC</text>
+
+  <!-- clawtouch-mcp (highlighted, "this repo") -->
+  <g>
+    <rect x="250" y="50" width="190" height="130" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="3"/>
+    <text x="345" y="86" text-anchor="middle" font-size="17" font-weight="700" fill="#78350f">clawtouch-mcp</text>
+    <text x="345" y="106" text-anchor="middle" font-size="10" font-weight="600" fill="#92400e">▼  this repo  ▼</text>
+    <text x="345" y="130" text-anchor="middle" font-size="11" fill="#78350f">MCP server (Python)</text>
+    <text x="345" y="146" text-anchor="middle" font-size="11" fill="#78350f">9 HID + 2 device tools</text>
+    <text x="345" y="162" text-anchor="middle" font-size="11" fill="#78350f">stdio framing, safety</text>
+  </g>
+
+  <!-- Arrow 2 -->
+  <line x1="445" y1="115" x2="495" y2="115" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="470" y="103" text-anchor="middle" font-size="10" fill="#475569">USB-CDC</text>
+  <text x="470" y="130" text-anchor="middle" font-size="10" fill="#475569">v1.0 frames</text>
+
+  <!-- Pico 2 -->
+  <g>
+    <rect x="500" y="60" width="180" height="110" rx="10" fill="#fce7f3" stroke="#be185d" stroke-width="2"/>
+    <text x="590" y="98" text-anchor="middle" font-size="17" font-weight="700" fill="#831843">Pico 2</text>
+    <text x="590" y="125" text-anchor="middle" font-size="11" fill="#9f1239">+ ClawTouch HID</text>
+    <text x="590" y="141" text-anchor="middle" font-size="11" fill="#9f1239">firmware</text>
+    <text x="590" y="157" text-anchor="middle" font-size="10" fill="#9f1239">(RP2350 / CircuitPython)</text>
+  </g>
+
+  <!-- Arrow 3 -->
+  <line x1="685" y1="115" x2="735" y2="115" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="710" y="103" text-anchor="middle" font-size="10" fill="#475569">USB HID</text>
+  <text x="710" y="130" text-anchor="middle" font-size="10" fill="#475569">reports</text>
+
+  <!-- Target OS -->
+  <g>
+    <rect x="740" y="60" width="150" height="110" rx="10" fill="#dcfce7" stroke="#15803d" stroke-width="2"/>
+    <text x="815" y="98" text-anchor="middle" font-size="17" font-weight="700" fill="#14532d">Target OS</text>
+    <text x="815" y="125" text-anchor="middle" font-size="11" fill="#15803d">Windows</text>
+    <text x="815" y="141" text-anchor="middle" font-size="11" fill="#15803d">macOS</text>
+    <text x="815" y="157" text-anchor="middle" font-size="11" fill="#15803d">Linux</text>
+  </g>
+
+  <!-- Tagline -->
+  <text x="450" y="215" text-anchor="middle" font-size="12.5" fill="#475569">
+    Real USB peripheral · standard HID driver stack · zero software on target
+  </text>
+</svg>

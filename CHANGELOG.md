@@ -7,6 +7,25 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Visual / docs uplift
+
+- **`docs/assets/hero.svg`** — flat-design hero diagram (LLM agent →
+  clawtouch-mcp → Pico 2 → target OS) embedded at the top of the
+  English and Chinese READMEs. Highlights `clawtouch-mcp` as the
+  "this repo" node and labels each transport hop (MCP stdio JSON-RPC
+  / USB-CDC v1.0 frames / USB HID reports).
+- **Architecture overview converted to Mermaid.** The previous
+  ASCII box diagram in `## Architecture overview` is now a Mermaid
+  `flowchart LR` with the `clawtouch-mcp` node highlighted (amber
+  fill / thick border) as the this-repo marker. Renders natively on
+  GitHub.
+- **New `## See it in action` section.** An annotated stdio
+  JSON-RPC transcript showing the full MCP `initialize` →
+  `tools/list` → `tools/call` flow, with one `hid.click` and one
+  `hid.type` call against a real Pico 2. Captured from
+  `--log-level INFO` (USB serial randomized in the transcript). Acts
+  as a text-based demo until a real screen-recording GIF lands.
+
 ### Compliance — second-pass audit (codex round 2)
 
 A follow-up codex audit on the first compliance pass surfaced six

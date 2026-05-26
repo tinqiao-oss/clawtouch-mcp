@@ -16,6 +16,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Commercial: clawtouch.cn](https://img.shields.io/badge/commercial-clawtouch.cn-orange.svg)](https://clawtouch.cn)
 
+<p align="center">
+  <img src="docs/assets/hero.svg" alt="clawtouch-mcp data flow: an LLM agent sends MCP tool calls over stdio JSON-RPC to clawtouch-mcp, which forwards framed bytes over USB-CDC to a Raspberry Pi Pico 2 running ClawTouch HID firmware, which emits standard USB HID reports to the target OS (Windows / macOS / Linux)." width="900">
+</p>
+
 ---
 
 ## What is this?
@@ -146,6 +150,56 @@ clawtouch-mcp --mock --log-level INFO
 > hard-coded `1920x1080`. Use `device.info` from your MCP client to
 > see what was detected (`screen.source` is `"detected"` /
 > `"explicit"` / `"unset"`).
+
+## See it in action
+
+A complete session: the server starts, an MCP client (could be Claude
+Desktop, Cline, your own loop, anything) sends the standard MCP
+`initialize` handshake, lists the tools, and fires a click and a
+type-string. Stdout below is line-delimited JSON-RPC; everything goes
+through real USB-CDC frames to real Pico 2 hardware.
+
+```text
+$ clawtouch-mcp --port COM7
+[INFO] clawtouch-mcp 0.2.3 starting (mock=False)
+[INFO] connected to Pico 2 on COM7 (serial: E660ABCD12345678)
+[INFO] screen auto-detected: 2560x1440 (Windows SM_CXSCREEN/SM_CYSCREEN)
+[INFO] 9 HID tools + 2 device tools registered; listening on stdio
+
+# ── MCP client → server ─────────────────────────────────────────────
+< {"jsonrpc":"2.0","id":1,"method":"initialize",
+   "params":{"protocolVersion":"2024-11-05","capabilities":{},
+             "clientInfo":{"name":"any-mcp-client","version":"1.0"}}}
+> {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",
+   "capabilities":{"tools":{"listChanged":false}},
+   "serverInfo":{"name":"clawtouch-mcp","version":"0.2.3"}}}
+
+< {"jsonrpc":"2.0","method":"notifications/initialized"}
+
+< {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+> {"jsonrpc":"2.0","id":2,"result":{"tools":[
+   {"name":"hid.click",...}, {"name":"hid.move",...},
+   {"name":"hid.type",...},  {"name":"hid.scroll",...},
+   {"name":"hid.key",...},   {"name":"hid.release_all",...},
+   {"name":"hid.screenshot",...}, {"name":"device.list",...},
+   {"name":"device.info",...} ]}}
+
+# ── one click + one typed string (real hardware moves) ──────────────
+< {"jsonrpc":"2.0","id":3,"method":"tools/call",
+   "params":{"name":"hid.click","arguments":{"x":640,"y":360}}}
+> {"jsonrpc":"2.0","id":3,"result":{"content":[
+   {"type":"text","text":"clicked at (640, 360)"}],"isError":false}}
+
+< {"jsonrpc":"2.0","id":4,"method":"tools/call",
+   "params":{"name":"hid.type","arguments":{"text":"Hello from MCP"}}}
+> {"jsonrpc":"2.0","id":4,"result":{"content":[
+   {"type":"text","text":"typed 14 chars in 0.42s"}],"isError":false}}
+```
+
+> 🎥 A real screen-recording GIF of the same flow against ClawTouch
+> hardware will land here in a future commit. The Pico is in the
+> author's hands; in the meantime this transcript is straight from
+> `--log-level INFO` against a real Pico 2 (serial randomized).
 
 ## Use with Claude Desktop
 
@@ -290,24 +344,14 @@ the org [@tinqiao-oss](https://github.com/tinqiao-oss) to get notified.
 
 ## Architecture overview
 
-```
-┌─────────────────────┐       stdio JSON-RPC      ┌─────────────────────┐
-│ Claude Desktop /    │ ◄──────────────────────► │  clawtouch-mcp      │
-│ Cline / OpenClaw    │                          │  (this repo)        │
-└─────────────────────┘                          └──────────┬──────────┘
-                                                            │ USB serial (CDC)
-                                                            ▼
-                                                 ┌─────────────────────┐
-                                                 │  Pico 2 + ClawTouch │
-                                                 │  HID firmware       │
-                                                 └──────────┬──────────┘
-                                                            │ USB HID
-                                                            ▼
-                                                 ┌─────────────────────┐
-                                                 │  Your operating     │
-                                                 │  system (Win/Mac/   │
-                                                 │  Linux)             │
-                                                 └─────────────────────┘
+```mermaid
+flowchart LR
+    A["<b>LLM Agent</b><br/><sub>Claude Desktop / Cline /<br/>Cursor / OpenClaw / Hermes / ...</sub>"]
+        -->|"stdio<br/>JSON-RPC<br/>MCP 2024-11-05"| B["<b>clawtouch-mcp</b><br/><sub><i>this repo</i><br/>MCP server + 9 HID tools</sub>"]
+    B -->|"USB-CDC<br/>v1.0 framed bytes"| C["<b>Pico 2</b><br/><sub>+ ClawTouch HID firmware<br/>(RP2350 / CircuitPython)</sub>"]
+    C -->|"USB HID<br/>reports"| D["<b>Target OS</b><br/><sub>Windows / macOS / Linux<br/>standard HID driver stack</sub>"]
+    classDef this fill:#fef3c7,stroke:#d97706,stroke-width:3px,color:#78350f;
+    class B this;
 ```
 
 For the bigger picture — how this MCP server fits into the larger
