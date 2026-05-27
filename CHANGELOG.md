@@ -7,6 +7,72 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.6] — 2026-05-27 — Build backend switched to hatchling
+
+### Fixed — install-from-source kept failing on macOS after `pip install -e .`
+
+Same macOS Retina test session that produced the [0.2.5](#025--2026-05-27--retina-screenshot-fix-real-world-macos-report)
+screenshot fix hit a second, unrelated footgun: after the user ran
+``pip install -e .`` (editable) followed by a non-editable
+``pip install /path/to/clawtouch-mcp[screenshot]``, install crashed with
+
+```
+error: [Errno 2] No such file or directory:
+'build/bdist.macosx-11.0-arm64/wheel/./clawtouch_mcp-0.2.4-py3.12.egg-info'
+```
+
+The setuptools backend stages the wheel under
+``build/bdist.<platform>/wheel/<pkg>-<version>-py<X.Y>.egg-info``. The
+version is **embedded in the path** — when a later install runs at a
+different version (after the user pulls a new tag, or just after a
+local version bump) setuptools tries to clean the old staging dir at
+the new path and trips a FileNotFoundError. Worse, the failed install
+leaves another stale ``build/`` behind so the next attempt fails the
+same way; the only escape is ``rm -rf build/ *.egg-info/``. That isn't
+documented anywhere and we won't be hand-holding every external
+developer through it once the repo goes public.
+
+### Changed
+
+- **Build backend swapped from `setuptools.build_meta` to `hatchling.build`.**
+  Hatchling has no egg-info legacy, builds wheels in an isolated temp
+  directory (so the source tree stays untouched after `python -m
+  build`), and its editable install path drops a small `.pth` in
+  site-packages rather than an egg-info on disk. No more stale
+  artefacts to invalidate the next install.
+- **sdist contract is now explicit in pyproject.toml.** The new
+  ``[tool.hatch.build.targets.sdist].include`` array lists every file
+  type a release tarball ships — `clawtouch_mcp/`, `tests/`, `docs/`,
+  `examples/`, top-level `README*.md`, `CHANGELOG.md`, etc. Anything
+  not in the list (build artefacts, .pytest_cache, __pycache__, IDE
+  settings, virtualenvs) cannot leak into the tarball even when a
+  developer's working tree is dirty.
+- **No version-embedded build paths.** The class of FileNotFoundError
+  that triggered this fix is structurally impossible with hatchling.
+
+### Verified
+
+- 171 unit tests pass unchanged (same code, just a different build
+  invocation under PEP 517).
+- `python -m build` post-build state: only `dist/` is created; source
+  tree is otherwise untouched (no `build/`, no `*.egg-info/`).
+- sdist tarball inspection: 27 files, all from the explicit include
+  list. No stale artefacts.
+- Reproduction: planted fake `clawtouch_mcp.egg-info/PKG-INFO`
+  declaring `Version: 0.2.4` and a stale
+  `build/bdist.win-amd64/wheel/clawtouch_mcp-0.2.4-py3.12.egg-info/`
+  directory, then ran `pip install .` in a fresh venv. With setuptools
+  this would FileNotFoundError; with hatchling the install succeeds
+  and reports `clawtouch_mcp.__version__ == '0.2.6'`.
+
+### Migration note
+
+External developers who previously ran `pip install -e .` against the
+old setuptools build can keep their `build/` and
+`clawtouch_mcp.egg-info/` directories — they're now ignored by
+hatchling. No action required; `rm -rf build/ *.egg-info/` only
+matters if they want a tidy working tree.
+
 ## [0.2.5] — 2026-05-27 — Retina screenshot fix (real-world macOS report)
 
 ### Fixed — `hid.screenshot` overflow on high-DPI displays

@@ -1,13 +1,21 @@
 [build-system]
-requires = ["setuptools>=77", "wheel"]
-build-backend = "setuptools.build_meta"
+# Hatchling instead of setuptools — eliminates the egg-info legacy that
+# put version-embedded paths (build/bdist.<platform>/wheel/<pkg>-<ver>-
+# pyX.Y.egg-info) in the source tree, which broke fresh `pip install`
+# on macOS once any prior `pip install -e .` or `python -m build` had
+# polluted the working copy (FileNotFoundError on the stale path the
+# new build no longer matches). Hatchling builds to an isolated temp
+# tree, sdists default to `git ls-files` so .gitignore is automatically
+# respected, and editable installs don't drop an egg-info on disk.
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
 
 [project]
 name = "clawtouch-mcp"
-version = "0.2.5"
+version = "0.2.6"
 description = "MCP stdio server exposing HID mouse/keyboard tools backed by ClawTouch Pico hardware."
 readme = "README.md"
-# PEP 639: SPDX expression form (setuptools >= 77). Avoid the deprecated
+# PEP 639 SPDX expression form (modern packaging). Avoid the deprecated
 # `license = { text = "MIT" }` table form and the legacy
 # `License :: OSI Approved :: MIT License` classifier.
 license = "MIT"
@@ -41,5 +49,29 @@ Changelog = "https://github.com/tinqiao-oss/clawtouch-mcp/blob/master/CHANGELOG.
 [project.scripts]
 clawtouch-mcp = "clawtouch_mcp.__main__:main"
 
-[tool.setuptools.packages.find]
-include = ["clawtouch_mcp*"]
+[tool.hatch.build.targets.wheel]
+packages = ["clawtouch_mcp"]
+
+[tool.hatch.build.targets.sdist]
+# Defaults to `git ls-files`; we set this explicitly so the sdist
+# contract is auditable from pyproject alone and survives a
+# tarball-from-zip workflow where .git isn't present. Anything
+# matching the include list is in; build/, dist/, .pytest_cache/,
+# __pycache__/, *.egg-info/ are excluded by virtue of not being in
+# the list, so stale artefacts can't poison the release.
+include = [
+    "clawtouch_mcp/",
+    "tests/",
+    "docs/",
+    "examples/",
+    "README.md",
+    "README.zh-CN.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "LICENSE",
+    "LICENSE.zh-CN.md",
+    "NOTICE",
+    "TRADEMARKS.md",
+    "pyproject.toml",
+]
