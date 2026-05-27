@@ -40,8 +40,21 @@ from clawtouch_mcp.keycodes import name_to_keycode
 from clawtouch_mcp.server import MockBridge
 
 
+# Closed-loop convergence constants — same as the server's snap-mode
+# defaults (see clawtouch_mcp.server.MOVE_TOLERANCE / MOVE_MAX_ITERS /
+# MOVE_SETTLE_MS). macOS pointer ballistics non-linearly scales single
+# HID deltas (~110% in the low-speed segment), so a fire-and-forget
+# move overshoots / undershoots by 10-90 px and leaves the cursor in
+# the wrong UI cell for the subsequent click. We iterate until the
+# residual is ≤3 px or we've burned 4 attempts.
+_MOVE_TOLERANCE = 3
+_MOVE_MAX_ITERS = 4
+_MOVE_SETTLE_MS = 20
+
+
 async def _move_to_absolute(bridge: Any, target_x: int, target_y: int) -> bool:
-    """Translate a Computer Use screen-absolute coordinate to a relative bridge move.
+    """Translate a Computer Use screen-absolute coordinate into one
+    or more relative bridge moves, converging on the target.
 
     The Pico firmware always interprets ``(x, y)`` as a relative pixel
     delta — USB Boot Mouse has no absolute-coordinate HID report, and
@@ -50,19 +63,31 @@ async def _move_to_absolute(bridge: Any, target_x: int, target_y: int) -> bool:
     silently sends the screen coordinate AS A DELTA, which sends the
     cursor flying off-screen on the first click. The MCP server's
     ``hid.click`` tool handles this conversion internally; demos that
-    talk to the bridge directly must do it themselves. Reads OS cursor
-    position and emits a relative delta. Raises if cursor tracking
-    isn't available on this host.
+    talk to the bridge directly must do it themselves.
+
+    A single delta isn't enough on macOS: pointer ballistics scales
+    the emitted delta non-linearly, so we query → emit → settle and
+    repeat until residual ≤ ``_MOVE_TOLERANCE`` or ``_MOVE_MAX_ITERS``
+    is exhausted. Returns ``True`` on convergence, ``False`` when the
+    loop ran out of iterations (caller may inspect the OS cursor
+    position itself to decide whether to retry). Raises if cursor
+    tracking is unavailable on this host.
     """
-    current = get_cursor_position()
-    if current is None:
-        raise RuntimeError(
-            "Claude Computer Use absolute coordinates require OS cursor "
-            "tracking, which is unavailable on this host. "
-            + availability_hint()
-        )
-    cx, cy = current
-    return await bridge.mouse_move(target_x - cx, target_y - cy, relative=True)
+    for _ in range(_MOVE_MAX_ITERS):
+        current = get_cursor_position()
+        if current is None:
+            raise RuntimeError(
+                "Claude Computer Use absolute coordinates require OS cursor "
+                "tracking, which is unavailable on this host. "
+                + availability_hint()
+            )
+        dx = target_x - current[0]
+        dy = target_y - current[1]
+        if abs(dx) <= _MOVE_TOLERANCE and abs(dy) <= _MOVE_TOLERANCE:
+            return True
+        await bridge.mouse_move(dx, dy, relative=True)
+        await asyncio.sleep(_MOVE_SETTLE_MS / 1000.0)
+    return False
 
 logger = logging.getLogger("clawtouch.cu.claude")
 
