@@ -7,6 +7,68 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.8] — 2026-05-27 — Optional `move_ms` path stepping for visible cursor motion
+
+### Added — `move_ms` argument on `hid.click` / `hid.move` / `hid.hover`
+
+The current behavior — a single HID mouse report containing the full
+(dx, dy) — makes the OS cursor teleport to the target in one frame.
+That's the right baseline for raw HID transport (no behavior
+modification, every command 1:1 with the wire) but it's hard to track
+visually when recording a demo: viewers can't tell *what* the agent
+just did because there's no motion to follow.
+
+Optional argument **`move_ms`** (default `0`, max `MAX_MOVE_MS=5000`)
+breaks the move into ~10 ms HID reports over the requested total time:
+
+```jsonc
+// Click at (500, 400) over 200 ms (20 stepped HID reports)
+{ "tool": "hid.click", "arguments": { "x": 500, "y": 400, "move_ms": 200 } }
+```
+
+Step count is `clamp(move_ms // 10, 4, 100)` — minimum 4 so even a
+very short ``move_ms`` produces visible motion, maximum 100 so a
+typo / runaway agent can't lock the handler. Linear interpolation
+only: no curves, no tremor, no dwell variance. Same UX convenience
+PyAutoGUI offers as ``duration=``.
+
+`move_ms = 0` (default, the omitted case) goes through the original
+single-shot path unchanged — **strict backward compatibility** with
+every pre-v0.2.8 caller.
+
+### `hid.hover` semantics clarified
+
+`hid.hover` already had a `duration_ms` argument meaning "idle time
+AFTER reaching the target". Adding `move_ms` here would have been
+ambiguous (path duration vs idle duration), so the two arguments
+stay separate:
+
+- `move_ms` — time spent on the move ITSELF (path stepping; default 0)
+- `duration_ms` — idle time AFTER reaching the target (default 500)
+
+Tool description clarified in the schema.
+
+### Notes
+
+- Both **absolute** mode (server queries OS cursor position) and
+  **`relative=true`** mode (caller supplies pixel delta directly)
+  support `move_ms`. In relative mode the agent-supplied delta is
+  chunked; in absolute mode the OS-cursor-derived delta is chunked.
+- 9 new regression tests pin: default unchanged / N reports emitted /
+  per-step deltas sum to total move / hover decouples both args /
+  step count clamped at 100 / zero-distance no-op. Total 172 → 181.
+
+### Why this lives in OSS and not just the demo layer
+
+`hid.click` / `hid.move` / `hid.hover` are the surface every MCP
+client sees; making the visual smoothness opt-in at the tool layer
+means *every* downstream agent / IDE / framework gets it
+consistently when they pass `move_ms`, without each integration
+re-implementing path interpolation around the same MCP server.
+The closed-source main app does its own richer cursor work on top
+of the same hardware — `move_ms` here is the bare-minimum
+animation primitive, not a replacement for that layer.
+
 ## [0.2.7] — 2026-05-27 — API consistency + docs corrections (mac dogfood round 2)
 
 The same macOS Retina dogfood session that produced 0.2.5 (screenshot)

@@ -39,6 +39,11 @@ logger = logging.getLogger("clawtouch_mcp.server")
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
 MAX_TYPE_LEN = 4096
+# Upper bound on the optional ``move_ms`` argument (hid.click / hid.move /
+# hid.hover). Path stepping over more than 5 s blocks a tool handler
+# longer than any reasonable demo needs, so we cap rather than let an
+# agent / typo lock up the server.
+MAX_MOVE_MS = 5000
 # Upper bound on the Content-Length header of an incoming framed
 # JSON-RPC message. The MCP spec allows arbitrary message sizes but in
 # practice every reasonable tool call fits in well under 1 MB; capping
@@ -573,7 +578,10 @@ class ClawTouchMcpServer:
                 "and send (x, y) directly as a pixel delta. On Wayland "
                 "and on hosts where the OS cursor query fails, absolute "
                 "mode returns an error and the caller must use "
-                "relative=true."
+                "relative=true. Optional `move_ms` breaks the move "
+                "into stepped HID reports over N ms — useful for "
+                "demos where a single-frame teleport is hard to track "
+                "visually; default 0 = single-shot."
             ),
             input_schema={
                 "type": "object",
@@ -584,6 +592,15 @@ class ClawTouchMcpServer:
                     "double": {"type": "boolean", "default": False},
                     "relative": {"type": "boolean", "default": False,
                                  "description": "If true, x/y are pixel deltas; absolute mode is skipped."},
+                    "move_ms": {
+                        "type": "integer", "default": 0,
+                        "minimum": 0, "maximum": MAX_MOVE_MS,
+                        "description": (
+                            "Path stepping: break the move into "
+                            "~10 ms HID reports over N ms (linear "
+                            "interpolation). 0 = single-shot (default)."
+                        ),
+                    },
                 },
                 "required": ["x", "y"],
             },
@@ -597,7 +614,8 @@ class ClawTouchMcpServer:
                 "works under the hood). Pass relative=true to send "
                 "(x, y) as a pixel delta directly. On hosts where the "
                 "OS cursor query is unavailable, absolute mode returns "
-                "an error."
+                "an error. Optional `move_ms` breaks the move into "
+                "stepped HID reports over N ms; default 0 = single-shot."
             ),
             input_schema={
                 "type": "object",
@@ -605,6 +623,15 @@ class ClawTouchMcpServer:
                     "x": {"type": "integer"},
                     "y": {"type": "integer"},
                     "relative": {"type": "boolean", "default": False},
+                    "move_ms": {
+                        "type": "integer", "default": 0,
+                        "minimum": 0, "maximum": MAX_MOVE_MS,
+                        "description": (
+                            "Path stepping: break the move into "
+                            "~10 ms HID reports over N ms (linear "
+                            "interpolation). 0 = single-shot (default)."
+                        ),
+                    },
                 },
                 "required": ["x", "y"],
             },
@@ -612,13 +639,29 @@ class ClawTouchMcpServer:
         ))
         self._register(Tool(
             name="hid.hover",
-            description="Move mouse to (x,y) then idle for duration_ms (no click).",
+            description=(
+                "Move mouse to (x,y) then idle for duration_ms (no click). "
+                "`duration_ms` is the IDLE time AFTER reaching the target; "
+                "`move_ms` (optional) is the time spent on the move ITSELF "
+                "via path stepping. Default move_ms=0 teleports first, "
+                "then idles."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
                     "x": {"type": "integer"},
                     "y": {"type": "integer"},
-                    "duration_ms": {"type": "integer", "default": 500, "minimum": 0, "maximum": 10000},
+                    "duration_ms": {"type": "integer", "default": 500, "minimum": 0, "maximum": 10000,
+                                    "description": "Idle time AFTER reaching target."},
+                    "move_ms": {
+                        "type": "integer", "default": 0,
+                        "minimum": 0, "maximum": MAX_MOVE_MS,
+                        "description": (
+                            "Path stepping for the move itself: break "
+                            "into ~10 ms HID reports over N ms (linear "
+                            "interpolation). 0 = teleport (default)."
+                        ),
+                    },
                 },
                 "required": ["x", "y"],
             },
@@ -773,16 +816,118 @@ class ClawTouchMcpServer:
         ok = await self.bridge.mouse_move(dx, dy, relative=True)
         return {"ok": ok, "x": target_x, "y": target_y, "dx": dx, "dy": dy}
 
+    # ── Path stepping (for visible cursor motion in demos) ────────
+    #
+    # ``hid.click`` / ``hid.move`` / ``hid.hover`` accept an optional
+    # ``move_ms`` argument. When > 0, the helpers below break the
+    # move into ~10 ms HID reports so the OS cursor visibly slides
+    # to the target instead of teleporting in a single frame. This
+    # is a *visual smoothness* convenience equivalent to PyAutoGUI's
+    # ``duration=`` parameter — purely linear interpolation, no
+    # curves / no tremor / no dwell variance, so it can't be
+    # confused with anything richer that lives on top.
+
+    def _plan_step_count(self, move_ms: int) -> int:
+        """~10 ms per step, min 4 (so a 40 ms move still has motion),
+        max 100 (so a stupid ``move_ms`` can't pile up reports)."""
+        return max(4, min(100, move_ms // 10))
+
+    async def _stepped_move_to_absolute(
+        self, target_x: int, target_y: int, move_ms: int,
+    ) -> dict[str, Any]:
+        """Like ``_move_to_absolute`` but chunks the relative delta
+        into N ~10 ms HID reports over ``move_ms`` total. Caller
+        signals intent via the ``move_ms`` tool argument; ``move_ms
+        == 0`` (default) goes through ``_move_to_absolute`` instead."""
+        target_x, target_y = self._clamp(target_x, target_y)
+        delta = self._absolute_to_relative(target_x, target_y)
+        if delta is None:
+            return {
+                "error": (
+                    "Absolute coordinates require OS-level cursor "
+                    "tracking, which is unavailable on this host. "
+                    + availability_hint()
+                    + " As a workaround, call hid.move / hid.click "
+                    "with `relative=true` and supply pixel deltas."
+                ),
+                "x": target_x, "y": target_y,
+            }
+        total_dx, total_dy = delta
+        steps = self._plan_step_count(move_ms)
+        step_ms = move_ms / steps
+        # We pre-compute the full delta and chunk against it (not
+        # against intermediate cursor queries) because the OS cursor
+        # position lags behind the HID stream — each report we emit
+        # is still being processed when the next step plans. Trusting
+        # ``accumulated_*`` here is correct precisely because the
+        # firmware is a Boot Mouse: every delta we send lands.
+        accumulated_dx = 0
+        accumulated_dy = 0
+        for i in range(1, steps + 1):
+            t = i / steps
+            target_dx = round(total_dx * t)
+            target_dy = round(total_dy * t)
+            step_dx = target_dx - accumulated_dx
+            step_dy = target_dy - accumulated_dy
+            if step_dx or step_dy:
+                await self.bridge.mouse_move(step_dx, step_dy, relative=True)
+            accumulated_dx = target_dx
+            accumulated_dy = target_dy
+            if i < steps:
+                await asyncio.sleep(step_ms / 1000)
+        return {
+            "ok": True,
+            "x": target_x, "y": target_y,
+            "dx": total_dx, "dy": total_dy,
+            "stepped": True, "steps": steps, "move_ms": move_ms,
+        }
+
+    async def _stepped_relative_move(
+        self, dx: int, dy: int, move_ms: int,
+    ) -> dict[str, Any]:
+        """Same path stepping for ``relative=true`` callers — chunks
+        the agent-supplied (dx, dy) into ~10 ms HID reports."""
+        steps = self._plan_step_count(move_ms)
+        step_ms = move_ms / steps
+        accumulated_dx = 0
+        accumulated_dy = 0
+        for i in range(1, steps + 1):
+            t = i / steps
+            target_dx = round(dx * t)
+            target_dy = round(dy * t)
+            step_dx = target_dx - accumulated_dx
+            step_dy = target_dy - accumulated_dy
+            if step_dx or step_dy:
+                await self.bridge.mouse_move(step_dx, step_dy, relative=True)
+            accumulated_dx = target_dx
+            accumulated_dy = target_dy
+            if i < steps:
+                await asyncio.sleep(step_ms / 1000)
+        return {
+            "dx": dx, "dy": dy,
+            "stepped": True, "steps": steps, "move_ms": move_ms,
+            "relative": True,
+        }
+
     async def _tool_click(self, **kw) -> dict:
         self.rate.check()
         relative = bool(kw.get("relative", False))
+        move_ms = max(0, min(MAX_MOVE_MS, int(kw.get("move_ms") or 0)))
         if relative:
             # Agent wants raw relative move — skip the cursor query.
             dx, dy = int(kw["x"]), int(kw["y"])
-            await self.bridge.mouse_move(dx, dy, relative=True)
-            result: dict[str, Any] = {"dx": dx, "dy": dy, "relative": True}
+            if move_ms > 0:
+                result = await self._stepped_relative_move(dx, dy, move_ms)
+            else:
+                await self.bridge.mouse_move(dx, dy, relative=True)
+                result: dict[str, Any] = {"dx": dx, "dy": dy, "relative": True}
         else:
-            moved = await self._move_to_absolute(kw["x"], kw["y"])
+            if move_ms > 0:
+                moved = await self._stepped_move_to_absolute(
+                    kw["x"], kw["y"], move_ms,
+                )
+            else:
+                moved = await self._move_to_absolute(kw["x"], kw["y"])
             if "error" in moved:
                 return moved
             result = moved
@@ -796,11 +941,22 @@ class ClawTouchMcpServer:
     async def _tool_move(self, **kw) -> dict:
         self.rate.check()
         relative = bool(kw.get("relative", False))
+        move_ms = max(0, min(MAX_MOVE_MS, int(kw.get("move_ms") or 0)))
         if relative:
             x, y = int(kw["x"]), int(kw["y"])
+            if move_ms > 0:
+                result = await self._stepped_relative_move(x, y, move_ms)
+                result["ok"] = True
+                result.update({"x": x, "y": y})
+                return result
             ok = await self.bridge.mouse_move(x, y, relative=True)
             return {"ok": ok, "x": x, "y": y, "relative": True}
-        moved = await self._move_to_absolute(kw["x"], kw["y"])
+        if move_ms > 0:
+            moved = await self._stepped_move_to_absolute(
+                kw["x"], kw["y"], move_ms,
+            )
+        else:
+            moved = await self._move_to_absolute(kw["x"], kw["y"])
         if "error" in moved:
             return moved
         moved["relative"] = False
@@ -808,7 +964,13 @@ class ClawTouchMcpServer:
 
     async def _tool_hover(self, **kw) -> dict:
         self.rate.check()
-        moved = await self._move_to_absolute(kw["x"], kw["y"])
+        move_ms = max(0, min(MAX_MOVE_MS, int(kw.get("move_ms") or 0)))
+        if move_ms > 0:
+            moved = await self._stepped_move_to_absolute(
+                kw["x"], kw["y"], move_ms,
+            )
+        else:
+            moved = await self._move_to_absolute(kw["x"], kw["y"])
         if "error" in moved:
             return moved
         await asyncio.sleep(min(10_000, int(kw.get("duration_ms", 500))) / 1000.0)
