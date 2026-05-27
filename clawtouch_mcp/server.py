@@ -33,7 +33,13 @@ from typing import Any, Awaitable, Callable, Optional
 
 from . import __version__
 from .bridge import SerialHidBridge, auto_detect_port, auto_detect_ports, list_pico_ports
-from .cursor import availability_hint, get_cursor_position
+from . import cursor as _cursor_mod
+from .cursor import (
+    _seed_fake_cursor,
+    _update_fake_cursor,
+    availability_hint,
+    get_cursor_position,
+)
 
 logger = logging.getLogger("clawtouch_mcp.server")
 
@@ -44,6 +50,21 @@ MAX_TYPE_LEN = 4096
 # longer than any reasonable demo needs, so we cap rather than let an
 # agent / typo lock up the server.
 MAX_MOVE_MS = 5000
+# Closed-loop convergence constants for absolute cursor moves.
+# macOS pointer ballistics non-linearly scales single HID deltas
+# (measured ~110% in low-speed segment on Ventura ARM64), so a single
+# fire-and-forget mouse_move overshoots/undershoots by 10-90 px and
+# returns ok=true while the cursor is still drifting. We iterate:
+# query OS cursor → compute residual → send delta → settle → repeat.
+# Per-pass residual shrinks to ~30% of previous (empirically).
+#   - MOVE_TOLERANCE=3 px: macOS reports quantize to ±2 px; tighter
+#     would spin forever on intrinsic jitter.
+#   - MOVE_MAX_ITERS=4: pass 4 lands ≤2 px in measured runs; further
+#     iterations have <1 px marginal benefit.
+#   - MOVE_SETTLE_MS=20: ~2× macOS HID report cycle (8-10 ms).
+MOVE_TOLERANCE = 3
+MOVE_MAX_ITERS = 4
+MOVE_SETTLE_MS = 20
 # Upper bound on the Content-Length header of an incoming framed
 # JSON-RPC message. The MCP spec allows arbitrary message sizes but in
 # practice every reasonable tool call fits in well under 1 MB; capping
@@ -193,7 +214,13 @@ class RateLimiter:
 
 
 class MockBridge:
-    """In-memory bridge for `--mock` mode; logs but never touches hardware."""
+    """In-memory bridge for `--mock` mode; logs but never touches
+    hardware. Lazily seeds the cursor dynamic state on first
+    ``mouse_move`` (from ``CLAWTOUCH_FAKE_CURSOR`` env or a default
+    of 960,540) and updates it on every subsequent move, so the
+    server's closed-loop converge path sees the cursor land where
+    the firmware was told to go. Real hardware does this via the
+    OS event loop; mock has to fake it for converge to terminate."""
 
     def __init__(self) -> None:
         self.is_connected = True
@@ -213,6 +240,14 @@ class MockBridge:
 
     async def mouse_move(self, x: int, y: int, *, relative: bool = False) -> bool:
         self._calls.append(("move", {"x": x, "y": y, "relative": relative}))
+        if _cursor_mod._FAKE_DYNAMIC_STATE is None:
+            initial = os.environ.get("CLAWTOUCH_FAKE_CURSOR", "960,540")
+            try:
+                sx, sy = initial.split(",", 1)
+                _seed_fake_cursor(int(sx.strip()), int(sy.strip()))
+            except (ValueError, AttributeError):
+                _seed_fake_cursor(960, 540)
+        _update_fake_cursor(x, y, relative=relative)
         return True
 
     async def mouse_click(self, button: str = "left", *, double: bool = False) -> bool:
@@ -578,10 +613,21 @@ class ClawTouchMcpServer:
                 "and send (x, y) directly as a pixel delta. On Wayland "
                 "and on hosts where the OS cursor query fails, absolute "
                 "mode returns an error and the caller must use "
-                "relative=true. Optional `move_ms` breaks the move "
-                "into stepped HID reports over N ms — useful for "
-                "demos where a single-frame teleport is hard to track "
-                "visually; default 0 = single-shot."
+                "relative=true.\n\n"
+                "Absolute mode runs a closed-loop converge (query → "
+                "delta → settle, up to 4 iterations, ≤3 px tolerance) "
+                "to absorb OS pointer-ballistics non-linearity (macOS "
+                "scales single HID deltas ~110% in the low-speed "
+                "segment, so a fire-and-forget move overshoots by "
+                "10-90 px). The returned `x`/`y` are the actual "
+                "landing coordinates; `target_x`/`target_y` echo the "
+                "request; `converged: true` means residual ≤3 px. "
+                "Click fires regardless of convergence — inspect "
+                "`converged` if you need to retry on missed targets.\n\n"
+                "Optional `move_ms` switches to glide mode: the move "
+                "is broken into ~10 ms HID reports over N ms (linear "
+                "interpolation, then a 3-iter converge to clean up "
+                "the final landing). Default 0 = snap mode."
             ),
             input_schema={
                 "type": "object",
@@ -596,9 +642,10 @@ class ClawTouchMcpServer:
                         "type": "integer", "default": 0,
                         "minimum": 0, "maximum": MAX_MOVE_MS,
                         "description": (
-                            "Path stepping: break the move into "
-                            "~10 ms HID reports over N ms (linear "
-                            "interpolation). 0 = single-shot (default)."
+                            "Glide mode: break the move into ~10 ms "
+                            "HID reports over N ms (linear interp + "
+                            "post-slide converge). 0 = snap mode "
+                            "(default, instant move)."
                         ),
                     },
                 },
@@ -611,11 +658,16 @@ class ClawTouchMcpServer:
             description=(
                 "Move mouse. Default semantics: (x, y) is an ABSOLUTE "
                 "screen coordinate (see hid.click for how absolute mode "
-                "works under the hood). Pass relative=true to send "
-                "(x, y) as a pixel delta directly. On hosts where the "
-                "OS cursor query is unavailable, absolute mode returns "
-                "an error. Optional `move_ms` breaks the move into "
-                "stepped HID reports over N ms; default 0 = single-shot."
+                "works under the hood, including the closed-loop "
+                "convergence that absorbs OS pointer-ballistics). Pass "
+                "relative=true to send (x, y) as a pixel delta directly. "
+                "On hosts where the OS cursor query is unavailable, "
+                "absolute mode returns an error.\n\n"
+                "Returns `x`/`y` = actual landing coordinates, "
+                "`target_x`/`target_y` = original request, `converged` "
+                "/ `iters` for the absolute path. Optional `move_ms` "
+                "switches snap mode (default) → glide mode; see "
+                "hid.click for the trade-off."
             ),
             input_schema={
                 "type": "object",
@@ -627,9 +679,10 @@ class ClawTouchMcpServer:
                         "type": "integer", "default": 0,
                         "minimum": 0, "maximum": MAX_MOVE_MS,
                         "description": (
-                            "Path stepping: break the move into "
-                            "~10 ms HID reports over N ms (linear "
-                            "interpolation). 0 = single-shot (default)."
+                            "Glide mode: break the move into ~10 ms "
+                            "HID reports over N ms (linear interp + "
+                            "post-slide converge). 0 = snap mode "
+                            "(default, instant move)."
                         ),
                     },
                 },
@@ -643,8 +696,10 @@ class ClawTouchMcpServer:
                 "Move mouse to (x,y) then idle for duration_ms (no click). "
                 "`duration_ms` is the IDLE time AFTER reaching the target; "
                 "`move_ms` (optional) is the time spent on the move ITSELF "
-                "via path stepping. Default move_ms=0 teleports first, "
-                "then idles."
+                "(glide mode). Default move_ms=0 = snap mode (instant "
+                "move), then idles. Absolute mode runs the same "
+                "closed-loop converge as hid.click — see that tool's "
+                "description for landing / convergence semantics."
             ),
             input_schema={
                 "type": "object",
@@ -657,9 +712,10 @@ class ClawTouchMcpServer:
                         "type": "integer", "default": 0,
                         "minimum": 0, "maximum": MAX_MOVE_MS,
                         "description": (
-                            "Path stepping for the move itself: break "
+                            "Glide mode for the move itself: break "
                             "into ~10 ms HID reports over N ms (linear "
-                            "interpolation). 0 = teleport (default)."
+                            "interp + post-slide converge). 0 = snap "
+                            "mode (default, instant move)."
                         ),
                     },
                 },
@@ -794,27 +850,80 @@ class ClawTouchMcpServer:
         cur_x, cur_y = current
         return (target_x - cur_x, target_y - cur_y)
 
+    def _cursor_unavailable_error(self, target_x: int, target_y: int) -> dict[str, Any]:
+        return {
+            "error": (
+                "Absolute coordinates require OS-level cursor "
+                "tracking, which is unavailable on this host. "
+                + availability_hint()
+                + " As a workaround, call hid.move / hid.click "
+                "with `relative=true` and supply pixel deltas."
+            ),
+            "x": target_x, "y": target_y,
+        }
+
+    async def _converge_to_target(
+        self, target_x: int, target_y: int, *, max_iters: int,
+    ) -> dict[str, Any]:
+        """Closed-loop settle to (target_x, target_y). Query OS cursor,
+        emit residual delta, sleep one HID cycle, repeat until residual
+        ≤ MOVE_TOLERANCE or max_iters exhausted.
+
+        Returns:
+            {"ok": True,  "x": actual, "y": actual, "target_x", "target_y",
+             "iters": int, "converged": True}   on success / short-circuit;
+            {"ok": False, "x": actual, "y": actual, "target_x", "target_y",
+             "residual_x", "residual_y", "iters": max_iters,
+             "converged": False, "hint": ...}   when residual stays > tol;
+            {"error": ...}                       when OS cursor query fails.
+        """
+        landed: tuple[int, int] | None = None
+        for i in range(max_iters):
+            cur = get_cursor_position()
+            if cur is None:
+                return self._cursor_unavailable_error(target_x, target_y)
+            dx = target_x - cur[0]
+            dy = target_y - cur[1]
+            if abs(dx) <= MOVE_TOLERANCE and abs(dy) <= MOVE_TOLERANCE:
+                return {
+                    "ok": True,
+                    "x": cur[0], "y": cur[1],
+                    "target_x": target_x, "target_y": target_y,
+                    "iters": i,
+                    "converged": True,
+                }
+            await self.bridge.mouse_move(dx, dy, relative=True)
+            landed = (cur[0] + dx, cur[1] + dy)
+            if i < max_iters - 1:
+                await asyncio.sleep(MOVE_SETTLE_MS / 1000.0)
+        actual = get_cursor_position() or landed or (target_x, target_y)
+        return {
+            "ok": False,
+            "x": actual[0], "y": actual[1],
+            "target_x": target_x, "target_y": target_y,
+            "residual_x": target_x - actual[0],
+            "residual_y": target_y - actual[1],
+            "iters": max_iters,
+            "converged": False,
+            "hint": (
+                "cursor did not converge to target within tolerance; "
+                "possible causes: competing input device (trackpad / "
+                "physical mouse) active during the move, extreme "
+                "pointer-acceleration settings, or a UI dead zone. "
+                "Inspect actual (x, y) and decide whether to retry."
+            ),
+        }
+
     async def _move_to_absolute(self, target_x: int, target_y: int) -> dict[str, Any]:
-        """Shared helper for click/move/hover: clamp, translate to
-        delta via OS cursor query, send relative move. Returns a
-        result dict; if ``"error"`` is in the dict the caller should
-        return it as the tool error without continuing."""
+        """Snap-to absolute move (default, ``move_ms=0``). Clamps to
+        screen, then closed-loop converges via _converge_to_target.
+
+        If ``"error"`` is in the returned dict the caller should
+        propagate it as the tool error without continuing."""
         target_x, target_y = self._clamp(target_x, target_y)
-        delta = self._absolute_to_relative(target_x, target_y)
-        if delta is None:
-            return {
-                "error": (
-                    "Absolute coordinates require OS-level cursor "
-                    "tracking, which is unavailable on this host. "
-                    + availability_hint()
-                    + " As a workaround, call hid.move / hid.click "
-                    "with `relative=true` and supply pixel deltas."
-                ),
-                "x": target_x, "y": target_y,
-            }
-        dx, dy = delta
-        ok = await self.bridge.mouse_move(dx, dy, relative=True)
-        return {"ok": ok, "x": target_x, "y": target_y, "dx": dx, "dy": dy}
+        return await self._converge_to_target(
+            target_x, target_y, max_iters=MOVE_MAX_ITERS,
+        )
 
     # ── Path stepping (for visible cursor motion in demos) ────────
     #
@@ -835,24 +944,23 @@ class ClawTouchMcpServer:
     async def _stepped_move_to_absolute(
         self, target_x: int, target_y: int, move_ms: int,
     ) -> dict[str, Any]:
-        """Like ``_move_to_absolute`` but chunks the relative delta
-        into N ~10 ms HID reports over ``move_ms`` total. Caller
-        signals intent via the ``move_ms`` tool argument; ``move_ms
-        == 0`` (default) goes through ``_move_to_absolute`` instead."""
+        """Glide mode: chunk the move into N ~10 ms HID reports over
+        ``move_ms`` total so the cursor visibly slides instead of
+        teleporting. macOS pointer ballistics applies to every report
+        (including the last micro-step), so the slide alone lands
+        with the same 10-90 px error as snap mode — after the slide
+        we run a short closed-loop converge to pull the cursor onto
+        the target.
+
+        Caller signals intent via the ``move_ms`` tool argument;
+        ``move_ms == 0`` (default) goes through ``_move_to_absolute``
+        instead (snap mode)."""
         target_x, target_y = self._clamp(target_x, target_y)
-        delta = self._absolute_to_relative(target_x, target_y)
-        if delta is None:
-            return {
-                "error": (
-                    "Absolute coordinates require OS-level cursor "
-                    "tracking, which is unavailable on this host. "
-                    + availability_hint()
-                    + " As a workaround, call hid.move / hid.click "
-                    "with `relative=true` and supply pixel deltas."
-                ),
-                "x": target_x, "y": target_y,
-            }
-        total_dx, total_dy = delta
+        cur = get_cursor_position()
+        if cur is None:
+            return self._cursor_unavailable_error(target_x, target_y)
+        total_dx = target_x - cur[0]
+        total_dy = target_y - cur[1]
         steps = self._plan_step_count(move_ms)
         step_ms = move_ms / steps
         # We pre-compute the full delta and chunk against it (not
@@ -875,12 +983,18 @@ class ClawTouchMcpServer:
             accumulated_dy = target_dy
             if i < steps:
                 await asyncio.sleep(step_ms / 1000)
-        return {
-            "ok": True,
-            "x": target_x, "y": target_y,
-            "dx": total_dx, "dy": total_dy,
-            "stepped": True, "steps": steps, "move_ms": move_ms,
-        }
+        # Slide done — closed-loop converge. 3 iters is enough here
+        # because the slide already landed within tens of pixels;
+        # snap-mode budgets 4 iters for cold-start moves up to ~1500 px.
+        result = await self._converge_to_target(
+            target_x, target_y, max_iters=MOVE_MAX_ITERS - 1,
+        )
+        if "error" in result:
+            return result
+        result["stepped"] = True
+        result["steps"] = steps
+        result["move_ms"] = move_ms
+        return result
 
     async def _stepped_relative_move(
         self, dx: int, dy: int, move_ms: int,

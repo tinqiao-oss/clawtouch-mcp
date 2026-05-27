@@ -33,6 +33,44 @@ import platform
 
 _FAKE_CURSOR_ENV = "CLAWTOUCH_FAKE_CURSOR"
 
+# Mock-bridge cursor state. ``MockBridge.mouse_move`` seeds + mutates
+# this list so that the closed-loop converge path in the server sees
+# the cursor "actually" land where it told the firmware to go. This
+# is mock infrastructure, not a test hack — a hardware mock that
+# doesn't simulate cursor reflux would mis-model the very feedback
+# loop we're trying to exercise. Production code (SerialHidBridge)
+# never touches these helpers; ``get_cursor_position`` only consults
+# the dynamic state when MockBridge has seeded it.
+_FAKE_DYNAMIC_STATE: list[int] | None = None
+
+
+def _seed_fake_cursor(x: int, y: int) -> None:
+    """Initialize the mock-bridge cursor state. Called once by
+    ``MockBridge.__init__``."""
+    global _FAKE_DYNAMIC_STATE
+    _FAKE_DYNAMIC_STATE = [int(x), int(y)]
+
+
+def _update_fake_cursor(dx: int, dy: int, *, relative: bool = True) -> None:
+    """Apply a firmware-emitted delta to the mock cursor state.
+    No-op when the dynamic state hasn't been seeded (production /
+    real-bridge code path)."""
+    if _FAKE_DYNAMIC_STATE is None:
+        return
+    if relative:
+        _FAKE_DYNAMIC_STATE[0] += int(dx)
+        _FAKE_DYNAMIC_STATE[1] += int(dy)
+    else:
+        _FAKE_DYNAMIC_STATE[0] = int(dx)
+        _FAKE_DYNAMIC_STATE[1] = int(dy)
+
+
+def _clear_fake_cursor() -> None:
+    """Reset the dynamic state — used by tests that need to exercise
+    the cursor-unavailable error path."""
+    global _FAKE_DYNAMIC_STATE
+    _FAKE_DYNAMIC_STATE = None
+
 
 def get_cursor_position() -> tuple[int, int] | None:
     """Return the current OS cursor position as (x, y) in physical
@@ -56,6 +94,11 @@ def get_cursor_position() -> tuple[int, int] | None:
 
     Never raises — broad exception catches return ``None``.
     """
+    # Mock-bridge dynamic state wins — seeded by MockBridge.__init__
+    # in ``--mock`` mode so the closed-loop converge path lands.
+    if _FAKE_DYNAMIC_STATE is not None:
+        return (_FAKE_DYNAMIC_STATE[0], _FAKE_DYNAMIC_STATE[1])
+
     fake = os.environ.get(_FAKE_CURSOR_ENV)
     if fake:
         try:

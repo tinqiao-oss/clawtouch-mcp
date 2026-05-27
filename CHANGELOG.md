@@ -7,6 +7,106 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.9] — 2026-05-27 — Closed-loop convergence for absolute moves (macOS pointer-ballistics fix)
+
+### Fixed — `hid.click` / `hid.move` / `hid.hover` snap mode lands accurately on macOS
+
+Field-reported by a macOS dogfood run on Ventura ARM64: a single
+fire-and-forget `bridge.mouse_move(dx, dy, relative=True)` overshoots
+or undershoots by 10–90 px because macOS non-linearly scales single
+HID deltas (~110% amplification in the low-speed segment of the
+pointer-ballistics curve). The server returned `ok=true` while the
+cursor was still drifting, so any follow-up `hid.click` could land
+on the wrong UI element.
+
+Measured residuals on a 2-pass control experiment (Target 1 = short
+distance, Target 2 = long reverse):
+
+| Target          | Pass 1 residual | Pass 2 residual | Pass 3 residual |
+| --------------- | --------------- | --------------- | --------------- |
+| `(300, 200)`    | 55 px           | 15 px           | —               |
+| `(1200, 800)`   | 71 px           | 26 px           | 7 px            |
+
+Per-pass residual shrinks to ~30% of the previous pass, but the
+amplification also applies to short residual corrections, so a
+fixed N-pass loop overshoots back the other way. The fix is a
+closed-loop converge with a tolerance check on every iteration:
+
+```
+target_x, target_y = clamp(target)
+for i in range(MOVE_MAX_ITERS):           # 4
+    cur = OS cursor query
+    dx, dy = target - cur
+    if |dx| <= MOVE_TOLERANCE and |dy| <= MOVE_TOLERANCE:  # 3 px
+        return converged
+    bridge.mouse_move(dx, dy, relative=True)
+    sleep(MOVE_SETTLE_MS)                  # 20 ms ≈ 2× HID cycle
+return not-converged (with actual position + residual)
+```
+
+Constants are baked in (no CLI knobs); values are calibrated against
+the measured residual curve so 4 iterations land within ≤3 px on
+every test target. On Windows / X11 the OS doesn't ballistics-scale
+single deltas, so pass 1 already lands on target and the loop
+short-circuits on iteration 2 with no extra cost.
+
+#### Snap mode (`move_ms=0`, default)
+
+`_move_to_absolute` runs the converge loop with `max_iters=4`.
+
+#### Glide mode (`move_ms>0`)
+
+`_stepped_move_to_absolute` keeps the linear-interpolation slide
+unchanged (so demos still look smooth), then runs the same converge
+loop with `max_iters=3` after the slide finishes — the slide already
+landed within tens of pixels so 3 settles is sufficient.
+
+#### Return-value schema (breaking on snap + glide paths)
+
+`hid.click` / `hid.move` / `hid.hover` returns now include:
+
+- `x`, `y` — **actual** landing coordinates (may differ slightly
+  from target on platforms with non-linear pointer ballistics)
+- `target_x`, `target_y` — original requested target (echoes the
+  request)
+- `converged: bool` — `true` when residual ≤ MOVE_TOLERANCE
+- `iters: int` — number of converge iterations actually run
+  (`0` = already on target, `1` = perfect first attempt, …)
+- `residual_x`, `residual_y`, `hint` — present only when
+  `converged: false` so the agent can diagnose what happened
+
+`ok` now reflects convergence (was: "bridge call succeeded", which
+in practice was always `true`). The `hid.click` path overlays the
+`mouse_click` success on top, so `hid.click.ok` still means "click
+was emitted." `hid.move.ok` and `hid.hover.ok` now mean "cursor
+reached the target."
+
+Removed `dx` / `dy` from the absolute-mode return value — there is
+no single delta any more (multi-iteration). The `relative=true`
+fast path still returns `dx` / `dy` because it stays single-shot.
+
+#### Tests + mock infrastructure
+
+`MockBridge.mouse_move` now lazily seeds and updates a process-
+local cursor state (`cursor._FAKE_DYNAMIC_STATE`) so the converge
+loop terminates in mock — without this, mock fire-and-forget would
+never visibly land. Existing tests that pinned `dx` / `dy` were
+updated to assert the new `target_x` / `target_y` / `converged`
+fields; tests that monkey-patched `get_cursor_position` directly
+now use `cursor._seed_fake_cursor(x, y)` instead.
+
+Added `tests/test_move_convergence.py` (6 tests) covering:
+
+- already-at-target / within-tolerance short-circuits with `iters=0`,
+- simulated 110% amplification converges within `MOVE_MAX_ITERS`,
+- stuck cursor (mock that drops the delta) bails after
+  `MOVE_MAX_ITERS` with `converged=false` / `ok=false` / `residual_*`
+  populated,
+- glide mode post-slide converge under simulated amplification,
+- glide mode converge stage gets `MOVE_MAX_ITERS - 1` budget (3).
+
+181 → 187 tests; zero regression.
+
 ### Added — Related Work section in README (EN + zh-CN)
 
 New `## Related work` / `## 相关工作` section between FAQ and the

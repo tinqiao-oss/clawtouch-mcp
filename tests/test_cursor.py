@@ -114,30 +114,35 @@ class TestAbsoluteToRelativeMath:
 
 class TestToolClickAbsolutePath:
     """End-to-end via the dispatcher: agent sends `hid.click(x, y)`
-    with default (absolute) semantics, server queries the cursor,
-    computes a delta, sends a relative move to the bridge, then a
-    click. With FAKE_CURSOR=960,540 (set by conftest.py), every
-    absolute target has a predictable delta."""
+    with default (absolute) semantics, server runs closed-loop
+    convergence to land at the target. MockBridge.mouse_move updates
+    the cursor state, so under perfect-mock conditions the loop
+    short-circuits in one iteration."""
 
     def test_click_at_500_300_with_cursor_at_960_540(self, server):
-        # conftest.py autouse fixture already sets FAKE_CURSOR=960,540.
+        # conftest.py autouse fixture sets FAKE_CURSOR=960,540 (used
+        # by MockBridge to seed the dynamic state on first move).
         result = _run(server.dispatch({
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {"name": "hid.click",
                        "arguments": {"x": 500, "y": 300}},
         }))
         payload = json.loads(result["result"]["content"][0]["text"])
+        # _tool_click overlays the mouse_click outcome on top, so ok
+        # reflects the click action. Convergence shows up separately.
         assert payload["ok"] is True
-        # Cursor at (960, 540) → target (500, 300) → delta (-460, -240)
-        assert payload["dx"] == -460
-        assert payload["dy"] == -240
-        # The clamped absolute target is echoed back for the agent
         assert payload["x"] == 500
         assert payload["y"] == 300
+        assert payload["target_x"] == 500
+        assert payload["target_y"] == 300
+        assert payload["converged"] is True
+        # 1 iter: first delta lands cursor on target, second query
+        # short-circuits.
+        assert payload["iters"] == 1
 
     def test_click_clamps_before_computing_delta(self, server):
-        # Target (99999, -50) clamps to (1919, 0) before delta math
-        # (cursor at 960, 540) → delta (959, -540).
+        # Target (99999, -50) clamps to (1919, 0); MockBridge lands
+        # cursor exactly on the clamped target.
         result = _run(server.dispatch({
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {"name": "hid.click",
@@ -147,8 +152,9 @@ class TestToolClickAbsolutePath:
         assert payload["ok"] is True
         assert payload["x"] == 1919
         assert payload["y"] == 0
-        assert payload["dx"] == 1919 - 960
-        assert payload["dy"] == 0 - 540
+        assert payload["target_x"] == 1919
+        assert payload["target_y"] == 0
+        assert payload["converged"] is True
 
 
 class TestToolClickRelativePath:
