@@ -7,6 +7,21 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Related Work section in README (EN + zh-CN)
+
+New `## Related work` / `## 相关工作` section between FAQ and the
+open-source roadmap. Splits the MCP / Computer-Use ecosystem into
+software-only MCP servers running on the target PC (PyAutoGUI-style:
+[`domdomegg/computer-use-mcp`](https://github.com/domdomegg/computer-use-mcp),
+[`AB498/computer-control-mcp`](https://github.com/AB498/computer-control-mcp),
+[`mcp-pyautogui`](https://github.com/hathibelagal-dev/mcp-pyautogui),
+ByteDance [UI-TARS](https://github.com/bytedance/UI-TARS-desktop)) vs
+hardware-bridge MCP servers
+([`sunasaji/mcp-serial-hid-kvm`](https://github.com/sunasaji/mcp-serial-hid-kvm))
+— and cites CMU's [HIDAgent](https://arxiv.org/abs/2602.00492) as the
+closest academic peer in hardware budget. Avoids any "first / only"
+claims.
+
 ### Fixed — comment accuracy (external audit, codex)
 
 - `bridge.py:317` — ERROR opcode comment said `cmd_type=0x41`; actual

@@ -319,6 +319,44 @@ This MCP server is the bottom HID primitive layer. The desktop product
 is a separate closed-source agent on top of the same hardware; contact
 `support@tinqiao.com` for details.
 
+## Related work
+
+The MCP / Computer-Use ecosystem already has several projects that hand
+an LLM agent control of a desktop. They split into two camps:
+
+* **Software-only MCP servers on the target PC** —
+  [`domdomegg/computer-use-mcp`](https://github.com/domdomegg/computer-use-mcp),
+  [`AB498/computer-control-mcp`](https://github.com/AB498/computer-control-mcp),
+  and the various
+  [`mcp-pyautogui`](https://github.com/hathibelagal-dev/mcp-pyautogui)
+  implementations. These call PyAutoGUI / OS input APIs in-process on
+  the same machine the agent runs on. Lowest friction; the agent and
+  the target are coupled to the same OS / user session / focus state,
+  and an agent crash can disrupt the user's actual desktop.
+  ByteDance's [UI-TARS](https://github.com/bytedance/UI-TARS-desktop)
+  is in this same lane (multimodal model + screenshot-and-click).
+* **Hardware-bridge MCP servers** —
+  [`sunasaji/mcp-serial-hid-kvm`](https://github.com/sunasaji/mcp-serial-hid-kvm)
+  wraps a CH9329 / CH9350L USB-HID ASIC plus a video-capture card and
+  is the closest direct peer to ClawTouch in architecture. The target
+  PC sees only a USB keyboard / mouse; the agent can live on a
+  different machine entirely. `clawtouch-mcp` follows the same
+  decoupling pattern but pairs with the open-firmware
+  [`clawtouch-hid`](https://github.com/tinqiao-oss/clawtouch-hid)
+  Pico 2 stack rather than a fixed-function ASIC, so the wire protocol
+  is user-extensible and the firmware itself is auditable.
+
+CMU's [**HIDAgent**](https://arxiv.org/abs/2602.00492) (Bigham et al.,
+2026-01) is the closest academic peer in hardware budget (< $30 Pico +
+CircuitPython) and design intent; it ships its own Python library
+rather than an MCP server.
+
+If your target is the same machine the agent runs on, the software-only
+MCPs above are simpler. ClawTouch is built for the cross-device case
+(agent on one machine, target on a separate desktop / laptop / VM),
+where a USB-only hardware path avoids screen-share, RDP, or
+"install this agent on the target machine" trade-offs.
+
 ## Open source roadmap
 
 ClawTouch follows an **open-core** model: hardware and protocol primitives
