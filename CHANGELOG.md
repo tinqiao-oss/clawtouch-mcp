@@ -7,6 +7,18 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — comment accuracy (external audit, codex)
+
+- `bridge.py:317` — ERROR opcode comment said `cmd_type=0x41`; actual
+  protocol constant is `CommandType.ERROR = 0xFF` (see
+  `clawtouch_mcp/protocol.py:36`). Fixed the inline comment.
+- `bridge.py:477` — `release_all` docstring said "send KEY_RELEASE with
+  no payload"; the call actually sends `KEY_RELEASE` with
+  `keycode=0 / modifiers=0` (2-byte payload) as the wire-level
+  panic-stop signal. Docstring now states this accurately.
+
+No behavior change — comment/docstring only.
+
 ## [0.2.8] — 2026-05-27 — Optional `move_ms` path stepping for visible cursor motion
 
 ### Added — `move_ms` argument on `hid.click` / `hid.move` / `hid.hover`

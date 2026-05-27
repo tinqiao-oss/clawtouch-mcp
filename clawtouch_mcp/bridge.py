@@ -314,7 +314,7 @@ class SerialHidBridge:
                 )
                 logger.warning(self._last_error_detail)
                 return None
-            # Firmware can answer ERROR (cmd_type=0x41) carrying an
+            # Firmware can answer ERROR (cmd_type=0xFF) carrying an
             # ErrorCode in payload[0] — surface that to callers via
             # last_error_detail so they don't see a generic "ok=False".
             if resp.cmd_type == CommandType.ERROR and resp.payload:
@@ -474,7 +474,9 @@ class SerialHidBridge:
         return resp is not None and resp.cmd_type == CommandType.ACK
 
     async def release_all(self) -> bool:
-        """Force release all keys/buttons: send KEY_RELEASE with no payload."""
+        """Force release all keys/buttons: send KEY_RELEASE with
+        keycode=0 / modifiers=0 (panic-stop semantics — firmware
+        releases every held key and mouse button)."""
         from .protocol import build_key_release
         resp = await self._send_raw(build_key_release(seq_id=self._next_seq()))
         return resp is not None and resp.cmd_type == CommandType.ACK
