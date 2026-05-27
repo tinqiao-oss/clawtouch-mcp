@@ -32,12 +32,57 @@ as any plugged-in external keyboard or mouse**.
 
 **Why care?** A physical USB HID peripheral routes input through the
 standard OS HID driver stack — the same path as any plug-in keyboard
-or mouse — and needs zero software installed on the target. That fits
-locked-down kiosks, embedded test harnesses, cross-machine RPA, and
-any scenario where the target machine must stay clean.
+or mouse — and needs no mouse/keyboard driver or HID agent process
+installed on the target. The Pico is a standard USB HID class device,
+recognized natively by every OS. That fits locked-down kiosks,
+embedded test harnesses, cross-machine RPA, and any scenario where
+the target machine must stay clean on the HID-input side.
 
 > 📦 MIT-licensed. No ClawTouch backend, no LLM, no agent loop on top —
 > just the raw HID plumbing so other agent stacks can talk to real hardware.
+
+## Deployment modes — is the agent on the same machine as the screen?
+
+`clawtouch-mcp` covers the **input side only** (agent tool call → HID
+report → real input). The **visual side** (agent reads the screen to
+decide what to do next) is **not in this repo** — how you wire the two
+sides together depends on where the agent runs.
+
+### Local mode — the common case
+
+agent + `clawtouch-mcp` + Pico + the controlled screen all on **one
+PC**. `hid.screenshot` captures the screen of the machine the agent
+runs on, so the visual feedback loop closes naturally. The Pico is a
+standard USB HID device — this PC needs no driver and no HID agent on
+the input side (the `clawtouch-mcp` process itself does live here,
+because that's the agent's host).
+
+Good for: accessibility, single-machine RPA, compatibility testing,
+in-machine kiosk self-service.
+
+### Cross-host mode — input supported, visual is your problem
+
+agent + `clawtouch-mcp` on machine **A**; the Pico and the controlled
+screen are on machine **B**. This repo fully covers the input side
+(A → B over USB HID), **but `hid.screenshot` still captures A's
+screen, not B's** — the HID protocol carries input one-way only, and
+reverse screen capture isn't in the HID spec. You have to pick one
+of these for the visual path:
+
+- **HDMI capture card** — B's HDMI output feeds A's capture card, the
+  agent on A reads frames from there. B stays truly software-free at
+  the cost of extra capture hardware.
+- **VNC / RDP / screen sharing** — install a VNC server on B. Open
+  protocols with no vendor lock-in, but B is no longer software-free.
+- **API / log verification** — the agent doesn't watch B's screen in
+  real time; it verifies progress at checkpoints via an API, log file,
+  or database on B. Fits fixed-flow RPA, not open-ended tasks.
+- **Blind operation** — the agent issues a full pre-baked command
+  sequence without reading any feedback. Only works for fully
+  deterministic scenarios (e.g. a hand-tuned macro).
+
+Good for: industrial PCs that can't run a modern OS / strictly
+isolated embedded test targets / QA-lab phone farms.
 
 ## Scope — what this is and isn't
 
@@ -58,7 +103,9 @@ We support these scenarios:
 - **Compatibility testing** — verify your software treats external HID
   input correctly, which can differ from injected synthetic input.
 - **Cross-machine workflows** — an agent on your dev laptop driving
-  the test machine in the rack, with no agent install on the target.
+  the test machine in the rack, with no HID driver / HID agent on the
+  target (visual feedback needs a separate path — HDMI capture / VNC /
+  API checkpoints / blind operation; see "Deployment modes" above).
 
 We do **not** support, document, or assist with:
 
@@ -308,8 +355,12 @@ and the server will talk to it the same way as the turnkey device.
 OS-level input APIs require an agent process to be running on the
 target machine and only work where such an agent can be installed. A
 USB HID peripheral routes through the standard OS HID driver stack
-and needs zero software on the target — fitting kiosk automation,
-offline test rigs, accessibility tooling, and cross-machine RPA.
+and needs no mouse/keyboard driver or HID agent on the target —
+fitting kiosk automation, offline test rigs, accessibility tooling,
+and cross-machine RPA. (In local mode the agent process still lives
+on the same PC — just on the input side that PC needs no extra
+driver. In cross-host mode you'll need to wire up the visual feedback
+side separately; see "Deployment modes" above.)
 
 **Is there a JavaScript / TypeScript version?**
 Not yet. `clawtouch-bridge-sdk` (Python + Node) is planned — see roadmap.
