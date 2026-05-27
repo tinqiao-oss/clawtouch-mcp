@@ -7,6 +7,67 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.5] — 2026-05-27 — Retina screenshot fix (real-world macOS report)
+
+### Fixed — `hid.screenshot` overflow on high-DPI displays
+
+A user testing the MCP server on Apple Silicon (logical 1512x982 /
+physical 3024x1964, 2x scale) reported that every `hid.screenshot`
+call truncated the result and the agent never saw the image. Root
+cause was a units mismatch hiding a 4M-pixel cap:
+
+```python
+pixels = monitor["width"] * monitor["height"]   # mss returns LOGICAL on macOS
+if pixels > MAX_SCREENSHOT_PIXELS:               # 1.48M < 4M, passes
+    raise ValueError(...)
+shot = sct.grab(monitor)                         # but grab returns PHYSICAL
+png = mss.tools.to_png(shot.rgb, shot.size)      # PNG is 3024x1964 = 5.94M px
+```
+
+A ~3 MB base64 PNG then went into `{"content": [{"type": "text", ...}]}`
+— the tool-result text envelope — and Claude Desktop / Claude Code
+truncated it to a side file the agent couldn't read.
+
+**Fix is architectural, not a wider cap:**
+
+- **MCP image content type.** Screenshot tool returns an `ImageResult`
+  marker which `_on_tool_call` translates into the spec-standard
+  `{"type": "image", "data": ..., "mimeType": ...}` content entry.
+  Clients route image content through their vision-token path, not
+  the tool-result text buffer.
+- **DPI-aware auto-resize.** Full-screen captures auto-downsample
+  from physical pixels back to the configured logical screen size
+  when the physical buffer is ≥1.2x bigger. On macOS Retina this
+  collapses 3024x1964 → 1512x982; on Windows >100% DPI it collapses
+  similarly; on Linux / 100% DPI it's a no-op. Pillow LANCZOS resize.
+- **JPEG default.** New `format` param (`"jpeg"` / `"png"`, default
+  `"jpeg"` at quality 80). Random-noise 1512x982 JPEG q80 ≤ 1 MB
+  worst case; typical desktop content is ~150 KB.
+- **Output-pixel cap.** `MAX_OUTPUT_PIXELS = 4_000_000` now measured
+  on the *resized* image (not the raw mss grab), so it's a real
+  defence against giant region requests instead of a no-op on Retina.
+  Oversized requests are silently ratio-downsampled — agents see
+  `width / height / raw_size` in metadata so they can tell.
+- **Pillow added to `[screenshot]` extras.** `mss` still drives the
+  capture; Pillow handles resize + JPEG encoding.
+
+Behaviour change for callers: the result no longer has a `base64`
+field at the top level. Image data flows through MCP image content;
+metadata (`width / height / scale_x / scale_y / format / raw_size`)
+flows through the sibling text content. Agents that read `scale_x` /
+`scale_y` and divide screenshot coords keep working — the values
+collapse to ~1.0 after the resize, so the division becomes a no-op.
+
+`tests/test_screenshot_overflow.py` reproduces the Retina mismatch
+with a mocked `mss` and pins all of the above (9 new tests).
+
+## [0.2.4] — 2026-05-26 — Cumulative audit fixes (rounds 4–6)
+
+This release rolls up audit work that landed since 0.2.3 — internal
+4-agent round 4, multi-perspective round 5, and codex external
+round 6. Each section below is preserved verbatim from the original
+audit commits; the `## [Unreleased]` header was closed here.
+
 ### Fixed — internal deep audit (round 4)
 
 A clean-up audit (four parallel agents, no specific external prompt)

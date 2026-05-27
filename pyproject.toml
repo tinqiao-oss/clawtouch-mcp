@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clawtouch-mcp"
-version = "0.2.4"
+version = "0.2.5"
 description = "MCP stdio server exposing HID mouse/keyboard tools backed by ClawTouch Pico hardware."
 readme = "README.md"
 # PEP 639: SPDX expression form (setuptools >= 77). Avoid the deprecated
@@ -27,7 +27,10 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-screenshot = ["mss>=9.0"]
+# Pillow is needed for DPI-aware resize (Retina screens) and JPEG encoding.
+# Without it the screenshot tool falls back to raw PNG at physical resolution
+# which overflows MCP client text buffers on high-DPI displays.
+screenshot = ["mss>=9.0", "Pillow>=10.0"]
 
 [project.urls]
 Homepage = "https://clawtouch.cn"

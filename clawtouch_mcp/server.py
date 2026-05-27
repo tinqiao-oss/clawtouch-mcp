@@ -135,6 +135,25 @@ class Tool:
 
 
 @dataclass
+class ImageResult:
+    """Tool handler return marker for image payloads.
+
+    The dispatch layer (``_on_tool_call``) translates this into the
+    MCP-standard ``{"type": "image", "data": <base64>, "mimeType": ...}``
+    content entry. Image content flows through vision-token paths in
+    MCP clients (Claude Desktop / Claude Code) rather than the
+    tool-result text buffer — necessary because a Retina-resolution
+    PNG base64 easily exceeds the text envelope and gets truncated.
+
+    The accompanying ``metadata`` dict is rendered as a sibling text
+    content entry so the agent still sees width/height/scale_x/etc.
+    """
+    image_bytes: bytes
+    mime_type: str
+    metadata: dict
+
+
+@dataclass
 class ServerConfig:
     screen_w: Optional[int] = None
     screen_h: Optional[int] = None
@@ -677,16 +696,20 @@ class ClawTouchMcpServer:
             self._register(Tool(
                 name="hid.screenshot",
                 description=(
-                    "Take a screenshot (requires --allow-screenshot + mss). "
-                    "COORDINATE-SPACE WARNING: screenshot returns physical "
-                    "pixels. hid.click and cursor.get_cursor_position use "
-                    "the logical-point space the OS reports. On macOS "
-                    "Retina the ratio is 2.0; on Windows/Linux at >100% DPI "
-                    "it varies. The returned scale_x / scale_y fields give "
-                    "the ratio (screenshot_pixel / click_point). Agents "
-                    "should divide screenshot coordinates by these factors "
-                    "before passing them to hid.click — otherwise clicks "
-                    "land at scale_x x the intended position."
+                    "Take a screenshot (requires --allow-screenshot + the "
+                    "'[screenshot]' extras: mss + Pillow). The image is "
+                    "returned as MCP image content (vision-token path) so "
+                    "Retina captures don't overflow the tool-result text "
+                    "buffer. Default format is JPEG q80 — for pixel-perfect "
+                    "OCR-style work pass format='png'. "
+                    "Captured at the logical-point space on high-DPI displays "
+                    "(auto-resized when the physical buffer is noticeably "
+                    "larger than the configured --screen WxH), so hid.click "
+                    "coordinates derived from the screenshot are 1:1 with "
+                    "click_point space; scale_x / scale_y will be ~1.0 on "
+                    "macOS Retina after auto-resize. Capped at 4M output "
+                    "pixels; oversized requests are silently downsampled "
+                    "(see the raw_size field for what mss originally grabbed)."
                 ),
                 input_schema={
                     "type": "object",
@@ -696,7 +719,15 @@ class ClawTouchMcpServer:
                             "items": {"type": "integer"},
                             "minItems": 4, "maxItems": 4,
                             "description": "[x1,y1,x2,y2] in screenshot pixel coordinates",
-                        }
+                        },
+                        "format": {
+                            "type": "string",
+                            "enum": ["jpeg", "png"],
+                            "description": (
+                                "Encoding format. Default 'jpeg' (q80, "
+                                "smaller payload). 'png' for lossless."
+                            ),
+                        },
                     },
                 },
                 handler=self._tool_screenshot,
@@ -834,20 +865,30 @@ class ClawTouchMcpServer:
             "mcp_version": __version__,
         }
 
-    async def _tool_screenshot(self, **kw) -> dict:
+    async def _tool_screenshot(self, **kw) -> "ImageResult":
         try:
             import mss  # type: ignore
-            import base64
-        except ImportError:
+            from PIL import Image  # type: ignore
+        except ImportError as e:
             raise RuntimeError(
-                "screenshot tool requires the `mss` extra: "
-                "pip install 'clawtouch-mcp[screenshot]'"
+                "screenshot tool requires the '[screenshot]' extras: "
+                "pip install 'clawtouch-mcp[screenshot]' "
+                f"(missing: {e.name})"
             )
-        # Cap to keep base64 payloads sane — a 4K×4K PNG is ~30-80MB
-        # base64 and routinely OOMs MCP clients (Claude Desktop's
-        # JSON-RPC buffer in particular). 4M pixels (~4K monitor at
-        # 1× scaling) is a generous-but-bounded ceiling.
-        MAX_SCREENSHOT_PIXELS = 4_000_000
+        fmt = (kw.get("format") or "jpeg").lower()
+        if fmt not in ("jpeg", "png"):
+            raise ValueError(
+                f"format must be 'jpeg' or 'png', got {fmt!r}"
+            )
+        # Cap measured on OUTPUT pixels (after auto-resize), not on the
+        # raw mss grab — the previous design read monitor["width"] *
+        # monitor["height"] which on macOS Retina is the LOGICAL point
+        # count (e.g. 1512x982 = 1.48M) while the actual grab returned
+        # PHYSICAL pixels (3024x1964 = 5.94M), letting a 24MB base64
+        # PNG slip through and overflow Claude Desktop's tool-result
+        # text buffer. After the resize-to-logical step below the cap
+        # is meaningful again as a defence against giant region asks.
+        MAX_OUTPUT_PIXELS = 4_000_000
         with mss.MSS() as sct:  # `mss.mss()` deprecated in mss 10.x
             primary = sct.monitors[1]
             if "region" in kw:
@@ -885,40 +926,73 @@ class ClawTouchMcpServer:
                            "width": cx2 - cx1, "height": cy2 - cy1}
             else:
                 monitor = primary
-            pixels = monitor["width"] * monitor["height"]
-            if pixels > MAX_SCREENSHOT_PIXELS:
-                raise ValueError(
-                    f"screenshot too large: {monitor['width']}x{monitor['height']}"
-                    f" = {pixels} pixels > MAX_SCREENSHOT_PIXELS "
-                    f"({MAX_SCREENSHOT_PIXELS}); pass a smaller `region`"
-                )
             shot = sct.grab(monitor)
-            png = mss.tools.to_png(shot.rgb, shot.size)
-            # Report the scale between screenshot pixels and the
-            # coordinate space hid.click / cursor.get_cursor_position
-            # use. On macOS Retina this is 2.0 (or 1.something with
-            # fractional scaling). On Windows / Linux at any DPI mss
-            # reports physical pixels and the configured screen size
-            # in physical pixels too, so the ratio collapses to 1.0 —
-            # but we compute it the same way so agents can apply a
-            # single normalisation rule across platforms:
-            #     click_x = screenshot_x / scale_x
-            #     click_y = screenshot_y / scale_y
+            raw_w, raw_h = shot.width, shot.height
+            img = Image.frombytes("RGB", (raw_w, raw_h), shot.rgb)
+
+            # Step 1 — for full-screen captures, downsample to LOGICAL
+            # resolution when the physical buffer is noticeably bigger
+            # than the configured screen size. This is the Retina path
+            # on macOS (~2x ratio) and Windows >100% DPI; on Linux /
+            # 100% DPI the buffer matches screen_w/h and this is a
+            # no-op. We use 1.2x as the threshold instead of !=1.0 to
+            # tolerate a pixel of fractional scaling rounding noise.
+            target_w, target_h = raw_w, raw_h
+            if (not kw.get("region")
+                    and self.config.screen_w and self.config.screen_h
+                    and raw_w >= self.config.screen_w * 1.2):
+                target_w = self.config.screen_w
+                target_h = self.config.screen_h
+
+            # Step 2 — even after the logical-resize step, the result
+            # might still exceed MAX_OUTPUT_PIXELS (4K monitor at 1×,
+            # or an absurdly large region). Ratio-downsample to fit.
+            if target_w * target_h > MAX_OUTPUT_PIXELS:
+                ratio = (MAX_OUTPUT_PIXELS / (target_w * target_h)) ** 0.5
+                target_w = max(1, int(target_w * ratio))
+                target_h = max(1, int(target_h * ratio))
+
+            if (target_w, target_h) != (raw_w, raw_h):
+                img = img.resize((target_w, target_h), Image.LANCZOS)
+
+            buf = io.BytesIO()
+            if fmt == "jpeg":
+                img.save(buf, format="JPEG", quality=80, optimize=True)
+                mime = "image/jpeg"
+            else:
+                img.save(buf, format="PNG", optimize=True)
+                mime = "image/png"
+            image_bytes = buf.getvalue()
+
+            # After resize the screenshot pixel space matches the click
+            # coordinate space, so scale_x / scale_y collapse to ~1.0
+            # for full-screen captures. We still compute and emit them
+            # so existing agent code that divides by scale stays correct
+            # (it just divides by 1.0 and is unchanged).
             scale_x = 1.0
             scale_y = 1.0
-            if self.config.screen_w and self.config.screen_h and not kw.get("region"):
-                # Only meaningful for full-screen captures; with a
-                # region the ratio is between the region and itself.
-                scale_x = shot.width / self.config.screen_w
-                scale_y = shot.height / self.config.screen_h
-        return {
-            "mime_type": "image/png",
-            "width": shot.width,
-            "height": shot.height,
-            "scale_x": round(scale_x, 4),
-            "scale_y": round(scale_y, 4),
-            "base64": base64.b64encode(png).decode("ascii"),
-        }
+            if (self.config.screen_w and self.config.screen_h
+                    and not kw.get("region")):
+                scale_x = target_w / self.config.screen_w
+                scale_y = target_h / self.config.screen_h
+
+        return ImageResult(
+            image_bytes=image_bytes,
+            mime_type=mime,
+            metadata={
+                "width": target_w,
+                "height": target_h,
+                "scale_x": round(scale_x, 4),
+                "scale_y": round(scale_y, 4),
+                "format": fmt,
+                "mime_type": mime,
+                "size_bytes": len(image_bytes),
+                # Expose what mss originally grabbed so agents can
+                # tell when an auto-resize happened. On Retina this
+                # will be roughly 2x the (width, height) above.
+                "raw_size": [raw_w, raw_h],
+            },
+        )
 
     # ═══════════════════ JSON-RPC dispatch ═══════════════════
 
@@ -1079,6 +1153,28 @@ class ClawTouchMcpServer:
                     "text": json.dumps(payload, ensure_ascii=False),
                 }],
                 "isError": True,
+            }
+        # Image-bearing tool results (hid.screenshot) take the MCP
+        # standard image content path so the client renders them as
+        # vision tokens instead of trying to fit a multi-MB base64
+        # string into the tool-result text envelope. The metadata
+        # (width/height/scale_x/etc.) rides alongside as text so the
+        # agent can still introspect dimensions.
+        if isinstance(result, ImageResult):
+            import base64 as _b64
+            return {
+                "content": [
+                    {
+                        "type": "image",
+                        "data": _b64.b64encode(result.image_bytes).decode("ascii"),
+                        "mimeType": result.mime_type,
+                    },
+                    {
+                        "type": "text",
+                        "text": json.dumps(result.metadata, ensure_ascii=False),
+                    },
+                ],
+                "isError": False,
             }
         return {
             "content": [
