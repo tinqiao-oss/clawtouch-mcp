@@ -138,8 +138,30 @@ async def test_start_all_ports_busy_uses_unavailable_bridge():
 def test_device_info_says_unavailable():
     server = _mk_server()
     bridge = UnavailableBridge(server, tried_ports=["COM6"], baudrate=115200)
-    info = bridge.device_info()
+    info = asyncio.run(bridge.device_info())
     assert info["available"] is False
     assert info["connected"] is False
     assert info["tried_ports"] == ["COM6"]
     assert "lazy-retr" in info["reason"]
+
+
+def test_device_info_is_async_across_all_bridges():
+    """Regression for the 'sync device_info() footgun' (v0.2.7).
+
+    Before v0.2.7 ``device_info`` was the only method on the three
+    bridge classes that was NOT ``async``, so external users who
+    learned the API from ``await bridge.ping()`` /
+    ``await bridge.mouse_move()`` naturally wrote
+    ``await bridge.device_info()`` first try and got
+    ``TypeError: object dict can't be used in 'await' expression``.
+    Now every public method on all three bridges is ``async``."""
+    import inspect
+    from clawtouch_mcp.server import MockBridge as _MockBridge
+    from clawtouch_mcp.bridge import SerialHidBridge as _SerialBridge
+
+    for cls in (_MockBridge, UnavailableBridge, _SerialBridge):
+        meth = getattr(cls, "device_info")
+        assert inspect.iscoroutinefunction(meth), (
+            f"{cls.__name__}.device_info must be async to match the "
+            f"rest of the bridge surface"
+        )

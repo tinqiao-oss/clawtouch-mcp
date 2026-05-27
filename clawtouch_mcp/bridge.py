@@ -481,7 +481,18 @@ class SerialHidBridge:
 
     # ── Introspection ──
 
-    def device_info(self) -> dict[str, Any]:
+    async def device_info(self) -> dict[str, Any]:
+        """Snapshot of the bridge's current connection state.
+
+        Pure metadata — no I/O — but declared ``async`` so it matches
+        the call style of every other public method on the three
+        bridge classes (``connect`` / ``close`` / ``ping`` /
+        ``mouse_move`` / ``type_text`` / ``release_all`` / ...).
+        Users who reach for ``await b.device_info()`` based on the
+        rest of the surface get the expected dict; users who guess
+        it's sync get a clear "coroutine was never awaited" warning
+        rather than a silent foot-gun.
+        """
         return {
             "port": self.port,
             "baudrate": self.baudrate,

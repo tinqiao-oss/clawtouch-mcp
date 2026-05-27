@@ -7,6 +7,65 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.7] — 2026-05-27 — API consistency + docs corrections (mac dogfood round 2)
+
+The same macOS Retina dogfood session that produced 0.2.5 (screenshot)
+and 0.2.6 (build backend) surfaced three more papercuts: an API
+inconsistency, a wrong Claude Code config path in the integrations
+doc, and an incomplete `.gitignore` in the sibling skills repo.
+
+### Changed — `bridge.device_info()` is now `async`
+
+All three bridge classes (`SerialHidBridge`, `MockBridge`,
+`UnavailableBridge`) had `device_info()` as a sync method while
+every other public method on the same class (`connect`, `close`,
+`ping`, `mouse_move`, `type_text`, `release_all`, …) is `async`. New
+users learn the API from those and then try
+``await bridge.device_info()`` first, which used to fail with
+``TypeError: object dict can't be used in 'await' expression``.
+
+device_info is now `async` on all three classes; the in-tree caller
+``ClawTouchMcpServer._tool_device_info`` was updated to ``await``.
+A regression test (`test_device_info_is_async_across_all_bridges`)
+uses ``inspect.iscoroutinefunction`` to pin the contract so the
+inconsistency can't sneak back. 171 → 172 tests.
+
+This is technically a breaking change: external callers that did
+``info = bridge.device_info()`` (no await) now get an unawaited
+coroutine. The fix at the caller is to add ``await`` — and the
+unawaited-coroutine warning Python emits is loud and points right
+at the call site.
+
+### Fixed — `examples/integrations/INTEGRATIONS.md` Claude Code path
+
+The doc said `~/.claude/mcp.json` for the Claude Code CLI's global
+MCP config. That path doesn't exist. The actual location is
+`~/.claude.json` — a *file* in the home directory, not a `mcp.json`
+inside a `.claude/` *folder* — with `mcpServers` as the top-level
+key. Users following the wrong path saw their config silently
+ignored.
+
+The section now offers three setup paths:
+
+1. `claude mcp add clawtouch -- clawtouch-mcp --screen 1920x1080`
+   (the one-liner; works if `claude` is on PATH)
+2. Hand-edit `~/.claude.json` (correct path)
+3. Project-scoped `.mcp.json` at repo root (unchanged)
+
+…plus a note that Claude Code CLI doesn't hot-reload MCP config
+either, you have to exit the session (`Ctrl+D` / `/exit`) and start a
+new one for changes to take effect.
+
+### Fixed — `clawtouch-skills/.gitignore` was missing Python entries
+
+The skills repo is markdown-only today but its `.gitignore` only
+covered OS / IDE noise — no `__pycache__/`, no `*.egg-info/`, no
+`.pytest_cache/`, no `build/`, no `dist/`, no `.venv/`. If anyone
+ever drops a helper script (link checker, schema validator, lint),
+artefacts will leak. Brought the file up to parity with the
+clawtouch-mcp and clawtouch-hid `.gitignore`s as a preventive
+measure.
+
 ## [0.2.6] — 2026-05-27 — Build backend switched to hatchling
 
 ### Fixed — install-from-source kept failing on macOS after `pip install -e .`

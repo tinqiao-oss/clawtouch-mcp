@@ -6,5 +6,5 @@ Public API:
     clawtouch_mcp.server     — MCP stdio JSON-RPC server + tool registry
 """
 
-__version__ = "0.2.6"
+__version__ = "0.2.7"
 __all__ = ["__version__"]

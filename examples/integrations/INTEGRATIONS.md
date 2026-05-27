@@ -73,9 +73,37 @@ Adjust `--port` to your hardware (`COM7` Windows /
 `/dev/cu.usbmodem...` macOS / `/dev/ttyACM0` Linux), or omit to
 auto-detect via USB VID 0x2E8A.
 
-For `Claude Code` CLI: same JSON shape under `~/.claude/mcp.json` (or
-project-scoped `.mcp.json` at repo root); see the
-[official docs](https://docs.claude.com/claude-code/mcp).
+For `Claude Code` CLI three setup paths, pick whichever fits:
+
+1. **One-liner (recommended if `claude` is on PATH):**
+
+   ```bash
+   claude mcp add clawtouch -- clawtouch-mcp --screen 1920x1080
+   ```
+
+   Writes to the user-scope config automatically. Add `-s project` for
+   project-scope, `-s local` for that-user-on-this-machine only.
+
+2. **Hand-edit user config** at `~/.claude.json` (note: that's a
+   *file* in your home directory, not a `mcp.json` inside a
+   `.claude/` folder — a common mis-reading):
+
+   ```jsonc
+   {
+     "mcpServers": {
+       "clawtouch": {
+         "command": "clawtouch-mcp",
+         "args": ["--screen", "1920x1080"]
+       }
+     }
+   }
+   ```
+
+3. **Project-scope** by dropping a `.mcp.json` at the repo root with
+   the same `mcpServers` block. Committed to git so the whole team
+   gets the same MCP servers when they open the project.
+
+See the [Claude Code MCP docs](https://docs.claude.com/claude-code/mcp).
 
 **Optional — enable screenshot tool:** add `--allow-screenshot` to
 args. Requires `pip install 'clawtouch-mcp[screenshot]'`. On macOS 14+
@@ -83,8 +111,10 @@ grant the Claude Desktop process **Screen Recording permission** in
 System Settings → Privacy & Security.
 
 **Verify:** Restart Claude Desktop fully (Cmd+Q, then relaunch —
-closing the window is not enough). Ask in a new chat: *"List the MCP
-tools you have available."*
+closing the window is not enough). For Claude Code CLI, the current
+session does **not** hot-reload MCP config either — exit the session
+(`Ctrl+D` or `/exit`) and start a new one. Ask in a new chat: *"List
+the MCP tools you have available."*
 
 ---
 

@@ -230,7 +230,7 @@ class MockBridge:
         self._calls.append(("release_all", {}))
         return True
 
-    def device_info(self) -> dict:
+    async def device_info(self) -> dict:
         return {
             "port": self.port, "baudrate": self.baudrate,
             "connected": True, "mock": True, "calls": len(self._calls),
@@ -331,7 +331,7 @@ class UnavailableBridge:
     async def release_all(self) -> bool:
         return await self._try_or_fail("release_all")
 
-    def device_info(self) -> dict:
+    async def device_info(self) -> dict:
         return {
             "port": self.port,
             "baudrate": self.baudrate,
@@ -854,7 +854,7 @@ class ClawTouchMcpServer:
         return {"ports": list_pico_ports()}
 
     async def _tool_device_info(self, **_kw) -> dict:
-        info = self.bridge.device_info() if self.bridge else {}
+        info = await self.bridge.device_info() if self.bridge else {}
         return {
             "info": info,
             "screen": {
