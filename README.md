@@ -324,6 +324,28 @@ Skills are soft guidance — the LLM still decides what to do.
 | `device.list`            | v1.0  | List candidate HID board ports                |
 | `device.info`            | v1.0  | Active connection info                        |
 
+## When is `clawtouch-mcp` worth it?
+
+A multimodal LLM (Claude / GPT / Qwen) talking to the host OS via the
+built-in synthetic-input APIs already covers many desktop apps. The
+question is when adding a USB HID device on top is worth the
+hardware. Roughly:
+
+| Scenario | Multimodal LLM via OS-level synthetic input | + `clawtouch-mcp` (USB HID) | Marginal value |
+|---|---|---|---|
+| Standard desktop apps (browser, IDE, mainstream office suites) | Works well | Same | Marginal — alternative path only |
+| Drag-heavy creative / design software (Figma-class, image editors, video editors) | Limited without a drag primitive | v1.1 `hid.drag` covers it fully | Notable improvement |
+| Apps that validate input source and reject OS-level injected events | Restricted | Routes through the standard HID driver stack — no synthetic-input distinguisher fires | Often the only viable path |
+| Cross-machine QA · kiosk · industrial-PC / legacy-OS automation | Target machine can't host an agent | USB acts as a physical input bridge | Only viable path |
+| Air-gapped / network-isolated systems | No API reachable | USB is a separate channel | Only viable path |
+| Mobile-device QA racks (Android / iOS real-device farms) | Desktop agent can't reach the phone | Pico 2 W variant bridges (companion firmware) | Only viable path |
+
+If your target is a standard desktop app on the same machine your
+agent runs on, the software-only path is simpler and you don't need
+this. If your target is one of the bottom four rows, a software-only
+path may not work at all and a USB HID device is the realistic
+option.
+
 ## Safety
 
 * Coordinates **clamped** to `--screen WxH` so an agent can't move the mouse

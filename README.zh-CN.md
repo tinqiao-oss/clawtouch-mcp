@@ -256,18 +256,42 @@ Skill 是软性指导 —— LLM 仍然自己决定怎么走。
 
 ## 工具清单
 
-| 工具              | 用途                                          |
-|-------------------|-----------------------------------------------|
-| `hid.click`       | 在 (x, y) 点击。默认绝对坐标语义 (server 通过 Win32 / CoreGraphics / X11 查 OS 光标, 算 delta, 发相对移动给固件); 传 `relative=true` 跳过 OS 查询发原始像素 delta。Wayland / OS 查询失败 → 明确报错 |
-| `hid.move`        | 移动鼠标到 (x, y)。默认绝对坐标语义同 `hid.click`; `relative=true` 发原始像素 delta |
-| `hid.hover`       | 移动 (绝对) 后停留                            |
-| `hid.type`        | 输入 UTF-8 字符串                             |
-| `hid.scroll`      | 滚轮滚动 (正数上滚 / 负数下滚)                |
-| `hid.key`         | 命名键 / 快捷键 (`enter`, `ctrl+c` 等)        |
-| `hid.release_all` | 紧急停止 — 释放所有按住的按键和鼠标键         |
-| `hid.screenshot`  | 主显示器 PNG 截屏 (默认关闭,需显式启用)       |
-| `device.list`     | 列出候选 HID 板串口                           |
-| `device.info`     | 当前连接信息                                  |
+| 工具                     | 起始版本 | 用途                                          |
+|--------------------------|---------|-----------------------------------------------|
+| `hid.click`              | v1.0    | 在 (x, y) 点击。默认绝对坐标语义 (server 通过 Win32 / CoreGraphics / X11 查 OS 光标, 算 delta, 发相对移动给固件); 传 `relative=true` 跳过 OS 查询发原始像素 delta。Wayland / OS 查询失败 → 明确报错 |
+| `hid.move`               | v1.0    | 移动鼠标到 (x, y)。默认绝对坐标语义同 `hid.click`; `relative=true` 发原始像素 delta |
+| `hid.hover`              | v1.0    | 移动 (绝对) 后停留                            |
+| `hid.type`               | v1.0    | 输入 UTF-8 字符串                             |
+| `hid.scroll`             | v1.0    | 滚轮滚动 (正数上滚 / 负数下滚)                |
+| `hid.key`                | v1.0    | 命名键 / 快捷键 (`enter`, `ctrl+c` 等)        |
+| `hid.release_all`        | v1.0    | 紧急停止 — 释放所有按住的按键和鼠标键         |
+| `hid.mouse_button_down`  | **v1.1**    | 按下鼠标按键不松开 (拖拽起点; 对应 CUA `left_mouse_down`) |
+| `hid.mouse_button_up`    | **v1.1**    | 松开鼠标按键 (拖拽终点; 对应 CUA `left_mouse_up`) |
+| `hid.drag`               | **v1.1**    | 从 (`from_x`, `from_y`) 拖到 (`to_x`, `to_y`) — 组合 `mouse_button_down` → 滑动 `move` → `mouse_button_up`; 对应 CUA `left_click_drag` |
+| `hid.key_press`          | **v1.1**    | 按下键 (或快捷键) 不松开 — 适合"按住 shift 连点 N 次"多选场景 |
+| `hid.key_release`        | **v1.1**    | 松开键; 无参 = 释放所有按键 + 鼠标按钮         |
+| `hid.hold_key`           | **v1.1**    | 按下 → 等 `duration_ms` → 松开 (对应 CUA `hold_key`) |
+| `hid.screenshot`         | v1.0    | 主显示器 PNG 截屏 (默认关闭,需显式启用)       |
+| `device.list`            | v1.0    | 列出候选 HID 板串口                           |
+| `device.info`            | v1.0    | 当前连接信息                                  |
+
+## 什么时候用 `clawtouch-mcp` 值得?
+
+多模态 LLM (Claude / GPT / Qwen) 通过 OS 自带的合成输入 API 操作桌面,
+已经能覆盖很多应用。加一支 USB HID 设备值不值得, 大致看场景:
+
+| 场景 | 仅多模态 LLM + OS 合成输入 | + `clawtouch-mcp` (USB HID) | 边际价值 |
+|---|---|---|---|
+| 标准桌面应用 (浏览器 / IDE / 主流办公套件) | 工作良好 | 同样工作 | 边际, 多一条路径 |
+| 拖拽密集的设计 / 创意软件 (Figma 类 / 图像编辑 / 视频编辑) | 无 drag 原语效果有限 | v1.1 `hid.drag` 完整覆盖 | 显著改善 |
+| 严格校验输入源、拒绝 OS-level 合成事件的应用 | 受限 | 走标准 HID 驱动栈, 不会触发"合成事件"判定 | 通常是唯一可行路径 |
+| 跨机器 QA · kiosk · 工控/老 OS 自动化 | 目标机不能装 agent | USB 作为物理输入桥接 | 唯一可行 |
+| Air-gapped / 网络隔离系统 | API 不可达 | USB 是独立通道 | 唯一可行 |
+| 移动端 QA 机柜 (Android / iOS 真机测试) | 桌面 agent 无法触达手机 | Pico 2 W 变体桥接 (配套固件) | 唯一可行 |
+
+如果你的目标是 agent 同机的标准桌面应用, 软件方案更简单, 不需要这个。
+如果落在表格下面四行, 软件方案大概率走不通, USB HID 设备是现实选择。
+
 
 ## 安全策略
 
