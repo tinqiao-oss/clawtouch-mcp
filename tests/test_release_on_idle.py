@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """Release-on-idle — mcp 让出 COM 串口给其他进程的核心 UX.
 
 场景: ClawTouch desktop + clawtouch-mcp 共用同一块 Pico, 一次只能一个进程

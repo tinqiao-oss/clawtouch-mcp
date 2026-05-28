@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """HID wire protocol v1.1 (additive over v1.0 frozen baseline).
 
 v1.0 frozen 2026-03-15. v1.1 (2026-05-28) adds MOUSE_BUTTON_DOWN/UP

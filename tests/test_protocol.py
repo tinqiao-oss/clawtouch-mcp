@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """Wire protocol smoke tests — round-trip + builders + modifier mask.
 
 These tests lock the v1.0 frame layout. If they break, the firmware will

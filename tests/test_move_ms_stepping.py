@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """Path-stepping (``move_ms``) regression tests.
 
 ``hid.click`` / ``hid.move`` / ``hid.hover`` accept an optional

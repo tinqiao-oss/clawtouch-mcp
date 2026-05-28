@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """MCP stdio server exposing 10 HID tools.
 
 Implements the subset of MCP spec (2024-11-05 / 2025-03-26) needed by

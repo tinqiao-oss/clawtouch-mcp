@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """OpenAI CUA (Computer-Using Agent) → ClawTouch HID.
 
 OpenAI's CUA model runs via the Responses API. The model returns

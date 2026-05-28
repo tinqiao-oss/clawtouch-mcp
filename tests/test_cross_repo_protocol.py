@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """Cross-repo wire-protocol byte-equality regression.
 
 The v1.0 wire protocol lives in two independently maintained Python

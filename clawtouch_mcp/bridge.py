@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """Async serial bridge to a Pico 2 running the ClawTouch HID firmware.
 
 Thin wrapper over pyserial; raw protocol only — no agent-loop logic

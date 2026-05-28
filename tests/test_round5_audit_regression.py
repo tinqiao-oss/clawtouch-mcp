@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """Regression tests for round 5 audit fixes.
 
 Round 5 (2026-05-26) fixed five Python-side issues spotted by a multi-agent

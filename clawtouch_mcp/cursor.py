@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """Cross-platform OS cursor position query for absolute-coordinate support.
 
 The ClawTouch HID firmware is a USB Boot Mouse: it can only emit

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """ClawTouchMcpServer dispatch / tool registry / safety tests.
 
 Uses MockBridge so no hardware is touched. Covers:

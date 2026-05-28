@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """Closed-loop convergence regression tests.
 
 macOS pointer ballistics non-linearly scales single HID deltas

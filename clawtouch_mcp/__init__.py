@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """ClawTouch MCP — standalone MCP server exposing HID mouse/keyboard tools.
 
 Public API:

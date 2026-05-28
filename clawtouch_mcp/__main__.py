@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """Entry point: `python -m clawtouch_mcp` or `clawtouch-mcp` script."""
 from __future__ import annotations
 
@@ -6,6 +8,7 @@ import asyncio
 import logging
 import sys
 
+from . import __version__
 from .server import ClawTouchMcpServer, ServerConfig, run_stdio
 
 
@@ -36,6 +39,11 @@ def main() -> int:
         stream=sys.stderr,
         level=getattr(logging, args.log_level.upper()),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    logging.getLogger("clawtouch_mcp").info(
+        "clawtouch-mcp %s · Tinqiao Technology · MIT · "
+        "github.com/tinqiao-oss/clawtouch-mcp",
+        __version__,
     )
 
     # --ops-per-sec: 0 or negative would brick every tool call. Was

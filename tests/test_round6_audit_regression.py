@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """Regression tests for round 6 audit fixes (codex external review).
 
 Round 6 (2026-05-26) codex external audit found 6 high/medium issues

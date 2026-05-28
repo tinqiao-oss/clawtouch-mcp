@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """USB HID keycode tables (US layout).
 
 Split off from bridge.py so other frontends (e.g. OS-level automation) can reuse

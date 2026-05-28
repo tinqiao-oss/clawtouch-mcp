@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """Cursor-tracking + absolute-to-relative delta tests.
 
 The firmware is a USB Boot Mouse — it only emits relative deltas.

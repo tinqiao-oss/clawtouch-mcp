@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
 """Shared pytest fixtures.
 
 The autouse ``_fake_cursor_for_tests`` fixture sets
