@@ -1,8 +1,10 @@
 # macOS Setup Guide
 
 Verified on macOS 26.3.1 (arm64) with a Raspberry Pi Pico 2 running
-ClawTouch HID firmware v1.0. Most of the gotchas below apply to all
-macOS versions ≥ 12; the few that don't are flagged inline.
+ClawTouch HID firmware v1.0+ (the setup steps are identical for v1.0
+and v1.1 — drag/hold-key tools added in v1.1 don't change the install
+path). Most of the gotchas below apply to all macOS versions ≥ 12;
+the few that don't are flagged inline.
 
 ## Prerequisites
 

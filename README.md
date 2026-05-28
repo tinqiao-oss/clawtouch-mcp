@@ -209,7 +209,7 @@ $ clawtouch-mcp --port COM7
 [INFO] clawtouch-mcp 0.2.3 starting (mock=False)
 [INFO] connected to Pico 2 on COM7 (serial: E660ABCD12345678)
 [INFO] screen auto-detected: 2560x1440 (Windows SM_CXSCREEN/SM_CYSCREEN)
-[INFO] 9 HID tools + 2 device tools registered; listening on stdio
+[INFO] 15 HID tools + 2 device tools registered; listening on stdio
 
 # ── MCP client → server ─────────────────────────────────────────────
 < {"jsonrpc":"2.0","id":1,"method":"initialize",
@@ -258,7 +258,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`
 ```
 
 Restart Claude Desktop. You should see `clawtouch` show up in the MCP server
-list with 9 tools available. Try:
+list with 15 tools available. Try:
 
 > Take a screenshot of my screen, find the search box, click it, and type
 > "hello world".
@@ -305,18 +305,24 @@ Skills are soft guidance — the LLM still decides what to do.
 
 ## Tools exposed
 
-| Tool              | Purpose                                       |
-|-------------------|-----------------------------------------------|
-| `hid.click`       | Click at (x, y). Absolute by default (server queries the OS cursor via Win32 / CoreGraphics / X11, computes a delta, sends a relative move to the firmware); pass `relative=true` to skip the OS query and send a raw pixel delta. Wayland / OS-query failures → explicit error |
-| `hid.move`        | Move mouse to (x, y). Same absolute-by-default semantics as `hid.click`; `relative=true` sends a raw pixel delta |
-| `hid.hover`       | Move (absolute), then idle                    |
-| `hid.type`        | Type a UTF-8 string                           |
-| `hid.scroll`      | Wheel scroll (positive = up, negative = down) |
-| `hid.key`         | Named key / shortcut (`enter`, `ctrl+c`, …)   |
-| `hid.release_all` | Panic stop — release every held button / key  |
-| `hid.screenshot`  | PNG screenshot of primary monitor (opt-in)    |
-| `device.list`     | List candidate HID board ports                |
-| `device.info`     | Active connection info                        |
+| Tool                     | Since | Purpose                                       |
+|--------------------------|-------|-----------------------------------------------|
+| `hid.click`              | v1.0  | Click at (x, y). Absolute by default (server queries the OS cursor via Win32 / CoreGraphics / X11, computes a delta, sends a relative move to the firmware); pass `relative=true` to skip the OS query and send a raw pixel delta. Wayland / OS-query failures → explicit error |
+| `hid.move`               | v1.0  | Move mouse to (x, y). Same absolute-by-default semantics as `hid.click`; `relative=true` sends a raw pixel delta |
+| `hid.hover`              | v1.0  | Move (absolute), then idle                    |
+| `hid.type`               | v1.0  | Type a UTF-8 string                           |
+| `hid.scroll`             | v1.0  | Wheel scroll (positive = up, negative = down) |
+| `hid.key`                | v1.0  | Named key / shortcut (`enter`, `ctrl+c`, …)   |
+| `hid.release_all`        | v1.0  | Panic stop — release every held button / key  |
+| `hid.mouse_button_down`  | **v1.1**  | Press a mouse button without releasing (drag start; matches CUA `left_mouse_down`) |
+| `hid.mouse_button_up`    | **v1.1**  | Release a previously-pressed mouse button (drag end; matches CUA `left_mouse_up`) |
+| `hid.drag`               | **v1.1**  | Drag from (`from_x`, `from_y`) to (`to_x`, `to_y`) while holding a button — composes `mouse_button_down` → glided `move` → `mouse_button_up`; matches CUA `left_click_drag` |
+| `hid.key_press`          | **v1.1**  | Press a key (or shortcut) without releasing — useful for `hold shift while clicking N times` multi-select |
+| `hid.key_release`        | **v1.1**  | Release a previously-pressed key; no args = release all keys + mouse buttons |
+| `hid.hold_key`           | **v1.1**  | Press → wait `duration_ms` → release (matches CUA `hold_key`) |
+| `hid.screenshot`         | v1.0  | PNG screenshot of primary monitor (opt-in)    |
+| `device.list`            | v1.0  | List candidate HID board ports                |
+| `device.info`            | v1.0  | Active connection info                        |
 
 ## Safety
 
@@ -426,7 +432,7 @@ are open, the integrated commercial product stays closed.
 ```mermaid
 flowchart LR
     A["<b>LLM Agent</b><br/><sub>Claude Desktop / Cline /<br/>Cursor / OpenClaw / Hermes / ...</sub>"]
-        -->|"stdio<br/>JSON-RPC<br/>MCP 2024-11-05"| B["<b>clawtouch-mcp</b><br/><sub><i>this repo</i><br/>MCP server + 9 HID tools</sub>"]
+        -->|"stdio<br/>JSON-RPC<br/>MCP 2024-11-05"| B["<b>clawtouch-mcp</b><br/><sub><i>this repo</i><br/>MCP server + 15 HID tools</sub>"]
     B -->|"USB-CDC<br/>v1.0 framed bytes"| C["<b>Pico 2</b><br/><sub>+ ClawTouch HID firmware<br/>(RP2350 / CircuitPython)</sub>"]
     C -->|"USB HID<br/>reports"| D["<b>Target OS</b><br/><sub>Windows / macOS / Linux<br/>standard HID driver stack</sub>"]
     classDef this fill:#fef3c7,stroke:#d97706,stroke-width:3px,color:#78350f;

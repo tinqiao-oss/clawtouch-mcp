@@ -51,12 +51,19 @@ def _run(coro):
 
 
 class TestToolRegistry:
-    def test_baseline_9_tools(self, server):
+    def test_baseline_15_tools(self, server):
+        # 9 v1.0 baseline + 6 v1.1 additions (mouse_button_down/up, drag,
+        # key_press/release, hold_key). hid.screenshot is opt-in via
+        # --allow-screenshot and tested separately.
         names = set(server.tools.keys())
         expected = {
+            # v1.0
             "hid.click", "hid.move", "hid.hover", "hid.type",
             "hid.scroll", "hid.key", "hid.release_all",
             "device.list", "device.info",
+            # v1.1 — independent primitives + composed gestures
+            "hid.mouse_button_down", "hid.mouse_button_up", "hid.drag",
+            "hid.key_press", "hid.key_release", "hid.hold_key",
         }
         assert names == expected
 
@@ -80,7 +87,8 @@ class TestDispatch:
             "jsonrpc": "2.0", "id": 2, "method": "tools/list",
         }))
         tools = result["result"]["tools"]
-        assert len(tools) == 9
+        # 9 v1.0 + 6 v1.1 = 15 (screenshot excluded — opt-in)
+        assert len(tools) == 15
         for t in tools:
             assert {"name", "description", "inputSchema"} <= set(t.keys())
 
@@ -194,6 +202,134 @@ class TestKeyShortcut:
         assert self._last_key_call(server) == {
             "modifiers": ["ctrl", "alt"], "key": "L",
         }
+
+
+class TestV11DragAndHold:
+    """v1.1 additions — hid.drag / hid.hold_key compose primitives;
+    hid.mouse_button_down/up / hid.key_press/release are direct
+    bridge exposures. Verify the composed paths emit the expected
+    sub-call sequence on MockBridge."""
+
+    def _calls(self, server, name=None):
+        if name is None:
+            return list(server.bridge._calls)
+        return [c for c in server.bridge._calls if c[0] == name]
+
+    def test_mouse_button_down_up_directly(self, server):
+        _run(server.dispatch({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "hid.mouse_button_down",
+                       "arguments": {"button": "right"}},
+        }))
+        _run(server.dispatch({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "hid.mouse_button_up",
+                       "arguments": {"button": "right"}},
+        }))
+        downs = self._calls(server, "button_down")
+        ups = self._calls(server, "button_up")
+        assert downs and downs[-1] == ("button_down", {"button": "right"})
+        assert ups and ups[-1] == ("button_up", {"button": "right"})
+
+    def test_drag_emits_press_move_release_sequence(self, server):
+        # snap-mode drag (move_ms=0) — exactly: move-to-src → button_down
+        # → move-to-dst → button_up. Glide mode is tested separately.
+        result = _run(server.dispatch({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "hid.drag", "arguments": {
+                "from_x": 100, "from_y": 100,
+                "to_x": 500, "to_y": 400,
+                "button": "left", "move_ms": 0,
+            }},
+        }))
+        payload = json.loads(result["result"]["content"][0]["text"])
+        assert payload["ok"] is True
+        # Pull mouse-related call sequence
+        sequence = [c[0] for c in server.bridge._calls
+                    if c[0] in ("move", "button_down", "button_up")]
+        # Drag must press BEFORE the destination move and release AFTER it.
+        assert sequence.count("button_down") == 1
+        assert sequence.count("button_up") == 1
+        down_idx = sequence.index("button_down")
+        up_idx = sequence.index("button_up")
+        assert up_idx > down_idx, "button_up must follow button_down"
+        # At least one move sits BETWEEN press and release (the drag move).
+        moves_between = sequence[down_idx + 1:up_idx]
+        assert "move" in moves_between, (
+            "drag must move while the button is held; got: %s" % sequence
+        )
+
+    def test_drag_releases_on_mid_drag_exception(self, server, monkeypatch):
+        """If the glided destination move raises, button must still release —
+        leaving a button stuck down is worse than the partial drag."""
+        calls_after_failure: list[str] = []
+
+        original_move = server.bridge.mouse_move
+        async def failing_move(x, y, *, relative=False):  # noqa: ANN001
+            # First call (move-to-source) succeeds. Subsequent move (the
+            # destination move under hold) raises.
+            cnt = len([c for c in server.bridge._calls if c[0] == "move"])
+            if cnt >= 1:
+                calls_after_failure.append("raised")
+                raise RuntimeError("simulated mid-drag failure")
+            return await original_move(x, y, relative=relative)
+
+        monkeypatch.setattr(server.bridge, "mouse_move", failing_move)
+
+        try:
+            _run(server.dispatch({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": "hid.drag", "arguments": {
+                    "from_x": 100, "from_y": 100,
+                    "to_x": 500, "to_y": 400,
+                    "move_ms": 0,
+                }},
+            }))
+        except RuntimeError:
+            pass  # expected — but the release must have run via finally
+
+        # Button release must have happened even though move raised.
+        ups = self._calls(server, "button_up")
+        assert ups, "mid-drag exception must still trigger button_up"
+
+    def test_key_press_release_directly(self, server):
+        _run(server.dispatch({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "hid.key_press",
+                       "arguments": {"key": "shift"}},
+        }))
+        _run(server.dispatch({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "hid.key_release",
+                       "arguments": {"key": "shift"}},
+        }))
+        presses = self._calls(server, "key_press")
+        releases = self._calls(server, "key_release")
+        assert presses and presses[-1][1]["key"] == "shift"
+        assert releases and releases[-1][1]["key"] == "shift"
+
+    def test_key_release_no_args_is_release_all(self, server):
+        _run(server.dispatch({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "hid.key_release", "arguments": {}},
+        }))
+        releases = self._calls(server, "key_release")
+        assert releases and releases[-1][1]["key"] == ""
+
+    def test_hold_key_emits_press_then_release(self, server):
+        result = _run(server.dispatch({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "hid.hold_key", "arguments": {
+                "key": "a", "duration_ms": 5,
+            }},
+        }))
+        payload = json.loads(result["result"]["content"][0]["text"])
+        assert payload["ok"] is True
+        assert payload["duration_ms"] == 5
+        # Press came before release
+        sequence = [c[0] for c in server.bridge._calls
+                    if c[0] in ("key_press", "key_release")]
+        assert sequence == ["key_press", "key_release"]
 
 
 class TestSafety:

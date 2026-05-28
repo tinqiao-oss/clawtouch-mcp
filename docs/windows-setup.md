@@ -1,9 +1,11 @@
 # Windows Setup Guide
 
 Verified on Windows 11 (build 26100, x64) with a Raspberry Pi Pico 2
-running ClawTouch HID firmware v1.0, driving the Claude Code VS Code
-extension over MCP stdio. Most of the gotchas below apply to Windows
-10 1809+ too; the few that don't are flagged inline.
+running ClawTouch HID firmware v1.0+ (setup is identical for v1.0 and
+v1.1 — the v1.1 drag/hold-key tools don't change the install path),
+driving the Claude Code VS Code extension over MCP stdio. Most of the
+gotchas below apply to Windows 10 1809+ too; the few that don't are
+flagged inline.
 
 ## Prerequisites
 
@@ -165,10 +167,10 @@ servers?"* — click **Trust / Approve**.
 In a new Claude chat, type `/mcp` (slash command). You should see:
 
 ```
-clawtouch    connected   10 tools
+clawtouch    connected   16 tools
 ```
 
-(9 tools if you didn't pass `--allow-screenshot`; `hid.screenshot` is
+(15 tools if you didn't pass `--allow-screenshot`; `hid.screenshot` is
 opt-in by default.)
 
 ### Step 4 — confirm hardware

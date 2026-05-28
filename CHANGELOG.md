@@ -7,6 +7,74 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-28 — Drag + hold gestures (protocol v1.1, Anthropic CUA tool-set parity)
+
+### Added — six new MCP tools matching Anthropic Computer Use action set
+
+`clawtouch-mcp` now exposes the v1.1 wire opcodes plus three composed
+gestures, bringing the HID tool surface to 15 (was 9; `hid.screenshot`
+remains opt-in via `--allow-screenshot`):
+
+- `hid.mouse_button_down(button)` — press without releasing. Matches
+  CUA `left_mouse_down`. Wraps the v1.1 `MOUSE_BUTTON_DOWN` (0x13) frame.
+- `hid.mouse_button_up(button)` — release. Matches CUA `left_mouse_up`.
+  Wraps v1.1 `MOUSE_BUTTON_UP` (0x14). Idempotent on the firmware side.
+- `hid.drag(from_x, from_y, to_x, to_y, button="left", move_ms=300, relative=False)` —
+  composed: snap-move to source → `mouse_button_down` → glided absolute
+  move to destination → `mouse_button_up`. Matches CUA `left_click_drag`.
+  Release is wrapped in `try/finally` so a mid-drag exception still
+  releases the button (a stuck mouse button corrupts subsequent host
+  input far worse than a partial drag).
+- `hid.key_press(key, modifiers)` — press a key (or shortcut) without
+  releasing. Useful for "hold shift while clicking N times" multi-select
+  patterns where atomic `hid.key('shift+click')` doesn't help.
+- `hid.key_release(key, modifiers)` — release. Pass no arguments to
+  release ALL held keys + mouse buttons (panic stop, same as
+  `hid.release_all`).
+- `hid.hold_key(key, duration_ms, modifiers)` — press → sleep →
+  release. Matches CUA `hold_key`. Release runs in `try/finally` so
+  the key cannot get stuck on exception.
+
+**Bridge surface** (`SerialHidBridge`): four new async methods —
+`mouse_button_down(button)`, `mouse_button_up(button)`, `key_press(key,
+modifiers)`, `key_release(key, modifiers)`. `MockBridge` and
+`UnavailableBridge` updated in lockstep so `--mock` and
+unavailable-hardware paths stay covered.
+
+**Protocol module**: two new builders (`build_mouse_button_down` /
+`build_mouse_button_up`) + two new `CommandType` members in
+`clawtouch_mcp.protocol`. `PROTOCOL_VERSION` bumped to `1.1.0`.
+
+### Tests
+
+Six new test cases in `TestV11DragAndHold` (`test_server.py`) verify:
+- direct down/up calls hit the MockBridge with the right button name
+- `hid.drag` emits the press-move-release sequence in order (press
+  before destination move, release after)
+- mid-drag exception in the glided move still triggers `button_up`
+  (the `try/finally` safety net)
+- `hid.key_press` / `hid.key_release` round-trip correctly
+- `hid.key_release` with no args translates to release-all
+- `hid.hold_key` emits press → release in order
+- existing tool-count guards updated: 15 baseline + 1 screenshot
+  (was 9 + 1)
+
+### Changed
+
+- `README.md` + `README.zh-CN.md`: Tools exposed table gains a Since
+  column with v1.0 / v1.1 markers; tool-count phrases updated
+  (9 → 15)
+- `clawtouch_mcp.protocol.PROTOCOL_VERSION`: `1.0.0` → `1.1.0`
+
+### Compatibility
+
+- Requires `clawtouch-hid-protocol >= 1.1.0` and firmware `>= 1.1.0`.
+- Older firmware will respond with `ERR_UNKNOWN_COMMAND` (0x01) on
+  `hid.mouse_button_down` / `hid.mouse_button_up` / `hid.drag`. Hosts
+  can fall back to `hid.click` for non-drag scenarios.
+- v1.0 tools (`hid.click` / `hid.move` / `hid.type` / `hid.key` / etc.)
+  are byte-for-byte unchanged.
+
 ## [0.2.9] — 2026-05-27 — Closed-loop convergence for absolute moves (macOS pointer-ballistics fix)
 
 ### Fixed — `hid.click` / `hid.move` / `hid.hover` snap mode lands accurately on macOS

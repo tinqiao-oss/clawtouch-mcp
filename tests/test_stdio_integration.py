@@ -87,10 +87,15 @@ class TestStdioInitializeHandshake:
         tools_resp = next(r for r in responses if r.get("id") == 2)
         tools = tools_resp["result"]["tools"]
         names = {t["name"] for t in tools}
-        # 9 baseline tools (hid.screenshot is opt-in via --allow-screenshot)
+        # 9 v1.0 baseline + 6 v1.1 additions (hid.screenshot is opt-in
+        # via --allow-screenshot, tested in TestStdioScreenshotOptIn)
         expected_baseline = {
+            # v1.0
             "hid.click", "hid.move", "hid.hover", "hid.type", "hid.scroll",
             "hid.key", "hid.release_all", "device.list", "device.info",
+            # v1.1
+            "hid.mouse_button_down", "hid.mouse_button_up", "hid.drag",
+            "hid.key_press", "hid.key_release", "hid.hold_key",
         }
         assert names == expected_baseline, f"unexpected tools: {names}"
 
@@ -134,7 +139,8 @@ class TestStdioScreenshotOptIn:
         tools_resp = next(r for r in responses if r.get("id") == 2)
         names = {t["name"] for t in tools_resp["result"]["tools"]}
         assert "hid.screenshot" in names, f"missing screenshot in {names}"
-        assert len(names) == 10
+        # 15 baseline (9 v1.0 + 6 v1.1) + 1 opt-in screenshot
+        assert len(names) == 16
 
 
 class TestStdioStability:

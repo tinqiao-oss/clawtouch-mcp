@@ -258,12 +258,28 @@ class MockBridge:
         self._calls.append(("scroll", {"delta": delta}))
         return True
 
+    async def mouse_button_down(self, button: str = "left") -> bool:
+        self._calls.append(("button_down", {"button": button}))
+        return True
+
+    async def mouse_button_up(self, button: str = "left") -> bool:
+        self._calls.append(("button_up", {"button": button}))
+        return True
+
     async def type_text(self, text: str, *, chunk_size: int = 32) -> bool:
         self._calls.append(("type", {"text": text}))
         return True
 
     async def key_combo(self, modifiers: list[str], key: str) -> bool:
         self._calls.append(("key", {"modifiers": modifiers, "key": key}))
+        return True
+
+    async def key_press(self, key: str, modifiers: list[str] | None = None) -> bool:
+        self._calls.append(("key_press", {"key": key, "modifiers": modifiers or []}))
+        return True
+
+    async def key_release(self, key: str = "", modifiers: list[str] | None = None) -> bool:
+        self._calls.append(("key_release", {"key": key, "modifiers": modifiers or []}))
         return True
 
     async def release_all(self) -> bool:
@@ -362,11 +378,23 @@ class UnavailableBridge:
     async def mouse_scroll(self, delta: int) -> bool:
         return await self._try_or_fail("mouse_scroll", delta)
 
+    async def mouse_button_down(self, button: str = "left") -> bool:
+        return await self._try_or_fail("mouse_button_down", button)
+
+    async def mouse_button_up(self, button: str = "left") -> bool:
+        return await self._try_or_fail("mouse_button_up", button)
+
     async def type_text(self, text: str, *, chunk_size: int = 32) -> bool:
         return await self._try_or_fail("type_text", text, chunk_size=chunk_size)
 
     async def key_combo(self, modifiers: list[str], key: str) -> bool:
         return await self._try_or_fail("key_combo", modifiers, key)
+
+    async def key_press(self, key: str, modifiers: list[str] | None = None) -> bool:
+        return await self._try_or_fail("key_press", key, modifiers)
+
+    async def key_release(self, key: str = "", modifiers: list[str] | None = None) -> bool:
+        return await self._try_or_fail("key_release", key, modifiers)
 
     async def release_all(self) -> bool:
         return await self._try_or_fail("release_all")
@@ -779,6 +807,137 @@ class ClawTouchMcpServer:
             input_schema={"type": "object", "properties": {}},
             handler=self._tool_release_all,
         ))
+        # ── v1.1 additions: independent press/release primitives + composed gestures ──
+        self._register(Tool(
+            name="hid.mouse_button_down",
+            description=(
+                "Press a mouse button WITHOUT releasing it. Pair with "
+                "hid.mouse_button_up (and hid.move in between) to compose "
+                "a drag, or use hid.drag for a one-call wrapper. Matches "
+                "Anthropic Computer Use's left_mouse_down action."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "button": {"type": "string", "enum": ["left", "right", "middle"], "default": "left"},
+                },
+            },
+            handler=self._tool_mouse_button_down,
+        ))
+        self._register(Tool(
+            name="hid.mouse_button_up",
+            description=(
+                "Release a previously-pressed mouse button. Idempotent — "
+                "releasing a non-held button is a no-op (no error). "
+                "Matches Anthropic Computer Use's left_mouse_up action."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "button": {"type": "string", "enum": ["left", "right", "middle"], "default": "left"},
+                },
+            },
+            handler=self._tool_mouse_button_up,
+        ))
+        self._register(Tool(
+            name="hid.drag",
+            description=(
+                "Drag from (from_x, from_y) to (to_x, to_y) while holding "
+                "the named button. Internally: absolute move to source → "
+                "mouse_button_down → glided absolute move to destination → "
+                "mouse_button_up. Matches Anthropic Computer Use's "
+                "left_click_drag action. Useful for design / spreadsheet / "
+                "file-manager workflows where 'press → drag → release' is "
+                "the atomic UI gesture."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "from_x": {"type": "integer"},
+                    "from_y": {"type": "integer"},
+                    "to_x": {"type": "integer"},
+                    "to_y": {"type": "integer"},
+                    "button": {"type": "string", "enum": ["left", "right", "middle"], "default": "left"},
+                    "move_ms": {
+                        "type": "integer", "default": 300, "minimum": 0, "maximum": MAX_MOVE_MS,
+                        "description": "Duration of the held-button move from source to destination.",
+                    },
+                    "relative": {
+                        "type": "boolean", "default": False,
+                        "description": "If true, from_x/y and to_x/y are pixel deltas, not absolute coords.",
+                    },
+                },
+                "required": ["from_x", "from_y", "to_x", "to_y"],
+            },
+            handler=self._tool_drag,
+        ))
+        self._register(Tool(
+            name="hid.key_press",
+            description=(
+                "Press a key (or shortcut) WITHOUT releasing. Pair with "
+                "hid.key_release. Useful for 'hold shift while clicking N "
+                "times' multi-select patterns: hid.key_press('shift') → "
+                "several hid.click → hid.key_release('shift'). For a "
+                "fixed-duration hold, prefer hid.hold_key."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string"},
+                    "modifiers": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["ctrl", "shift", "alt", "gui", "win", "cmd"]},
+                        "default": [],
+                    },
+                },
+                "required": ["key"],
+            },
+            handler=self._tool_key_press,
+        ))
+        self._register(Tool(
+            name="hid.key_release",
+            description=(
+                "Release a previously-pressed key (or shortcut). Idempotent. "
+                "Pass no arguments to release ALL held keys and mouse "
+                "buttons (panic stop, same as hid.release_all)."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "default": ""},
+                    "modifiers": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["ctrl", "shift", "alt", "gui", "win", "cmd"]},
+                        "default": [],
+                    },
+                },
+            },
+            handler=self._tool_key_release,
+        ))
+        self._register(Tool(
+            name="hid.hold_key",
+            description=(
+                "Press a key, wait duration_ms, then release. Matches "
+                "Anthropic Computer Use's hold_key action. Useful for "
+                "scenarios where a single tap is too short — e.g. holding "
+                "an arrow key to scroll a long list, or holding Space to "
+                "pan in a design app."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string"},
+                    "duration_ms": {"type": "integer", "default": 500, "minimum": 1, "maximum": 10000},
+                    "modifiers": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["ctrl", "shift", "alt", "gui", "win", "cmd"]},
+                        "default": [],
+                    },
+                },
+                "required": ["key"],
+            },
+            handler=self._tool_hold_key,
+        ))
         self._register(Tool(
             name="device.list",
             description="List candidate Pico serial ports.",
@@ -1125,6 +1284,128 @@ class ClawTouchMcpServer:
     async def _tool_release_all(self, **_kw) -> dict:
         ok = await self.bridge.release_all()
         return {"ok": ok}
+
+    # ── v1.1 tool handlers ──
+
+    async def _tool_mouse_button_down(self, **kw) -> dict:
+        self.rate.check()
+        button = str(kw.get("button", "left"))
+        ok = await self.bridge.mouse_button_down(button=button)
+        return {"ok": ok, "button": button, "state": "down"}
+
+    async def _tool_mouse_button_up(self, **kw) -> dict:
+        self.rate.check()
+        button = str(kw.get("button", "left"))
+        ok = await self.bridge.mouse_button_up(button=button)
+        return {"ok": ok, "button": button, "state": "up"}
+
+    async def _tool_drag(self, **kw) -> dict:
+        """Composed drag: move-to-source → press → glided-move-to-dest → release.
+
+        Press/release are unconditional in the success path, but if the
+        glided move errors out mid-drag we still emit a final release so
+        the firmware doesn't leave a button stuck down. The error message
+        bubbles up to the caller.
+        """
+        self.rate.check()
+        button = str(kw.get("button", "left"))
+        move_ms = max(0, min(MAX_MOVE_MS, int(kw.get("move_ms") or 300)))
+        relative = bool(kw.get("relative", False))
+        from_x, from_y = int(kw["from_x"]), int(kw["from_y"])
+        to_x, to_y = int(kw["to_x"]), int(kw["to_y"])
+
+        # Step 1: move to source (absolute or relative; snap, no glide here —
+        # the glide budget is for the held-button move).
+        if relative:
+            await self.bridge.mouse_move(from_x, from_y, relative=True)
+            src_info = {"from_x": from_x, "from_y": from_y, "relative": True}
+        else:
+            moved = await self._move_to_absolute(from_x, from_y)
+            if "error" in moved:
+                return moved
+            src_info = {
+                "from_x": moved.get("x", from_x),
+                "from_y": moved.get("y", from_y),
+                "from_target_x": from_x,
+                "from_target_y": from_y,
+                "from_converged": moved.get("converged"),
+            }
+
+        # Step 2: press the button.
+        await self.bridge.mouse_button_down(button=button)
+
+        # Step 3: glided move to destination — with try/finally so a
+        # mid-drag exception still releases the button (button-stuck
+        # would be a worse user experience than the partial drag).
+        dest_info: dict[str, Any]
+        try:
+            if relative:
+                if move_ms > 0:
+                    dest_info = await self._stepped_relative_move(to_x, to_y, move_ms)
+                else:
+                    await self.bridge.mouse_move(to_x, to_y, relative=True)
+                    dest_info = {"to_x": to_x, "to_y": to_y, "relative": True}
+            else:
+                if move_ms > 0:
+                    moved = await self._stepped_move_to_absolute(to_x, to_y, move_ms)
+                else:
+                    moved = await self._move_to_absolute(to_x, to_y)
+                if "error" in moved:
+                    dest_info = moved
+                else:
+                    dest_info = {
+                        "to_x": moved.get("x", to_x),
+                        "to_y": moved.get("y", to_y),
+                        "to_target_x": to_x,
+                        "to_target_y": to_y,
+                        "to_converged": moved.get("converged"),
+                    }
+        finally:
+            # Step 4: release. Idempotent on the firmware side — safe to
+            # call even if step 3 raised before any movement.
+            await self.bridge.mouse_button_up(button=button)
+
+        return {
+            "ok": "error" not in dest_info,
+            "button": button,
+            "move_ms": move_ms,
+            **src_info,
+            **dest_info,
+        }
+
+    async def _tool_key_press(self, **kw) -> dict:
+        self.rate.check()
+        key = str(kw["key"])
+        modifiers = [m.lower() for m in (kw.get("modifiers") or [])]
+        ok = await self.bridge.key_press(key, modifiers)
+        return {"ok": ok, "key": key, "modifiers": modifiers, "state": "down"}
+
+    async def _tool_key_release(self, **kw) -> dict:
+        self.rate.check()
+        key = str(kw.get("key") or "")
+        modifiers = [m.lower() for m in (kw.get("modifiers") or [])]
+        ok = await self.bridge.key_release(key, modifiers)
+        return {"ok": ok, "key": key or "<all>", "modifiers": modifiers, "state": "up"}
+
+    async def _tool_hold_key(self, **kw) -> dict:
+        """Composed hold: press → sleep → release. try/finally on release
+        so a mid-hold exception still releases the key (stuck modifier
+        would corrupt subsequent input on the host)."""
+        self.rate.check()
+        key = str(kw["key"])
+        duration_ms = max(1, min(10_000, int(kw.get("duration_ms", 500))))
+        modifiers = [m.lower() for m in (kw.get("modifiers") or [])]
+        await self.bridge.key_press(key, modifiers)
+        try:
+            await asyncio.sleep(duration_ms / 1000.0)
+        finally:
+            await self.bridge.key_release(key, modifiers)
+        return {
+            "ok": True,
+            "key": key,
+            "modifiers": modifiers,
+            "duration_ms": duration_ms,
+        }
 
     async def _tool_device_list(self, **_kw) -> dict:
         return {"ports": list_pico_ports()}

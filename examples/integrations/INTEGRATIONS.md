@@ -142,7 +142,7 @@ Commit this file so teammates get the same setup.
 global config (Settings → MCP shows the exact path).
 
 **Verify:** Cursor's Settings → MCP page shows a green dot next to
-`clawtouch` and lists 9 tools (10 with `--allow-screenshot`).
+`clawtouch` and lists 15 tools (16 with `--allow-screenshot`).
 
 **Note:** Cursor's agent mode will happily call `hid.click` on whatever
 coordinate it thinks is right — including outside the Cursor window.
@@ -169,7 +169,7 @@ openclaw mcp add clawtouch \
 ```
 
 Restart OpenClaw (or `openclaw mcp reload`) — `openclaw mcp list` shows
-`clawtouch (connected, 9 tools)`.
+`clawtouch (connected, 15 tools)`.
 
 Official MCP docs: <https://docs.openclaw.ai/cli/mcp>
 

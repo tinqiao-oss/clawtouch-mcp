@@ -1,4 +1,7 @@
-"""HID wire protocol v1.0 (frozen).
+"""HID wire protocol v1.1 (additive over v1.0 frozen baseline).
+
+v1.0 frozen 2026-03-15. v1.1 (2026-05-28) adds MOUSE_BUTTON_DOWN/UP
+for drag gestures + CUA compatibility. All v1.0 opcodes byte-for-byte stable.
 
 Binary frame layout, little-endian:
 
@@ -15,7 +18,7 @@ import struct
 from dataclasses import dataclass
 from enum import IntEnum
 
-PROTOCOL_VERSION = "1.0.0"
+PROTOCOL_VERSION = "1.1.0"
 MAX_PAYLOAD_LEN = 1024
 FRAME_HEADER = 0xAA
 
@@ -26,6 +29,8 @@ class CommandType(IntEnum):
     MOUSE_MOVE = 0x10
     MOUSE_CLICK = 0x11
     MOUSE_SCROLL = 0x12
+    MOUSE_BUTTON_DOWN = 0x13   # v1.1
+    MOUSE_BUTTON_UP = 0x14     # v1.1
     KEY_PRESS = 0x20
     KEY_RELEASE = 0x21
     KEY_TYPE_STRING = 0x22
@@ -139,6 +144,20 @@ def build_mouse_click(
 def build_mouse_scroll(delta: int, *, seq_id: int = 0) -> HidCommand:
     payload = struct.pack("<h", int(delta))
     return HidCommand(CommandType.MOUSE_SCROLL, payload, seq_id)
+
+
+def build_mouse_button_down(button: MouseButton, *, seq_id: int = 0) -> HidCommand:
+    """v1.1: press a mouse button and DO NOT release. Compose with
+    build_mouse_button_up (and build_mouse_move frames in between)
+    to produce a drag gesture."""
+    payload = struct.pack("B", int(button))
+    return HidCommand(CommandType.MOUSE_BUTTON_DOWN, payload, seq_id)
+
+
+def build_mouse_button_up(button: MouseButton, *, seq_id: int = 0) -> HidCommand:
+    """v1.1: release a previously-pressed mouse button. Idempotent."""
+    payload = struct.pack("B", int(button))
+    return HidCommand(CommandType.MOUSE_BUTTON_UP, payload, seq_id)
 
 
 def build_key_press(keycode: int, modifiers: int = 0, *, seq_id: int = 0) -> HidCommand:

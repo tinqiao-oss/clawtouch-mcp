@@ -30,6 +30,8 @@ from .protocol import (
     MouseButton,
     ProtocolError,
     build_key_combo,
+    build_mouse_button_down,
+    build_mouse_button_up,
     build_mouse_click,
     build_mouse_move,
     build_mouse_scroll,
@@ -412,6 +414,34 @@ class SerialHidBridge:
         )
         return resp is not None and resp.cmd_type == CommandType.ACK
 
+    @staticmethod
+    def _resolve_button(button: str) -> MouseButton:
+        btn = {
+            "left": MouseButton.LEFT,
+            "right": MouseButton.RIGHT,
+            "middle": MouseButton.MIDDLE,
+        }.get(button.lower())
+        if btn is None:
+            raise ValueError(f"unknown button: {button}")
+        return btn
+
+    async def mouse_button_down(self, button: str = "left") -> bool:
+        """v1.1: press a mouse button without releasing it. Use with
+        ``mouse_button_up`` (and ``mouse_move`` in between) to compose
+        a drag gesture, or call ``release_all`` to panic-stop.
+        """
+        resp = await self._send_raw(
+            build_mouse_button_down(self._resolve_button(button), seq_id=self._next_seq())
+        )
+        return resp is not None and resp.cmd_type == CommandType.ACK
+
+    async def mouse_button_up(self, button: str = "left") -> bool:
+        """v1.1: release a previously-pressed mouse button. Idempotent."""
+        resp = await self._send_raw(
+            build_mouse_button_up(self._resolve_button(button), seq_id=self._next_seq())
+        )
+        return resp is not None and resp.cmd_type == CommandType.ACK
+
     async def type_text(
         self, text: str, *, chunk_size: int = 32,
         allow_control: bool = False,
@@ -479,6 +509,52 @@ class SerialHidBridge:
         releases every held key and mouse button)."""
         from .protocol import build_key_release
         resp = await self._send_raw(build_key_release(seq_id=self._next_seq()))
+        return resp is not None and resp.cmd_type == CommandType.ACK
+
+    def _resolve_key(self, key: str, modifiers: list[str] | None) -> tuple[int, int]:
+        """Translate (key_name_or_char, modifier_names) to (keycode, modifier_mask).
+
+        Same resolution path as :meth:`key_combo` — named keys first
+        (Enter / F1 / Tab / etc.), then single-char fallback with
+        auto-SHIFT for shifted glyphs. Raises ValueError on unknown key.
+        """
+        mask = modifiers_to_mask(modifiers or [])
+        kc = name_to_keycode(key)
+        if kc is not None:
+            if name_needs_shift(key):
+                mask |= int(ModifierKey.SHIFT)
+        elif len(key) == 1:
+            if char_needs_shift(key):
+                mask |= int(ModifierKey.SHIFT)
+            kc = char_to_keycode(key)
+        if kc is None:
+            raise ValueError(f"unknown key: {key!r}")
+        return kc, mask
+
+    async def key_press(self, key: str, modifiers: list[str] | None = None) -> bool:
+        """v1.1 exposure: press a key (or shortcut) without releasing. Pair
+        with :meth:`key_release`, or use ``hid.hold_key`` tool for a
+        duration wrapper. Useful for 'hold shift while clicking N times'
+        style multi-select patterns."""
+        from .protocol import build_key_press
+        kc, mask = self._resolve_key(key, modifiers)
+        resp = await self._send_raw(
+            build_key_press(kc, mask, seq_id=self._next_seq())
+        )
+        return resp is not None and resp.cmd_type == CommandType.ACK
+
+    async def key_release(self, key: str = "", modifiers: list[str] | None = None) -> bool:
+        """v1.1 exposure: release a previously-pressed key. Empty key
+        (default) sends the all-zero KEY_RELEASE which firmware treats
+        as release-all (panic-stop for both keys and mouse buttons)."""
+        from .protocol import build_key_release
+        if not key:
+            resp = await self._send_raw(build_key_release(seq_id=self._next_seq()))
+        else:
+            kc, mask = self._resolve_key(key, modifiers)
+            resp = await self._send_raw(
+                build_key_release(kc, mask, seq_id=self._next_seq())
+            )
         return resp is not None and resp.cmd_type == CommandType.ACK
 
     # ── Introspection ──
