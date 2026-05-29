@@ -16,9 +16,14 @@ Every client config boils down to the same four facts:
    currently expose HTTP/SSE; wrap with
    [supergateway](https://github.com/supercorp-ai/supergateway) if your
    client requires HTTP.
-4. **Restart the client** after editing — most don't hot-reload.
+4. **Reload after editing.** Config changes never apply mid-conversation,
+   but the reload step differs by client: **Cursor** auto-detects config
+   changes; **Hermes** uses `/reload-mcp`; **OpenClaw** uses
+   `openclaw mcp reload`; **Claude Desktop / Cherry Studio / ChatGPT
+   Desktop** need a full app restart. **Codex CLI** re-reads its config
+   on every launch.
 
-After restarting, ask: *"List the MCP tools you have available."* You
+After reloading or restarting, ask: *"List the MCP tools you have available."* You
 should see `hid.click`, `hid.move`, `hid.hover`, `hid.type`,
 `hid.scroll`, `hid.key`, `hid.release_all`, `device.list`, `device.info`
 (and `hid.screenshot` if `--allow-screenshot`).
@@ -141,6 +146,10 @@ Commit this file so teammates get the same setup.
 **Global:** Settings → MCP → Add new MCP server. Or paste JSON into the
 global config (Settings → MCP shows the exact path).
 
+**No restart needed.** Cursor watches the config file and re-launches
+the MCP server on save — open Settings → MCP and you'll see `clawtouch`
+appear within a second or two.
+
 **Verify:** Cursor's Settings → MCP page shows a green dot next to
 `clawtouch` and lists 15 tools (16 with `--allow-screenshot`).
 
@@ -195,7 +204,12 @@ mcp_servers:
       - 1920x1080
 ```
 
-Verify with `hermes-agent mcp probe clawtouch`.
+After editing `config.yaml`, run `/reload-mcp` inside an existing chat
+session to pick up the new server without exiting Hermes — no full
+restart needed. (Hermes also auto-refreshes the tool list when a running
+server sends `notifications/tools/list_changed`, but that doesn't cover
+*adding* a new server to the config.) Verify with
+`hermes-agent mcp probe clawtouch`.
 
 Official MCP docs: <https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp>
 

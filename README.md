@@ -209,7 +209,7 @@ $ clawtouch-mcp --port COM7
 [INFO] clawtouch-mcp 0.2.3 starting (mock=False)
 [INFO] connected to Pico 2 on COM7 (serial: E660ABCD12345678)
 [INFO] screen auto-detected: 2560x1440 (Windows SM_CXSCREEN/SM_CYSCREEN)
-[INFO] 15 HID tools + 2 device tools registered; listening on stdio
+[INFO] 13 HID tools + 2 device tools registered; listening on stdio
 
 # ── MCP client → server ─────────────────────────────────────────────
 < {"jsonrpc":"2.0","id":1,"method":"initialize",
@@ -258,7 +258,8 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`
 ```
 
 Restart Claude Desktop. You should see `clawtouch` show up in the MCP server
-list with 15 tools available. Try:
+list with 15 tools available (13 HID + 2 device; +1 if you pass
+`--allow-screenshot`). Try:
 
 > Take a screenshot of my screen, find the search box, click it, and type
 > "hello world".
@@ -454,7 +455,7 @@ are open, the integrated commercial product stays closed.
 ```mermaid
 flowchart LR
     A["<b>LLM Agent</b><br/><sub>Claude Desktop / Cline /<br/>Cursor / OpenClaw / Hermes / ...</sub>"]
-        -->|"stdio<br/>JSON-RPC<br/>MCP 2024-11-05"| B["<b>clawtouch-mcp</b><br/><sub><i>this repo</i><br/>MCP server + 15 HID tools</sub>"]
+        -->|"stdio<br/>JSON-RPC<br/>MCP 2024-11-05"| B["<b>clawtouch-mcp</b><br/><sub><i>this repo</i><br/>MCP server + 13 HID + 2 device tools</sub>"]
     B -->|"USB-CDC<br/>v1.0 framed bytes"| C["<b>Pico 2</b><br/><sub>+ ClawTouch HID firmware<br/>(RP2350 / CircuitPython)</sub>"]
     C -->|"USB HID<br/>reports"| D["<b>Target OS</b><br/><sub>Windows / macOS / Linux<br/>standard HID driver stack</sub>"]
     classDef this fill:#fef3c7,stroke:#d97706,stroke-width:3px,color:#78350f;

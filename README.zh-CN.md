@@ -163,7 +163,7 @@ $ clawtouch-mcp --port COM7
 [INFO] clawtouch-mcp 0.2.3 启动 (mock=False)
 [INFO] 连接 Pico 2 (COM7, serial: E660ABCD12345678)
 [INFO] 自动探测屏幕: 2560x1440 (Windows SM_CXSCREEN/SM_CYSCREEN)
-[INFO] 注册 15 个 HID 工具 + 2 个 device 工具, 监听 stdio
+[INFO] 注册 13 个 HID 工具 + 2 个 device 工具, 监听 stdio
 
 # ── MCP 客户端 → server ────────────────────────────────────────────
 < {"jsonrpc":"2.0","id":1,"method":"initialize",
@@ -385,7 +385,7 @@ ClawTouch 采用 **open-core** 模式:硬件与协议层开源,集成的商业�
 ```mermaid
 flowchart LR
     A["<b>LLM Agent</b><br/><sub>Claude Desktop / Cline /<br/>Cursor / OpenClaw / Hermes / ...</sub>"]
-        -->|"stdio<br/>JSON-RPC<br/>MCP 2024-11-05"| B["<b>clawtouch-mcp</b><br/><sub><i>本仓库</i><br/>MCP server + 15 HID 工具</sub>"]
+        -->|"stdio<br/>JSON-RPC<br/>MCP 2024-11-05"| B["<b>clawtouch-mcp</b><br/><sub><i>本仓库</i><br/>MCP server + 13 HID + 2 device 工具</sub>"]
     B -->|"USB-CDC<br/>v1.0 带帧字节"| C["<b>Pico 2</b><br/><sub>+ ClawTouch HID 固件<br/>(RP2350 / CircuitPython)</sub>"]
     C -->|"USB HID<br/>报告"| D["<b>目标 OS</b><br/><sub>Windows / macOS / Linux<br/>标准 HID 驱动栈</sub>"]
     classDef this fill:#fef3c7,stroke:#d97706,stroke-width:3px,color:#78350f;

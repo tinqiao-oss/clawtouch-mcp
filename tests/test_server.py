@@ -54,9 +54,10 @@ def _run(coro):
 
 class TestToolRegistry:
     def test_baseline_15_tools(self, server):
-        # 9 v1.0 baseline + 6 v1.1 additions (mouse_button_down/up, drag,
-        # key_press/release, hold_key). hid.screenshot is opt-in via
-        # --allow-screenshot and tested separately.
+        # 13 HID + 2 device = 15 default tools (7 v1.0 HID + 6 v1.1 HID +
+        # device.list + device.info). hid.screenshot is the 1 opt-in
+        # tool gated by --allow-screenshot and tested separately. Total
+        # tool surface = 13 + 2 + 1 = 16.
         names = set(server.tools.keys())
         expected = {
             # v1.0

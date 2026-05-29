@@ -7,6 +7,33 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — tool-selection guidance for LLM clients
+
+Two complementary mechanisms ensure LLMs reliably pick `hid.*` tools
+when appropriate, instead of defaulting to file APIs or refusing the
+task:
+
+1. **Server-level `instructions`** in the MCP 2024-11-05 `initialize`
+   response. Tells the client "prefer `hid.*` when no API or
+   automation path exists for the target application, or when the
+   user explicitly requests physical keyboard / mouse input."
+   Recognised by Claude Desktop, Cursor, Hermes, ChatGPT Desktop and
+   other spec-compliant clients.
+2. **Per-tool `HID_PREFIX`** prepended to every `hid.*` tool's
+   `description`. Tool-selection-time guidance — visible even if the
+   client ignores the server-level `instructions` field. The 13
+   baseline `hid.*` tools + the opt-in `hid.screenshot` all carry the
+   prefix; `device.*` tools are unaffected (read-only diagnostics, no
+   selection ambiguity).
+
+This addresses a real LLM-behavior risk: the original `hid.*`
+descriptions were physics-detailed (closed-loop convergence, OS
+pointer ballistics) but had no application-layer anchor, so an LLM
+seeing *"open WPS Office"* had nothing in the description telling it
+*"this is the right tool for that."* The guidance explicitly frames
+`hid.*` as a fallback layer that activates when other paths fail or
+when the user names ClawTouch / physical input directly.
+
 ## [0.3.0] — 2026-05-28 — Drag + hold gestures (protocol v1.1, Anthropic CUA tool-set parity)
 
 ### Added — six new MCP tools matching Anthropic Computer Use action set

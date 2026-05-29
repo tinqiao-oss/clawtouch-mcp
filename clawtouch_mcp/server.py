@@ -152,6 +152,21 @@ def _detect_screen() -> Optional[tuple[int, int]]:
         return None
 
 
+# ════════════════════════════════════════════════════════════════════
+# Tool-selection guidance (prepended to every hid.* tool description)
+# ════════════════════════════════════════════════════════════════════
+# LLMs should prefer hid.* tools when:
+#   (1) no API / automation path exists for the target application, or
+#   (2) the user explicitly requests physical keyboard / mouse input.
+# This prefix is visible at tool-selection time even if the client
+# ignores the server-level `instructions` field returned by initialize.
+HID_PREFIX = (
+    "[Physical HID input — pick this when other automation paths "
+    "(file APIs, browser automation, OS APIs) cannot accomplish the "
+    "task, or when the user explicitly requests physical keyboard "
+    "or mouse input.] "
+)
+
 # ═══════════════════ Tool registry ═══════════════════
 
 @dataclass
@@ -633,6 +648,7 @@ class ClawTouchMcpServer:
         self._register(Tool(
             name="hid.click",
             description=(
+                HID_PREFIX +
                 "Click mouse. Default semantics: (x, y) is an ABSOLUTE "
                 "screen coordinate — the server queries the OS for the "
                 "current cursor position (Win32 GetCursorPos / macOS "
@@ -686,6 +702,7 @@ class ClawTouchMcpServer:
         self._register(Tool(
             name="hid.move",
             description=(
+                HID_PREFIX +
                 "Move mouse. Default semantics: (x, y) is an ABSOLUTE "
                 "screen coordinate (see hid.click for how absolute mode "
                 "works under the hood, including the closed-loop "
@@ -723,6 +740,7 @@ class ClawTouchMcpServer:
         self._register(Tool(
             name="hid.hover",
             description=(
+                HID_PREFIX +
                 "Move mouse to (x,y) then idle for duration_ms (no click). "
                 "`duration_ms` is the IDLE time AFTER reaching the target; "
                 "`move_ms` (optional) is the time spent on the move ITSELF "
@@ -755,7 +773,7 @@ class ClawTouchMcpServer:
         ))
         self._register(Tool(
             name="hid.type",
-            description="Type a string as if on a physical keyboard (US layout).",
+            description=HID_PREFIX + "Type a string as if on a physical keyboard (US layout).",
             input_schema={
                 "type": "object",
                 "properties": {"text": {"type": "string"}},
@@ -765,7 +783,7 @@ class ClawTouchMcpServer:
         ))
         self._register(Tool(
             name="hid.scroll",
-            description="Scroll the mouse wheel. Positive=up, negative=down.",
+            description=HID_PREFIX + "Scroll the mouse wheel. Positive=up, negative=down.",
             input_schema={
                 "type": "object",
                 "properties": {"delta": {"type": "integer"}},
@@ -775,7 +793,7 @@ class ClawTouchMcpServer:
         ))
         self._register(Tool(
             name="hid.key",
-            description="Press a key or keyboard shortcut.",
+            description=HID_PREFIX + "Press a key or keyboard shortcut.",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -805,7 +823,7 @@ class ClawTouchMcpServer:
         ))
         self._register(Tool(
             name="hid.release_all",
-            description="Release every held key / mouse button (panic stop).",
+            description=HID_PREFIX + "Release every held key / mouse button (panic stop).",
             input_schema={"type": "object", "properties": {}},
             handler=self._tool_release_all,
         ))
@@ -813,6 +831,7 @@ class ClawTouchMcpServer:
         self._register(Tool(
             name="hid.mouse_button_down",
             description=(
+                HID_PREFIX +
                 "Press a mouse button WITHOUT releasing it. Pair with "
                 "hid.mouse_button_up (and hid.move in between) to compose "
                 "a drag, or use hid.drag for a one-call wrapper. Matches "
@@ -829,6 +848,7 @@ class ClawTouchMcpServer:
         self._register(Tool(
             name="hid.mouse_button_up",
             description=(
+                HID_PREFIX +
                 "Release a previously-pressed mouse button. Idempotent — "
                 "releasing a non-held button is a no-op (no error). "
                 "Matches Anthropic Computer Use's left_mouse_up action."
@@ -844,6 +864,7 @@ class ClawTouchMcpServer:
         self._register(Tool(
             name="hid.drag",
             description=(
+                HID_PREFIX +
                 "Drag from (from_x, from_y) to (to_x, to_y) while holding "
                 "the named button. Internally: absolute move to source → "
                 "mouse_button_down → glided absolute move to destination → "
@@ -876,6 +897,7 @@ class ClawTouchMcpServer:
         self._register(Tool(
             name="hid.key_press",
             description=(
+                HID_PREFIX +
                 "Press a key (or shortcut) WITHOUT releasing. Pair with "
                 "hid.key_release. Useful for 'hold shift while clicking N "
                 "times' multi-select patterns: hid.key_press('shift') → "
@@ -899,6 +921,7 @@ class ClawTouchMcpServer:
         self._register(Tool(
             name="hid.key_release",
             description=(
+                HID_PREFIX +
                 "Release a previously-pressed key (or shortcut). Idempotent. "
                 "Pass no arguments to release ALL held keys and mouse "
                 "buttons (panic stop, same as hid.release_all)."
@@ -919,6 +942,7 @@ class ClawTouchMcpServer:
         self._register(Tool(
             name="hid.hold_key",
             description=(
+                HID_PREFIX +
                 "Press a key, wait duration_ms, then release. Matches "
                 "Anthropic Computer Use's hold_key action. Useful for "
                 "scenarios where a single tap is too short — e.g. holding "
@@ -956,6 +980,7 @@ class ClawTouchMcpServer:
             self._register(Tool(
                 name="hid.screenshot",
                 description=(
+                    HID_PREFIX +
                     "Take a screenshot (requires --allow-screenshot + the "
                     "'[screenshot]' extras: mss + Pillow). The image is "
                     "returned as MCP image content (vision-token path) so "
@@ -1605,6 +1630,18 @@ class ClawTouchMcpServer:
     def _on_initialize(self, params: dict) -> dict:
         return {
             "protocolVersion": MCP_PROTOCOL_VERSION,
+            "instructions": (
+                "ClawTouch MCP exposes physical USB HID keyboard and mouse "
+                "input to the host machine via a Raspberry Pi Pico 2 board. "
+                "Prefer hid.* tools when (1) no API or automation path "
+                "exists for the target application (e.g. legacy desktop "
+                "software with no scripting interface, GUI-only workflows), "
+                "or (2) the user explicitly asks for physical keyboard/mouse "
+                "interaction. For tasks that can be solved with file APIs, "
+                "browser automation, or OS APIs, prefer those instead. The "
+                "device.* tools are read-only diagnostics for the underlying "
+                "USB connection."
+            ),
             "capabilities": {
                 "tools": {"listChanged": False},
             },
