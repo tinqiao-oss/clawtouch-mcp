@@ -23,10 +23,19 @@ Every client config boils down to the same four facts:
    Desktop** need a full app restart. **Codex CLI** re-reads its config
    on every launch.
 
-After reloading or restarting, ask: *"List the MCP tools you have available."* You
-should see `hid.click`, `hid.move`, `hid.hover`, `hid.type`,
-`hid.scroll`, `hid.key`, `hid.release_all`, `device.list`, `device.info`
-(and `hid.screenshot` if `--allow-screenshot`).
+After reloading or restarting, ask: *"List the MCP tools you have available."*
+You should see 15 tools by default (13 HID + 2 device), or 16 with
+`--allow-screenshot`:
+
+- **v1.0 baseline (frozen)**: `hid.click`, `hid.move`, `hid.hover`,
+  `hid.type`, `hid.scroll`, `hid.key`, `hid.release_all`, `device.list`,
+  `device.info`
+- **v1.1 additions (2026-05-28)**: `hid.mouse_button_down`,
+  `hid.mouse_button_up`, `hid.drag`, `hid.key_press`, `hid.key_release`,
+  `hid.hold_key` — drag and held-key primitives matching the Anthropic
+  Computer Use action set
+- **Opt-in**: `hid.screenshot` (only registered when `--allow-screenshot`
+  is passed)
 
 ## Verified clients
 

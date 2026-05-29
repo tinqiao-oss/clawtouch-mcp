@@ -30,8 +30,9 @@ Knowing what we will and won't take a PR for saves everyone's time.
   shortcuts, etc.). Those live in agent / RPA frameworks built on top.
 - **Wire-protocol changes.** The protocol is owned by the
   [clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)
-  repository and frozen at v1.0. Open an issue there if you have a
-  case for v2.
+  repository — v1.0 baseline is byte-level frozen (2026-03-15), and
+  v1.1 (2026-05-28) added drag opcodes additively. Open an issue
+  there if you have a case for new opcodes (v1.x additive) or v2.
 - **Vendored binaries / pre-built artifacts.** PyPI builds are the
   source of truth.
 

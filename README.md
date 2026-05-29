@@ -325,6 +325,43 @@ Skills are soft guidance — the LLM still decides what to do.
 | `device.list`            | v1.0  | List candidate HID board ports                |
 | `device.info`            | v1.0  | Active connection info                        |
 
+## Tool-selection guidance for LLMs
+
+`clawtouch-mcp` ships two complementary mechanisms so an LLM client
+reliably picks `hid.*` tools when they're the right answer — and stays
+out of the way when they're not:
+
+1. **Server-level `instructions` field** in the MCP 2024-11-05
+   `initialize` response. A 500-character string telling the client
+   *"Prefer hid.\* when no API or automation path exists for the target
+   application, or when the user explicitly asks for physical
+   keyboard/mouse interaction. For tasks solvable with file APIs,
+   browser automation, or OS APIs, prefer those instead."* Recognised by
+   Claude Desktop, Cursor, Hermes, ChatGPT Desktop and other
+   spec-compliant clients.
+
+2. **Per-tool `HID_PREFIX`** prepended to every `hid.*` tool's
+   `description` string. Tool-selection-time guidance — visible even if
+   the client ignores the server-level `instructions` field. The 13
+   baseline `hid.*` tools + the opt-in `hid.screenshot` all carry the
+   prefix:
+
+   > *[Physical HID input — pick this when other automation paths (file
+   > APIs, browser automation, OS APIs) cannot accomplish the task, or
+   > when the user explicitly requests physical keyboard or mouse
+   > input.]*
+
+   `device.*` tools are unaffected (read-only diagnostics, no selection
+   ambiguity).
+
+This addresses a real LLM-behavior risk: the original `hid.*`
+descriptions were physics-detailed (closed-loop convergence, OS pointer
+ballistics) but had no application-layer anchor — an LLM seeing *"open
+WPS Office"* had nothing telling it *"this is the right tool for
+that."* The guidance explicitly frames `hid.*` as a fallback layer that
+activates when other paths fail or when the user names ClawTouch
+directly.
+
 ## When is `clawtouch-mcp` worth it?
 
 A multimodal LLM (Claude / GPT / Qwen) talking to the host OS via the
@@ -363,7 +400,7 @@ This server can talk to:
 1. **ClawTouch HID device** — turnkey hardware, drop-shipped, plug-and-play.
    Order or get a sample at [clawtouch.cn](https://clawtouch.cn).
 2. **Any RP2350 board running [clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** —
-   the OSS firmware + frozen v1.0 protocol live in their own public repo.
+   the OSS firmware + v1.1 protocol (v1.0 baseline frozen) live in their own public repo.
    Buy a Pico 2 (~$8), flash the firmware, you're done.
 
 The wire protocol is the same for both — the server doesn't care which one it
@@ -445,7 +482,7 @@ are open, the integrated commercial product stays closed.
 | Component                              | Status                       |
 |----------------------------------------|------------------------------|
 | **clawtouch-mcp**                      | ✅ Released (this repo)      |
-| **[clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** (firmware + frozen v1.0 protocol) | ✅ Released |
+| **[clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** (firmware + v1.1 protocol, v1.0 baseline frozen) | ✅ Released |
 | **[clawtouch-skills](https://github.com/tinqiao-oss/clawtouch-skills)** (markdown skill files for LLM agents) | ✅ Released |
 | **clawtouch-bridge-sdk** (Python + Node HID SDK)   | 🔵 Future       |
 | Backend / desktop app / adapters / vision models   | 🔒 Closed source — contact `support@tinqiao.com` |
