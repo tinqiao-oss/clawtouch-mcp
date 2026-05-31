@@ -19,12 +19,23 @@ pyserial (>= 3.5, required runtime dependency)
     available in the upstream LICENSE file or at
     https://opensource.org/licenses/BSD-3-Clause.
 
-mss (>= 9.0, optional dependency under `screenshot` extra)
+mss (>= 10.2, optional dependency under `screenshot` extra)
     Cross-platform multi-screen screenshot library.
     Copyright (c) 2013-present Mickaël Schoentgen
     Licensed under the MIT License.
     Upstream:  https://github.com/BoboTiG/python-mss
     mss is only installed when the user opts in via
+    `pip install clawtouch-mcp[screenshot]`; it is not bundled.
+
+Pillow (>= 10.0, optional dependency under `screenshot` extra)
+    Python Imaging Library (PIL fork) — image processing; used for
+    DPI-aware downscaling and JPEG encoding of screenshots.
+    Copyright (c) 2010-present Jeffrey A. Clark and contributors;
+    original PIL Copyright (c) 1997-2011 Secret Labs AB /
+    1995-2011 Fredrik Lundh.
+    Licensed under the MIT-CMU License (HPND-derived; SPDX: MIT-CMU).
+    Upstream:  https://github.com/python-pillow/Pillow
+    Pillow is only installed when the user opts in via
     `pip install clawtouch-mcp[screenshot]`; it is not bundled.
 
 

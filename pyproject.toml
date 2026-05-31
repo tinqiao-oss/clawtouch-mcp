@@ -87,3 +87,9 @@ include = [
 # `pip install -e ".[test]"`; a missing pytest-asyncio is caught loudly in
 # tests/conftest.py instead of silently skipping the async tests.
 asyncio_mode = "auto"
+# importlib import mode so the combined monorepo run
+# (`pytest oss/clawtouch-mcp/tests oss/clawtouch-hid/tests`) doesn't hit an
+# "import file mismatch" on the identically-named tests/__init__.py and
+# tests/test_protocol.py shared with clawtouch-hid. Single-package runs were
+# always fine; this also future-proofs against further same-name collisions.
+addopts = "--import-mode=importlib"

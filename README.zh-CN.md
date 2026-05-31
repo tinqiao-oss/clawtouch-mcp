@@ -325,7 +325,7 @@ Skill 是软性指导 —— LLM 仍然自己决定怎么走。
 | `hid.key_press`          | **v1.1**    | 按下键 (或快捷键) 不松开 — 适合"按住 shift 连点 N 次"多选场景 |
 | `hid.key_release`        | **v1.1**    | 松开键; 无参 = 释放所有按键 + 鼠标按钮         |
 | `hid.hold_key`           | **v1.1**    | 按下 → 等 `duration_ms` → 松开 (对应 CUA `hold_key`) |
-| `hid.screenshot`         | v1.0    | 主显示器 PNG 截屏 (默认关闭,需显式启用)       |
+| `hid.screenshot`         | v1.0    | 主显示器截屏 — 默认 JPEG q80,传 `format='png'` 取无损 (默认关闭,需显式启用) |
 | `device.list`            | v1.0    | 列出候选 HID 板串口                           |
 | `device.info`            | v1.0    | 当前连接信息                                  |
 

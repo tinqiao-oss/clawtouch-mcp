@@ -130,7 +130,7 @@ If you're looking for either of the above, this isn't the right tool.
 
 ```bash
 pip install clawtouch-mcp                 # minimal (serial only)
-pip install 'clawtouch-mcp[screenshot]'   # + mss for hid.screenshot tool
+pip install 'clawtouch-mcp[screenshot]'   # + mss + Pillow for hid.screenshot tool
 ```
 
 **Platform-specific setup guides** (recommended on first install):
@@ -390,7 +390,7 @@ Skills are soft guidance — the LLM still decides what to do.
 | `hid.key_press`          | **v1.1**  | Press a key (or shortcut) without releasing — useful for `hold shift while clicking N times` multi-select |
 | `hid.key_release`        | **v1.1**  | Release a previously-pressed key; no args = release all keys + mouse buttons |
 | `hid.hold_key`           | **v1.1**  | Press → wait `duration_ms` → release (matches CUA `hold_key`) |
-| `hid.screenshot`         | v1.0  | PNG screenshot of primary monitor (opt-in)    |
+| `hid.screenshot`         | v1.0  | Screenshot of primary monitor — JPEG q80 default, `format='png'` for lossless (opt-in) |
 | `device.list`            | v1.0  | List candidate HID board ports                |
 | `device.info`            | v1.0  | Active connection info                        |
 
