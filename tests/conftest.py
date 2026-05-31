@@ -22,9 +22,21 @@ should ``monkeypatch.delenv("CLAWTOUCH_FAKE_CURSOR", raising=False)``
 inside their body AND call ``cursor._clear_fake_cursor()`` if a
 prior ``MockBridge.mouse_move`` already seeded it.
 """
+import importlib.util as _ilu
+
 import pytest
 
 from clawtouch_mcp import cursor as _cursor_mod
+
+# Async tests (test_release_on_idle / test_unavailable_bridge) require
+# pytest-asyncio. Without it pytest silently SKIPS them, producing a
+# false-green "N passed, M skipped". Fail loudly at collection instead.
+# Install the test extra: pip install -e ".[test]"
+if _ilu.find_spec("pytest_asyncio") is None:  # pragma: no cover
+    raise RuntimeError(
+        "pytest-asyncio is not installed — the async tests would silently "
+        'skip. Install the test extra: pip install -e ".[test]"'
+    )
 
 
 @pytest.fixture(autouse=True)

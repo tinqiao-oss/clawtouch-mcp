@@ -317,9 +317,13 @@ manually in a terminal:
 Most common cause: `clawtouch-mcp` not in PATH — use the absolute path
 (`which` on Mac/Linux, `where` on Windows).
 
-**Pico not detected:** `clawtouch-mcp` falls back to mock mode if it
-can't find a Pico. Log line: *"no Pico device detected; falling back
-to MOCK"*. Pass explicit `--port` to override.
+**Pico not detected:** with no `--port` and no Pico found, the server does
+**not** silently mock — it mounts an `UnavailableBridge`, so every tool call
+returns a clear error and lazily retries the connection on the next call.
+Log line: *"no Pico device detected; using UnavailableBridge (will lazy-retry
+on every tool call). Pass --port COMx or --mock to override."* Pass `--port`
+to point at your device, or `--mock` for a hardware-free fake that just logs
+calls.
 
 **Coordinates clamped unexpectedly:** `--screen WxH` is doing its job.
 Either remove the flag (coordinates pass through unclamped) or raise

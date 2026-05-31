@@ -169,6 +169,12 @@ clawtouch-mcp --mock --log-level INFO
 * Coordinates **clamped** to `--screen WxH` so an agent can't move the mouse
   to bogus pixel positions.
 * Typed text **capped at 4096 chars** per call.
+* `hid.type` is for **ASCII / US-keyboard-layout text**. Control
+  characters (newline / tab / etc.) are **stripped** by default so an
+  agent's multi-line draft isn't accidentally submitted — send Enter with
+  `hid.key("enter")` and Tab with `hid.key("tab")`. Non-ASCII text (CJK,
+  emoji) is typed through the US layout and generally will **not** work;
+  drive the host IME or a clipboard path from your agent for those.
 * All operations **rate-limited** to `--ops-per-sec` (default 20). This
   counts *tool calls*, not individual HID reports — one call such as
   `hid.drag` or a long `hid.type` emits many reports, so the effective
@@ -346,7 +352,7 @@ for two reference implementations that route Anthropic / OpenAI agent
 actions through ClawTouch HID:
 
 - [Claude Computer Use → HID](examples/computer_use/claude_demo.py) —
-  `client.beta.messages.create` with the `computer_20250124` tool
+  `client.beta.messages.stream` with the `computer_20251124` tool
 - [OpenAI CUA → HID](examples/computer_use/openai_cua_demo.py) —
   Responses API with `computer-use-preview`
 

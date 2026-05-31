@@ -39,12 +39,16 @@ classifiers = [
 # Without it the screenshot tool falls back to raw PNG at physical resolution
 # which overflows MCP client text buffers on high-DPI displays.
 screenshot = ["mss>=10.2", "Pillow>=10.0"]
+# Test deps. pytest-asyncio is REQUIRED — the suite has async tests that
+# silently skip (false-green) without it. CI and CONTRIBUTING use this extra.
+test = ["pytest>=7", "pytest-asyncio>=0.23"]
 
 [project.urls]
 Homepage = "https://clawtouch.cn"
 Source = "https://github.com/tinqiao-oss/clawtouch-mcp"
 Issues = "https://github.com/tinqiao-oss/clawtouch-mcp/issues"
 Changelog = "https://github.com/tinqiao-oss/clawtouch-mcp/blob/master/CHANGELOG.md"
+Documentation = "https://github.com/tinqiao-oss/clawtouch-mcp/tree/master/docs"
 
 [project.scripts]
 clawtouch-mcp = "clawtouch_mcp.__main__:main"
@@ -76,3 +80,10 @@ include = [
     "TRADEMARKS.md",
     "pyproject.toml",
 ]
+
+[tool.pytest.ini_options]
+# Async tests use pytest-asyncio. "auto" runs every `async def test_` (the
+# suite also marks them explicitly). Install via the test extra —
+# `pip install -e ".[test]"`; a missing pytest-asyncio is caught loudly in
+# tests/conftest.py instead of silently skipping the async tests.
+asyncio_mode = "auto"

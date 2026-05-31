@@ -7,7 +7,7 @@ software-synthesized mouse/keyboard with real USB HID input.
 
 | Demo | Provider | File | API |
 |------|----------|------|-----|
-| Claude Computer Use | Anthropic | [claude_demo.py](claude_demo.py) | `client.beta.messages.stream` with `computer_20250124` tool |
+| Claude Computer Use | Anthropic | [claude_demo.py](claude_demo.py) | `client.beta.messages.stream` with `computer_20251124` tool |
 | OpenAI CUA | OpenAI | [openai_cua_demo.py](openai_cua_demo.py) | Responses API with `computer-use-preview` model |
 
 ## Why bother?

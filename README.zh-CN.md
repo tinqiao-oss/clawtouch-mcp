@@ -133,6 +133,11 @@ clawtouch-mcp --mock --log-level INFO
 
 * 坐标会被 `--screen WxH` **clamp 截断**,防止 agent 把鼠标移到屏幕外
 * 单次输入文本**最多 4096 字符**
+* `hid.type` 仅适合 **ASCII / US 键盘布局文本**。控制字符(换行 / Tab 等)
+  默认会被**剥除**(免得 agent 的多行草稿被误提交)—— 换行请用
+  `hid.key("enter")`、Tab 请用 `hid.key("tab")`。非 ASCII 文本(中文、emoji)
+  经 US 布局逐字符键入, 一般**打不出来**; 这类文本请在 agent 层走宿主
+  输入法 / 剪贴板方案。
 * 所有操作受 `--ops-per-sec` 速率限制(默认 20 次/秒)
 * `hid.screenshot` **默认禁用**,加 `--allow-screenshot` 才启用
 * `hid.release_all` 暴露给 agent 作为紧急停止手段
@@ -284,7 +289,7 @@ Hermes Agent、ChatGPT Desktop / Codex CLI、Cherry Studio、Trae IDE)
 把 Anthropic / OpenAI agent 的动作路由到 ClawTouch HID:
 
 - [Claude Computer Use → HID](examples/computer_use/claude_demo.py) ——
-  `client.beta.messages.create` 配合 `computer_20250124` 工具
+  `client.beta.messages.stream` 配合 `computer_20251124` 工具
 - [OpenAI CUA → HID](examples/computer_use/openai_cua_demo.py) ——
   Responses API + `computer-use-preview`
 

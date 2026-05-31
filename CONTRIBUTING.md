@@ -43,8 +43,7 @@ git clone https://github.com/tinqiao-oss/clawtouch-mcp
 cd clawtouch-mcp
 python -m venv .venv
 .venv/bin/activate                              # or .venv\Scripts\activate on Windows
-pip install -e ".[screenshot]"
-pip install pytest
+pip install -e ".[screenshot,test]"   # 'test' extra = pytest + pytest-asyncio
 pytest tests/ -q
 ```
 

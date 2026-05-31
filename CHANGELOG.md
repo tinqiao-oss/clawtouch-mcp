@@ -7,6 +7,25 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — Computer Use example + async test deps (codex cross-check)
+
+- **Anthropic Computer Use demo** now uses tool type `computer_20251124` +
+  beta `computer-use-2025-11-24` — the pairing that actually supports the
+  default `claude-opus-4-8` model. The old `computer_20250124` /
+  `computer-use-2025-01-24` is for Sonnet 4.5 / Haiku 4.5 / Opus 4.1 and
+  would return an API error on Opus 4.x. README references updated too.
+- **Async tests no longer silently skip.** Added a `test` extra (`pytest` +
+  `pytest-asyncio`), set `asyncio_mode = "auto"`, and made
+  `tests/conftest.py` fail loudly when `pytest-asyncio` is missing — the 15
+  `@pytest.mark.asyncio` tests used to skip (false-green) on a bare
+  `pip install pytest`. CONTRIBUTING + CI now use `.[screenshot,test]`.
+- **INTEGRATIONS.md** troubleshooting corrected: a missing Pico mounts an
+  `UnavailableBridge` (clear error + lazy retry), it does NOT silently fall
+  back to mock; the real log line and the `--mock` opt-in are documented.
+- README now documents that `hid.type` is ASCII / US-layout text and strips
+  control characters by default (use `hid.key("enter")` / `hid.key("tab")`).
+- Added a `Documentation` project URL.
+
 ### Added — tool-selection guidance for LLM clients
 
 Two complementary mechanisms ensure LLMs reliably pick `hid.*` tools

@@ -27,8 +27,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[screenshot]"
-          pip install pytest pytest-asyncio
+          pip install -e ".[screenshot,test]"
 
       - name: Run tests
         run: pytest tests/ -q
@@ -66,8 +65,7 @@ jobs:
         id: install
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[screenshot]"
-          pip install pytest pytest-asyncio
+          pip install -e ".[screenshot,test]"
           if [ -d _sister_hid ]; then
             pip install -e ./_sister_hid
             echo "sister_installed=1" >> "$GITHUB_OUTPUT"

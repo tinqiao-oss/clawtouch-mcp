@@ -264,24 +264,28 @@ async def run(task: str, bridge: Any, screen_w: int, screen_h: int,
         # - `thinking={"type":"adaptive"}`: lets Claude decide how much
         #   reasoning budget each step needs. Drop this field if your
         #   model variant doesn't expose extended thinking.
-        # - `model` and `betas` are coupled — the beta string changes
-        #   with each Computer Use model release. **Verify the current model
-        #   + beta in Anthropic's Computer Use docs before running**: model
-        #   IDs are retired over time and a stale pin returns 404. Override
-        #   with `--model`; the default tracks the current GA Opus.
+        # - `model`, the tool `type`, and `betas` are coupled and move
+        #   together with each Computer Use release. Current GA pairing:
+        #   Opus 4.8 (also 4.7 / 4.6 / 4.5) + `computer_20251124` +
+        #   `computer-use-2025-11-24`. The older `computer_20250124` /
+        #   `computer-use-2025-01-24` is for Sonnet 4.5 / Haiku 4.5 / Opus
+        #   4.1, NOT Opus 4.8 — mixing them returns an API error. **Verify
+        #   the current model/tool/beta matrix in Anthropic's Computer Use
+        #   docs before running.** Override the model with `--model` (keep it
+        #   within the same tool/beta generation).
         async with client.beta.messages.stream(
             model=model,
             max_tokens=16384,
             thinking={"type": "adaptive"},
             tools=[{
-                "type": "computer_20250124",
+                "type": "computer_20251124",
                 "name": "computer",
                 "display_width_px": screen_w,
                 "display_height_px": screen_h,
                 "display_number": 1,
             }],
             messages=messages,
-            betas=["computer-use-2025-01-24"],
+            betas=["computer-use-2025-11-24"],
         ) as stream:
             response = await stream.get_final_message()
 
