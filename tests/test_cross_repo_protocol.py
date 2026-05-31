@@ -158,10 +158,10 @@ class TestBuilderByteEquality:
         )
 
     def test_key_combo_byte_order_locked(self):
-        # KEY_PRESS is [keycode, modifiers]; KEY_COMBO is
-        # [modifiers, keycode] (intentional historical asymmetry
-        # documented in protocol-v1.md). If a future refactor swaps
-        # either, this byte-equality assertion catches it.
+        # All keyboard commands use [modifiers, keycode] since v1.1.1
+        # (KEY_PRESS/RELEASE were unified to match KEY_COMBO + the USB HID
+        # report layout). This cross-repo byte-equality assertion catches
+        # any future drift between the two protocol implementations.
         ctrl_shift = int(mcp_proto.ModifierKey.CTRL) | int(mcp_proto.ModifierKey.SHIFT)
         _both(
             lambda: mcp_proto.build_key_combo(modifiers=ctrl_shift, keycode=0x2E, seq_id=16),

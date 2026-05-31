@@ -71,10 +71,9 @@ class TestFrameRoundtrip:
         assert decoded.payload.decode("utf-8") == "hello 你好"
 
     def test_key_combo_byte_order(self):
-        """KEY_COMBO is [modifiers, keycode] — opposite of KEY_PRESS.
+        """KEY_COMBO is [modifiers, keycode] — same as KEY_PRESS/KEY_RELEASE (unified v1.1.1).
 
-        This quirk is documented and intentional; any reorder will silently
-        break the firmware.
+        Any reorder will silently break the firmware.
         """
         wire = build_key_combo(int(ModifierKey.CTRL) | int(ModifierKey.SHIFT),
                                 0x04, seq_id=1).serialize()
@@ -83,11 +82,11 @@ class TestFrameRoundtrip:
         assert decoded.payload[1] == 0x04
 
     def test_key_press_byte_order(self):
-        """KEY_PRESS is [keycode, modifiers] — opposite of KEY_COMBO."""
+        """KEY_PRESS is [modifiers, keycode] — unified with KEY_RELEASE/KEY_COMBO (v1.1.1)."""
         wire = build_key_press(0x05, int(ModifierKey.ALT), seq_id=1).serialize()
         decoded = HidCommand.deserialize(wire)
-        assert decoded.payload[0] == 0x05  # keycode first
-        assert decoded.payload[1] == 0x04  # ALT
+        assert decoded.payload[0] == 0x04  # modifiers first (ALT)
+        assert decoded.payload[1] == 0x05  # keycode
 
     def test_key_release_all_payload(self):
         """release-all is [0x00, 0x00] — firmware rejects empty payload with
@@ -98,12 +97,12 @@ class TestFrameRoundtrip:
         assert decoded.payload == b"\x00\x00"
 
     def test_key_release_specific(self):
-        """KEY_RELEASE byte order is [keycode, modifiers] — same as KEY_PRESS."""
+        """KEY_RELEASE byte order is [modifiers, keycode] — same as KEY_PRESS/KEY_COMBO (v1.1.1)."""
         wire = build_key_release(0x05, int(ModifierKey.ALT), seq_id=2).serialize()
         decoded = HidCommand.deserialize(wire)
         assert decoded.seq_id == 2
-        assert decoded.payload[0] == 0x05  # keycode first
-        assert decoded.payload[1] == 0x04  # ALT
+        assert decoded.payload[0] == 0x04  # modifiers first (ALT)
+        assert decoded.payload[1] == 0x05  # keycode
 
     def test_scroll_signed_delta(self):
         """delta is signed int16 — negative scroll up."""

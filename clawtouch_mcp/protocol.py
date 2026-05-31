@@ -20,7 +20,7 @@ import struct
 from dataclasses import dataclass
 from enum import IntEnum
 
-PROTOCOL_VERSION = "1.1.0"
+PROTOCOL_VERSION = "1.1.1"
 MAX_PAYLOAD_LEN = 1024
 FRAME_HEADER = 0xAA
 
@@ -163,15 +163,16 @@ def build_mouse_button_up(button: MouseButton, *, seq_id: int = 0) -> HidCommand
 
 
 def build_key_press(keycode: int, modifiers: int = 0, *, seq_id: int = 0) -> HidCommand:
-    payload = struct.pack("BB", int(keycode), int(modifiers))
+    payload = struct.pack("BB", int(modifiers), int(keycode))
     return HidCommand(CommandType.KEY_PRESS, payload, seq_id)
 
 
 def build_key_release(keycode: int = 0, modifiers: int = 0, *, seq_id: int = 0) -> HidCommand:
-    """KEY_RELEASE payload is [keycode, modifiers] — same byte order as
-    KEY_PRESS. Both zero (default) = release-all (firmware releases every
-    held key/button). Pass explicit keycode/modifiers to release one."""
-    payload = struct.pack("BB", int(keycode), int(modifiers))
+    """KEY_RELEASE payload is [modifiers, keycode] — same byte order as
+    KEY_PRESS and KEY_COMBO (unified v1.1.1). Both zero (default) =
+    release-all (firmware releases every held key/button). Pass explicit
+    keycode/modifiers to release one."""
+    payload = struct.pack("BB", int(modifiers), int(keycode))
     return HidCommand(CommandType.KEY_RELEASE, payload, seq_id)
 
 

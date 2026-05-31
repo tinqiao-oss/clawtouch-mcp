@@ -34,6 +34,17 @@ seeing *"open WPS Office"* had nothing in the description telling it
 `hid.*` as a fallback layer that activates when other paths fail or
 when the user names ClawTouch / physical input directly.
 
+## [1.1.1] - 2026-05-29
+
+### Changed (BREAKING vs <= 1.1.0)
+
+- Unified keyboard payload byte order to `[modifiers, keycode]`. KEY_PRESS (0x20) and KEY_RELEASE (0x21) previously used `[keycode, modifiers]`; they now match KEY_COMBO (0x23) and the USB HID keyboard report layout (modifier byte first). Breaking wire change for KEY_PRESS/KEY_RELEASE vs firmware <= 1.1.0 — flash firmware 1.1.1 in lockstep. Pre-publish correction; the protocol has not been publicly released.
+
+> **Note:** this is a *protocol-layer* version (`clawtouch-hid-protocol` 1.1.1).
+> The `clawtouch-mcp` package version is unchanged at 0.3.0 — no MCP tool
+> surface or argument changed; only the wire byte order of the keyboard
+> frames built by `clawtouch_mcp.protocol` was unified.
+
 ## [0.3.0] — 2026-05-28 — Drag + hold gestures (protocol v1.1, Anthropic CUA tool-set parity)
 
 ### Added — six new MCP tools matching Anthropic Computer Use action set
@@ -826,7 +837,9 @@ and packaging metadata are now stricter:
   so a single key can be released too (backwards-compatible — bridge
   callers using `release_all()` keep working unchanged).
 - Two new round-trip tests in `tests/test_protocol.py` lock the
-  `[keycode, modifiers]` byte order so this can't silently regress.
+  keyboard-payload byte order so it can't silently regress. (Historical
+  note: at 0.2.4 that order was `keycode`-first; it was later unified to
+  `[modifiers, keycode]` in protocol 1.1.1 — see the [1.1.1] entry.)
 
 ### Changed
 
