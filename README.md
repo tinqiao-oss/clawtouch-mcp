@@ -425,7 +425,7 @@ This server can talk to:
 1. **ClawTouch HID device** — turnkey hardware, drop-shipped, plug-and-play.
    Order or get a sample at [clawtouch.cn](https://clawtouch.cn).
 2. **Any RP2350 board running [clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** —
-   the OSS firmware + v1.1 protocol (v1.0 baseline frozen) live in their own public repo.
+   the OSS firmware + protocol module (wire epoch 1, frozen envelope) live in their own public repo.
    Buy a Pico 2 (~$8), flash the firmware, you're done.
 
 The wire protocol is the same for both — the server doesn't care which one it
@@ -546,7 +546,7 @@ are open, the integrated commercial product stays closed.
 | Component                              | Status                       |
 |----------------------------------------|------------------------------|
 | **clawtouch-mcp**                      | ✅ Released (this repo)      |
-| **[clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** (firmware + v1.1 protocol, v1.0 baseline frozen) | ✅ Released |
+| **[clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** (firmware + protocol module, wire epoch 1) | ✅ Released |
 | **[clawtouch-skills](https://github.com/tinqiao-oss/clawtouch-skills)** (markdown skill files for LLM agents) | ✅ Released |
 | **clawtouch-bridge-sdk** (Python + Node HID SDK)   | 🔵 Future       |
 | Backend / desktop app / adapters / vision models   | 🔒 Closed source — contact `support@tinqiao.com` |
