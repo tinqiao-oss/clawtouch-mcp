@@ -107,6 +107,13 @@ We support these scenarios:
   target (visual feedback needs a separate path — HDMI capture / VNC /
   API checkpoints / blind operation; see "Deployment modes" above).
 
+For standard desktop apps (browser, IDE, office suites) the
+software-only path (multimodal LLM + OS-level synthetic input) is
+already enough — this hardware is just an extra path there, not a
+requirement. Its irreplaceable value is the cases above: the target
+can't host an agent, needs the OS to see a genuine physical HID
+device, or has to be driven across machines / in physical isolation.
+
 We do **not** support, document, or assist with:
 
 - **Mass account creation / multi-account operations** on consumer
@@ -118,45 +125,6 @@ We do **not** support, document, or assist with:
   frameworks built on top of this primitive layer.
 
 If you're looking for either of the above, this isn't the right tool.
-
-## Content generation — out of scope
-
-`clawtouch-mcp` exposes hardware HID actions (mouse / keyboard / scroll
-/ key combos / screenshot) as MCP tools. It does **not** generate,
-synthesize, recommend, or otherwise produce text, image, audio, or
-video content. The calling LLM agent is the content-generating party
-and is solely responsible for any generated content and for
-compliance with any content-labeling or content-moderation
-obligations applicable in its jurisdiction (e.g. PRC *AI Generated
-Content Labeling Measure* effective 2025-09-01).
-
-## Acceptable use
-
-This server is built for legitimate uses — accessibility, RPA, test
-automation, cross-machine workflows where the target machine must
-stay clean. This project does **not** support, document, or assist
-with use cases that:
-
-- Bypass, evade, or interfere with any target platform's anti-fraud,
-  anti-abuse, rate-limiting, or risk-control measures.
-- Operate accounts the user does not lawfully own or have explicit
-  authorization to operate.
-- Are prohibited by the target application's Terms of Service in
-  the user's jurisdiction.
-- Violate applicable law — including, but not limited to, PRC
-  *Anti-Unfair Competition Law* Art. 13 (the Internet sector
-  specific provision; promulgated 2025-06-27, effective
-  2025-10-15) covering improper means — including circumventing
-  technical management measures — to acquire or use another
-  operator's data; *Personal Information Protection Law*;
-  *Cybersecurity Law*; and equivalent laws in other jurisdictions.
-
-These statements describe the scope of our maintainer support and
-documentation — they are **not** additional restrictions on the
-MIT License, which continues to govern all use, modification, and
-redistribution of the source code. Users are independently
-responsible for evaluating their specific use case against
-applicable laws and the target platform's ToS.
 
 ## Install
 
@@ -195,6 +163,15 @@ clawtouch-mcp --mock --log-level INFO
 > hard-coded `1920x1080`. Use `device.info` from your MCP client to
 > see what was detected (`screen.source` is `"detected"` /
 > `"explicit"` / `"unset"`).
+
+## Runtime safety limits
+
+* Coordinates **clamped** to `--screen WxH` so an agent can't move the mouse
+  to bogus pixel positions.
+* Typed text **capped at 4096 chars** per call.
+* All operations **rate-limited** to `--ops-per-sec` (default 20).
+* `hid.screenshot` is **disabled unless** you pass `--allow-screenshot`.
+* `hid.release_all` exposed for use as a panic-stop tool from the agent.
 
 ## See it in action
 
@@ -362,37 +339,6 @@ that."* The guidance explicitly frames `hid.*` as a fallback layer that
 activates when other paths fail or when the user names ClawTouch
 directly.
 
-## When is `clawtouch-mcp` worth it?
-
-A multimodal LLM (Claude / GPT / Qwen) talking to the host OS via the
-built-in synthetic-input APIs already covers many desktop apps. The
-question is when adding a USB HID device on top is worth the
-hardware. Roughly:
-
-| Scenario | Multimodal LLM via OS-level synthetic input | + `clawtouch-mcp` (USB HID) | Marginal value |
-|---|---|---|---|
-| Standard desktop apps (browser, IDE, mainstream office suites) | Works well | Same | Marginal — alternative path only |
-| Drag-heavy creative / design software (Figma-class, image editors, video editors) | Limited without a drag primitive | v1.1 `hid.drag` covers it fully | Notable improvement |
-| Apps that validate input source and reject OS-level injected events | Restricted | Routes through the standard HID driver stack — no synthetic-input distinguisher fires | Often the only viable path |
-| Cross-machine QA · kiosk · industrial-PC / legacy-OS automation | Target machine can't host an agent | USB acts as a physical input bridge | Only viable path |
-| Air-gapped / network-isolated systems | No API reachable | USB is a separate channel | Only viable path |
-| Mobile-device QA racks (Android / iOS real-device farms) | Desktop agent can't reach the phone | Pico 2 W variant bridges (companion firmware) | Only viable path |
-
-If your target is a standard desktop app on the same machine your
-agent runs on, the software-only path is simpler and you don't need
-this. If your target is one of the bottom four rows, a software-only
-path may not work at all and a USB HID device is the realistic
-option.
-
-## Safety
-
-* Coordinates **clamped** to `--screen WxH` so an agent can't move the mouse
-  to bogus pixel positions.
-* Typed text **capped at 4096 chars** per call.
-* All operations **rate-limited** to `--ops-per-sec` (default 20).
-* `hid.screenshot` is **disabled unless** you pass `--allow-screenshot`.
-* `hid.release_all` exposed for use as a panic-stop tool from the agent.
-
 ## Hardware
 
 This server can talk to:
@@ -435,6 +381,45 @@ Not yet. `clawtouch-bridge-sdk` (Python + Node) is planned — see roadmap.
 This MCP server is the bottom HID primitive layer. The desktop product
 is a separate closed-source agent on top of the same hardware; contact
 `support@tinqiao.com` for details.
+
+## Content generation — out of scope
+
+`clawtouch-mcp` exposes hardware HID actions (mouse / keyboard / scroll
+/ key combos / screenshot) as MCP tools. It does **not** generate,
+synthesize, recommend, or otherwise produce text, image, audio, or
+video content. The calling LLM agent is the content-generating party
+and is solely responsible for any generated content and for
+compliance with any content-labeling or content-moderation
+obligations applicable in its jurisdiction (e.g. PRC *AI Generated
+Content Labeling Measure* effective 2025-09-01).
+
+## Acceptable use
+
+This server is built for legitimate uses — accessibility, RPA, test
+automation, cross-machine workflows where the target machine must
+stay clean. This project does **not** support, document, or assist
+with use cases that:
+
+- Bypass, evade, or interfere with any target platform's anti-fraud,
+  anti-abuse, rate-limiting, or risk-control measures.
+- Operate accounts the user does not lawfully own or have explicit
+  authorization to operate.
+- Are prohibited by the target application's Terms of Service in
+  the user's jurisdiction.
+- Violate applicable law — including, but not limited to, PRC
+  *Anti-Unfair Competition Law* Art. 13 (the Internet sector
+  specific provision; promulgated 2025-06-27, effective
+  2025-10-15) covering improper means — including circumventing
+  technical management measures — to acquire or use another
+  operator's data; *Personal Information Protection Law*;
+  *Cybersecurity Law*; and equivalent laws in other jurisdictions.
+
+These statements describe the scope of our maintainer support and
+documentation — they are **not** additional restrictions on the
+MIT License, which continues to govern all use, modification, and
+redistribution of the source code. Users are independently
+responsible for evaluating their specific use case against
+applicable laws and the target platform's ToS.
 
 ## Related work
 
