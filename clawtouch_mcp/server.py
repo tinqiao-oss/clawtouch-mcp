@@ -1073,6 +1073,22 @@ class ClawTouchMcpServer:
             "x": target_x, "y": target_y,
         }
 
+    @staticmethod
+    def _move_failed(result: dict) -> bool:
+        """True when a move-helper result represents a failure that must
+        stop the dependent action (click / drag / keypress).
+
+        A move "failed" if it carries an ``error`` (OS cursor query
+        unavailable) or an explicit ``ok is False`` — the latter is set
+        by ``_converge_to_target`` when the closed-loop give up (cursor
+        never reached the target within tolerance) and by the stepped
+        relative move when a sub-report was not ACKed. Composed tools use
+        this to avoid clicking / dragging / pressing at a location we
+        never confirmed reaching, and to avoid reporting success for a
+        gesture whose positioning step silently failed.
+        """
+        return "error" in result or result.get("ok") is False
+
     async def _converge_to_target(
         self, target_x: int, target_y: int, *, max_iters: int,
     ) -> dict[str, Any]:
@@ -1082,13 +1098,16 @@ class ClawTouchMcpServer:
 
         Returns:
             {"ok": True,  "x": actual, "y": actual, "target_x", "target_y",
-             "iters": int, "converged": True}   on success / short-circuit;
+             "iters": int, "converged": True,
+             "move_acked": bool}                 on success / short-circuit;
             {"ok": False, "x": actual, "y": actual, "target_x", "target_y",
              "residual_x", "residual_y", "iters": max_iters,
-             "converged": False, "hint": ...}   when residual stays > tol;
+             "converged": False, "move_acked": bool,
+             "hint": ...}                        when residual stays > tol;
             {"error": ...}                       when OS cursor query fails.
         """
         landed: tuple[int, int] | None = None
+        all_acked = True
         for i in range(max_iters):
             cur = get_cursor_position()
             if cur is None:
@@ -1102,8 +1121,16 @@ class ClawTouchMcpServer:
                     "target_x": target_x, "target_y": target_y,
                     "iters": i,
                     "converged": True,
+                    # AND of every in-loop move's ACK so far. The cursor is
+                    # ground truth (we converged), so this is purely a
+                    # diagnostic: True normally; False means a move landed
+                    # the cursor on target despite the firmware not ACKing
+                    # it — reported consistently with the non-converged path
+                    # rather than omitted on success.
+                    "move_acked": all_acked,
                 }
-            await self.bridge.mouse_move(dx, dy, relative=True)
+            move_acked = await self.bridge.mouse_move(dx, dy, relative=True)
+            all_acked = all_acked and bool(move_acked)
             landed = (cur[0] + dx, cur[1] + dy)
             if i < max_iters - 1:
                 await asyncio.sleep(MOVE_SETTLE_MS / 1000.0)
@@ -1116,6 +1143,10 @@ class ClawTouchMcpServer:
             "residual_y": target_y - actual[1],
             "iters": max_iters,
             "converged": False,
+            # False ⇒ at least one in-loop mouse_move was not ACKed by the
+            # firmware; distinguishes "bridge dropped commands" from
+            # "commands landed but the cursor drifted" for the agent.
+            "move_acked": all_acked,
             "hint": (
                 "cursor did not converge to target within tolerance; "
                 "possible causes: competing input device (trackpad / "
@@ -1182,6 +1213,7 @@ class ClawTouchMcpServer:
         # firmware is a Boot Mouse: every delta we send lands.
         accumulated_dx = 0
         accumulated_dy = 0
+        slide_acked = True
         for i in range(1, steps + 1):
             t = i / steps
             target_dx = round(total_dx * t)
@@ -1189,7 +1221,8 @@ class ClawTouchMcpServer:
             step_dx = target_dx - accumulated_dx
             step_dy = target_dy - accumulated_dy
             if step_dx or step_dy:
-                await self.bridge.mouse_move(step_dx, step_dy, relative=True)
+                step_acked = await self.bridge.mouse_move(step_dx, step_dy, relative=True)
+                slide_acked = slide_acked and bool(step_acked)
             accumulated_dx = target_dx
             accumulated_dy = target_dy
             if i < steps:
@@ -1197,6 +1230,10 @@ class ClawTouchMcpServer:
         # Slide done — closed-loop converge. 3 iters is enough here
         # because the slide already landed within tens of pixels;
         # snap-mode budgets 4 iters for cold-start moves up to ~1500 px.
+        # ``ok`` comes from the converge stage (cursor-verified ground
+        # truth): if the slide dropped a report but converge still pulled
+        # the cursor onto target, the move genuinely succeeded — we record
+        # ``slide_acked`` for diagnostics without masking that success.
         result = await self._converge_to_target(
             target_x, target_y, max_iters=MOVE_MAX_ITERS - 1,
         )
@@ -1205,17 +1242,25 @@ class ClawTouchMcpServer:
         result["stepped"] = True
         result["steps"] = steps
         result["move_ms"] = move_ms
+        result["slide_acked"] = slide_acked
         return result
 
     async def _stepped_relative_move(
         self, dx: int, dy: int, move_ms: int,
     ) -> dict[str, Any]:
         """Same path stepping for ``relative=true`` callers — chunks
-        the agent-supplied (dx, dy) into ~10 ms HID reports."""
+        the agent-supplied (dx, dy) into ~10 ms HID reports.
+
+        Relative moves have no OS-cursor feedback loop (the agent owns the
+        deltas), so the firmware ACK is the only success signal we have:
+        ``ok`` is the AND of every emitted report's ACK. A dropped report
+        means the gesture did not fully land, and callers must not treat
+        it as success."""
         steps = self._plan_step_count(move_ms)
         step_ms = move_ms / steps
         accumulated_dx = 0
         accumulated_dy = 0
+        all_acked = True
         for i in range(1, steps + 1):
             t = i / steps
             target_dx = round(dx * t)
@@ -1223,12 +1268,14 @@ class ClawTouchMcpServer:
             step_dx = target_dx - accumulated_dx
             step_dy = target_dy - accumulated_dy
             if step_dx or step_dy:
-                await self.bridge.mouse_move(step_dx, step_dy, relative=True)
+                step_acked = await self.bridge.mouse_move(step_dx, step_dy, relative=True)
+                all_acked = all_acked and bool(step_acked)
             accumulated_dx = target_dx
             accumulated_dy = target_dy
             if i < steps:
                 await asyncio.sleep(step_ms / 1000)
         return {
+            "ok": all_acked,
             "dx": dx, "dy": dy,
             "stepped": True, "steps": steps, "move_ms": move_ms,
             "relative": True,
@@ -1239,28 +1286,35 @@ class ClawTouchMcpServer:
         relative = bool(kw.get("relative", False))
         move_ms = max(0, min(MAX_MOVE_MS, int(kw.get("move_ms") or 0)))
         if relative:
-            # Agent wants raw relative move — skip the cursor query.
+            # Agent wants raw relative move — skip the cursor query. The
+            # firmware ACK is the only signal that the move landed.
             dx, dy = int(kw["x"]), int(kw["y"])
             if move_ms > 0:
                 result = await self._stepped_relative_move(dx, dy, move_ms)
             else:
-                await self.bridge.mouse_move(dx, dy, relative=True)
-                result: dict[str, Any] = {"dx": dx, "dy": dy, "relative": True}
+                move_ok = await self.bridge.mouse_move(dx, dy, relative=True)
+                result: dict[str, Any] = {
+                    "ok": move_ok, "dx": dx, "dy": dy, "relative": True,
+                }
         else:
             if move_ms > 0:
-                moved = await self._stepped_move_to_absolute(
+                result = await self._stepped_move_to_absolute(
                     kw["x"], kw["y"], move_ms,
                 )
             else:
-                moved = await self._move_to_absolute(kw["x"], kw["y"])
-            if "error" in moved:
-                return moved
-            result = moved
-        ok = await self.bridge.mouse_click(
+                result = await self._move_to_absolute(kw["x"], kw["y"])
+        # Positioning failed (cursor unavailable / no convergence / a move
+        # report was not ACKed). Do NOT click — we'd be clicking somewhere
+        # we never confirmed reaching. Surface the move failure unchanged
+        # so the agent sees the reason (and so a click ACK can't mask it).
+        if self._move_failed(result):
+            return result
+        click_ok = await self.bridge.mouse_click(
             button=kw.get("button", "left"),
             double=bool(kw.get("double", False)),
         )
-        result["ok"] = ok
+        result["ok"] = click_ok
+        result["clicked"] = click_ok
         return result
 
     async def _tool_move(self, **kw) -> dict:
@@ -1270,8 +1324,9 @@ class ClawTouchMcpServer:
         if relative:
             x, y = int(kw["x"]), int(kw["y"])
             if move_ms > 0:
+                # Keep the move's real ``ok`` (AND of every report's ACK) —
+                # don't override it with an unconditional True.
                 result = await self._stepped_relative_move(x, y, move_ms)
-                result["ok"] = True
                 result.update({"x": x, "y": y})
                 return result
             ok = await self.bridge.mouse_move(x, y, relative=True)
@@ -1296,10 +1351,14 @@ class ClawTouchMcpServer:
             )
         else:
             moved = await self._move_to_absolute(kw["x"], kw["y"])
-        if "error" in moved:
+        # If the move failed (cursor unavailable / no convergence / dropped
+        # report) report that — don't idle, and don't claim ``ok: True`` for
+        # a hover that never reached the target.
+        if self._move_failed(moved):
             return moved
         await asyncio.sleep(max(0, min(10_000, int(kw.get("duration_ms", 500)))) / 1000.0)
-        moved["ok"] = True
+        # ``moved`` already carries ``ok: True`` from the cursor-verified
+        # converge stage; surface it as-is.
         return moved
 
     async def _tool_type(self, **kw) -> dict:
@@ -1379,10 +1438,14 @@ class ClawTouchMcpServer:
     async def _tool_drag(self, **kw) -> dict:
         """Composed drag: move-to-source → press → glided-move-to-dest → release.
 
-        Press/release are unconditional in the success path, but if the
-        glided move errors out mid-drag we still emit a final release so
-        the firmware doesn't leave a button stuck down. The error message
-        bubbles up to the caller.
+        Every sub-call's ACK is checked. If the move to the *source* fails
+        (cursor unavailable / no convergence / a move report not ACKed) we
+        abort BEFORE pressing — pressing and dragging from an unconfirmed
+        position is worse than not dragging at all. Once the button is
+        down, the press / drag / release ACKs are AND-ed into the final
+        ``ok``, and the release runs in ``finally`` so a mid-drag exception
+        can't leave the button stuck. A successful release never *upgrades*
+        a failed drag back to ``ok: True``.
         """
         self.rate.check()
         button = str(kw.get("button", "left"))
@@ -1392,13 +1455,28 @@ class ClawTouchMcpServer:
         to_x, to_y = int(kw["to_x"]), int(kw["to_y"])
 
         # Step 1: move to source (absolute or relative; snap, no glide here —
-        # the glide budget is for the held-button move).
+        # the glide budget is for the held-button move). Abort before
+        # pressing if the source move did not land.
         if relative:
-            await self.bridge.mouse_move(from_x, from_y, relative=True)
+            src_ok = await self.bridge.mouse_move(from_x, from_y, relative=True)
+            if not src_ok:
+                return {
+                    "ok": False,
+                    "stage": "move_to_source",
+                    "button": button,
+                    "relative": True,
+                    "from_x": from_x, "from_y": from_y,
+                    "hint": (
+                        "drag aborted: the move to the source point was not "
+                        "ACKed by the firmware, so the button was never "
+                        "pressed. Inspect the bridge diagnostic and retry."
+                    ),
+                }
             src_info = {"from_x": from_x, "from_y": from_y, "relative": True}
         else:
             moved = await self._move_to_absolute(from_x, from_y)
-            if "error" in moved:
+            if self._move_failed(moved):
+                moved.setdefault("stage", "move_to_source")
                 return moved
             src_info = {
                 "from_x": moved.get("x", from_x),
@@ -1409,25 +1487,26 @@ class ClawTouchMcpServer:
             }
 
         # Step 2: press the button.
-        await self.bridge.mouse_button_down(button=button)
+        down_ok = await self.bridge.mouse_button_down(button=button)
 
         # Step 3: glided move to destination — with try/finally so a
         # mid-drag exception still releases the button (button-stuck
         # would be a worse user experience than the partial drag).
-        dest_info: dict[str, Any]
+        dest_info: dict[str, Any] = {}
+        dest_ok = True
         try:
             if relative:
                 if move_ms > 0:
                     dest_info = await self._stepped_relative_move(to_x, to_y, move_ms)
                 else:
-                    await self.bridge.mouse_move(to_x, to_y, relative=True)
-                    dest_info = {"to_x": to_x, "to_y": to_y, "relative": True}
+                    m_ok = await self.bridge.mouse_move(to_x, to_y, relative=True)
+                    dest_info = {"to_x": to_x, "to_y": to_y, "relative": True, "ok": m_ok}
             else:
                 if move_ms > 0:
                     moved = await self._stepped_move_to_absolute(to_x, to_y, move_ms)
                 else:
                     moved = await self._move_to_absolute(to_x, to_y)
-                if "error" in moved:
+                if self._move_failed(moved):
                     dest_info = moved
                 else:
                     dest_info = {
@@ -1437,18 +1516,25 @@ class ClawTouchMcpServer:
                         "to_target_y": to_y,
                         "to_converged": moved.get("converged"),
                     }
+            dest_ok = not self._move_failed(dest_info)
         finally:
             # Step 4: release. Idempotent on the firmware side — safe to
             # call even if step 3 raised before any movement.
-            await self.bridge.mouse_button_up(button=button)
+            up_ok = await self.bridge.mouse_button_up(button=button)
 
-        return {
-            "ok": "error" not in dest_info,
+        # Combine all sub-call ACKs. ``ok`` is set LAST so a stray ``ok``
+        # spread in from ``dest_info`` (e.g. stepped-relative result) can't
+        # override the authoritative combined verdict.
+        out: dict[str, Any] = {
             "button": button,
             "move_ms": move_ms,
+            "down_acked": bool(down_ok),
+            "up_acked": bool(up_ok),
             **src_info,
             **dest_info,
         }
+        out["ok"] = bool(down_ok) and bool(dest_ok) and bool(up_ok)
+        return out
 
     async def _tool_key_press(self, **kw) -> dict:
         self.rate.check()
@@ -1468,22 +1554,30 @@ class ClawTouchMcpServer:
     async def _tool_hold_key(self, **kw) -> dict:
         """Composed hold: press → sleep → release. try/finally on release
         so a mid-hold exception still releases the key (stuck modifier
-        would corrupt subsequent input on the host)."""
+        would corrupt subsequent input on the host).
+
+        Both the press and the release ACKs are checked: ``ok`` is True
+        only when both landed. A successful release never masks a failed
+        press (an un-pressed key reported as held would mislead the agent).
+        """
         self.rate.check()
         key = str(kw["key"])
         duration_ms = max(1, min(10_000, int(kw.get("duration_ms", 500))))
         modifiers = [m.lower() for m in (kw.get("modifiers") or [])]
         self._maybe_warn_self_interrupt(modifiers, key)
-        await self.bridge.key_press(key, modifiers)
+        press_ok = await self.bridge.key_press(key, modifiers)
+        release_ok = False
         try:
             await asyncio.sleep(duration_ms / 1000.0)
         finally:
-            await self.bridge.key_release(key, modifiers)
+            release_ok = await self.bridge.key_release(key, modifiers)
         return {
-            "ok": True,
+            "ok": bool(press_ok) and bool(release_ok),
             "key": key,
             "modifiers": modifiers,
             "duration_ms": duration_ms,
+            "press_acked": bool(press_ok),
+            "release_acked": bool(release_ok),
         }
 
     async def _tool_device_list(self, **_kw) -> dict:

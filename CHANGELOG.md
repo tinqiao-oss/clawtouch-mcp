@@ -7,6 +7,45 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — composed tools now propagate HID sub-call failures (no false success)
+
+The composed tools (`hid.click`, `hid.hover`, `hid.drag`, `hid.hold_key`)
+and the stepped-move helpers issue several bridge sub-calls in sequence.
+Several of them only checked for an `error` and ignored an `ok: False`
+ACK from an underlying move / press / release — so a move the firmware
+never acknowledged (timeout / seq mismatch / firmware ERROR / parse error)
+could be followed by a click, drag, or keypress anyway, and the tool
+returned success. For an agent driving real hardware that is the worst
+failure mode: it builds on a click that never landed.
+
+Now every sub-call's ACK is honoured:
+
+- **`hid.click`** does not click when the positioning move fails
+  (cursor unavailable / no convergence / a relative-move report not ACKed),
+  and surfaces the move failure unchanged; a failed click ACK is reflected
+  in `ok` (new `clicked` field) and never masked.
+- **`hid.hover`** reports the move failure instead of claiming `ok: True`
+  for a hover that never reached the target.
+- **`hid.drag`** aborts *before pressing* if the move to the source point
+  fails (no press from an unconfirmed position), and AND-s the
+  press / drag-move / release ACKs into the final `ok` (new `down_acked` /
+  `up_acked` diagnostics). The release still runs in `finally`, but a
+  successful release no longer upgrades a failed drag back to success.
+- **`hid.hold_key`** AND-s the press and release ACKs (new `press_acked` /
+  `release_acked`); the release still runs in `finally`.
+- **`_stepped_relative_move`** now returns `ok` = AND of every emitted
+  report's ACK; **`hid.move` (relative + `move_ms`)** keeps that real `ok`
+  instead of the previous unconditional `True`.
+- Absolute moves keep using closed-loop convergence (OS cursor = ground
+  truth) for `ok`; a dropped ACK whose cursor still reached the target is
+  recorded as a `move_acked` / `slide_acked: False` diagnostic without
+  blocking the verified-on-target action.
+
+New regression suite `tests/test_composed_tool_failure_propagation.py`
+(20 tests) covers each sub-call failure for click / hover / drag /
+hold_key / stepped move, the mid-gesture cleanup paths, and the happy
+paths. 217 → 237 tests.
+
 ### Added — self-interrupt heads-up (cmd+q / alt+f4)
 
 Real USB HID has no app-level addressing — keystrokes go to whatever
