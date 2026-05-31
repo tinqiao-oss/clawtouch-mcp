@@ -17,7 +17,6 @@ USAGE
 
 NOT INCLUDED
     - Multi-machine setups (screenshot path stays local)
-    - Drag (current bridge has no separate button-down/up)
     - `cursor_position` (HID is fire-and-forget)
     - Production-grade safety rails — see README.md
 """
@@ -199,11 +198,36 @@ async def execute_action(
         await bridge.mouse_scroll(delta)
         return f"scrolled {direction} {amount}"
 
+    if action in ("left_mouse_down", "left_mouse_up"):
+        # v1.1 button-hold primitives (CUA left_mouse_down / left_mouse_up).
+        if "coordinate" in params:
+            x, y = params["coordinate"]
+            await _move_to_absolute(bridge, max(0, min(x, screen_w - 1)),
+                                    max(0, min(y, screen_h - 1)))
+        if action == "left_mouse_down":
+            await bridge.mouse_button_down(button="left")
+        else:
+            await bridge.mouse_button_up(button="left")
+        return action
+
     if action == "left_click_drag":
-        # Current bridge has no separate button-down/up — best-effort
-        # approximation: move to start, click, move to end, click.
-        # For real drag, the firmware needs button-hold primitives.
-        return "drag not supported by current firmware"
+        # Real drag via the v1.1 button-hold primitives: press at the
+        # start, glide to the end while held, release. Mirrors the MCP
+        # server's hid.drag (server._tool_drag); the try/finally
+        # guarantees the button is released even if the move raises.
+        end = params["coordinate"]
+        ex = max(0, min(end[0], screen_w - 1))
+        ey = max(0, min(end[1], screen_h - 1))
+        start = params.get("start_coordinate")
+        if start is not None:
+            await _move_to_absolute(bridge, max(0, min(start[0], screen_w - 1)),
+                                    max(0, min(start[1], screen_h - 1)))
+        await bridge.mouse_button_down(button="left")
+        try:
+            await _move_to_absolute(bridge, ex, ey)
+        finally:
+            await bridge.mouse_button_up(button="left")
+        return "left_click_drag"
 
     if action == "cursor_position":
         # HID is fire-and-forget — we don't track cursor state

@@ -34,7 +34,21 @@ seeing *"open WPS Office"* had nothing in the description telling it
 `hid.*` as a fallback layer that activates when other paths fail or
 when the user names ClawTouch / physical input directly.
 
-## [1.1.1] - 2026-05-29
+### Fixed — Computer Use examples
+
+- `examples/computer_use/claude_demo.py` and `openai_cua_demo.py` no
+  longer report *"drag not supported by current firmware"*. They now
+  compose a real drag from the v1.1 button-hold primitives
+  (`bridge.mouse_button_down` → glided `mouse_move` → `bridge.mouse_button_up`,
+  with `try/finally` so the button is always released) and handle the
+  `left_mouse_down` / `left_mouse_up` actions. The `hid.drag` tool and
+  the root README's tool table already advertised v1.1 drag; only these
+  two reference scripts were stale.
+
+## 1.1.1 (protocol layer — package stays 0.3.0) - 2026-05-29
+
+<!-- Not a package release / git tag — intentionally unbracketed so it is
+     not a dangling compare-link. See the Note below. -->
 
 ### Changed (BREAKING vs <= 1.1.0)
 
@@ -1036,7 +1050,14 @@ under the working name `openclaw-mcp` but were never published. The
   for this OSS release.
 - No multi-touch HID profile yet — only mouse and keyboard.
 
-[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.9...v0.3.0
+[0.2.9]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.8...v0.2.9
+[0.2.8]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.7...v0.2.8
+[0.2.7]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.6...v0.2.7
+[0.2.6]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.5...v0.2.6
+[0.2.5]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.4...v0.2.5
+[0.2.4]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.0...v0.2.1

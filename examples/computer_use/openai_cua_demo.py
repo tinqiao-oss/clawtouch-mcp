@@ -35,7 +35,6 @@ SAFETY CHECKS
 
 NOT INCLUDED
     - Multi-machine setups (screenshot stays local)
-    - Drag (current bridge has no separate button-down/up)
 """
 from __future__ import annotations
 
@@ -212,8 +211,23 @@ async def execute(
         return
 
     if t == "drag":
-        # Current bridge has no button-hold — log and skip
-        logger.warning("drag not supported by current firmware")
+        # Real drag via the v1.1 button-hold primitives. CUA sends `path`:
+        # a list of {x, y} points. Press at the first, glide through the
+        # rest while held, release at the last. try/finally guarantees the
+        # button is released even if a move raises. Mirrors hid.drag.
+        path = action.get("path") or []
+        pts = [(max(0, min(int(p["x"]), screen_w - 1)),
+                max(0, min(int(p["y"]), screen_h - 1))) for p in path]
+        if len(pts) < 2:
+            logger.warning("drag needs >= 2 path points, got %d", len(pts))
+            return
+        await _move_to_absolute(bridge, *pts[0])
+        await bridge.mouse_button_down(button="left")
+        try:
+            for x, y in pts[1:]:
+                await _move_to_absolute(bridge, x, y)
+        finally:
+            await bridge.mouse_button_up(button="left")
         return
 
     logger.warning("unsupported action: %s", t)

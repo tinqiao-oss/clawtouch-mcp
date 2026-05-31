@@ -110,7 +110,8 @@ ClawTouch HID primitives:
 | `key(text)` | `bridge.key_combo(modifiers, key)` (parses "ctrl+c") |
 | `scroll(direction, amount)` | `bridge.mouse_scroll(±delta)` |
 | `cursor_position` | Not supported (HID is fire-and-forget); returns `(0, 0)` |
-| `left_click_drag` | Limited (current bridge has no separate button-down) — best-effort move + click |
+| `left_click_drag` | `bridge.mouse_button_down` → glided move → `bridge.mouse_button_up` (real drag, v1.1) |
+| `left_mouse_down` / `left_mouse_up` | `bridge.mouse_button_down` / `bridge.mouse_button_up` (v1.1 button-hold) |
 
 ## Compliance note for deployments touching end users
 
