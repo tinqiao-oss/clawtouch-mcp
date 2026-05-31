@@ -158,6 +158,15 @@ below).
 
 ## Known macOS-specific behaviors
 
+### `cmd+q` from the agent quits the agent
+
+If the MCP server runs on the **same Mac** as the agent driving it and the
+agent app (Claude Code / Cursor / ChatGPT Desktop) is frontmost, a
+`hid.key("cmd+q")` lands in the agent and quits it mid-task — real USB HID
+has no app targeting. `hid.click` the target window first, or drive a
+remote target. Full table + mitigations:
+[INTEGRATIONS.md → "Known footgun: self-interrupt"](../examples/integrations/INTEGRATIONS.md#known-footgun-self-interrupt-on-a-shared-machine).
+
 ### TextEdit autocorrects the first letter
 
 Default macOS TextEdit has **"Edit → Substitutions → Smart Quotes,

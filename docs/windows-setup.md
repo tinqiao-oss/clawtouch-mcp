@@ -193,6 +193,15 @@ Ask Claude to call `device.info`. Expected output:
 
 ## Known Windows-specific behaviors
 
+### `alt+f4` from the agent closes the agent
+
+If the MCP server runs on the **same PC** as the agent driving it and the
+agent app (Claude Code / Cursor) is frontmost, a `hid.key("alt+f4")` lands
+in the agent and closes it mid-task — real USB HID has no app targeting.
+`hid.click` the target window first, or drive a remote target. Full table +
+mitigations:
+[INTEGRATIONS.md → "Known footgun: self-interrupt"](../examples/integrations/INTEGRATIONS.md#known-footgun-self-interrupt-on-a-shared-machine).
+
 ### Display scaling (DPI) does not affect HID coordinates
 
 The Pico sends raw HID reports with physical-pixel coordinates. Windows

@@ -37,6 +37,41 @@ You should see 15 tools by default (13 HID + 2 device), or 16 with
 - **Opt-in**: `hid.screenshot` (only registered when `--allow-screenshot`
   is passed)
 
+## Known footgun: self-interrupt on a shared machine
+
+ClawTouch sends **real USB HID** keystrokes — there is no app-level
+addressing. Keys go to whatever window the OS has focused, exactly like a
+physical keyboard. When the MCP server runs on the **same machine** as the
+agent driving it (driver == target) and the **agent app is frontmost**,
+`hid.*` keystrokes land in the agent itself, and some shortcuts trigger the
+agent's own interrupt/quit actions:
+
+| Key | Side effect in the agent app |
+|---|---|
+| `escape` | Claude Code / Codex CLI interrupts the current turn |
+| `cmd+q` (macOS) / `alt+f4` (Windows) | quits the agent app outright |
+| `cmd+w` / `ctrl+w` | closes the agent window / tab |
+| `cmd+,` | opens the agent's settings |
+
+The `cmd+q` / `alt+f4` case is the worst — the agent quits itself mid-task
+and loses its context.
+
+**Mitigations:**
+
+1. **Click the target first.** Before sending `escape` / quit-class keys,
+   `hid.click` the target window so it (not the agent) is frontmost.
+2. **Drive a remote target.** A cross-device setup (Pico 2 W + a separate
+   target machine) sidesteps this entirely — the HID output never reaches
+   the driver host.
+3. **Self-regulate on focus.** Use `device.info` plus your own frontmost
+   check and have the agent refuse interrupt-class keys while it is itself
+   the frontmost app.
+
+As a backstop the server logs a **one-time** warning to stderr the first
+time it sends a quit-class combo (`cmd+q` / `alt+f4`). It is **warn-only**
+— the keystroke is never blocked or swallowed, since the same combo is
+perfectly legitimate against a remote target.
+
 ## Verified clients
 
 - [Claude Desktop / Claude Code](#claude-desktop--claude-code) — Anthropic

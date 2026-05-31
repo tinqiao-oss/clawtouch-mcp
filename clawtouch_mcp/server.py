@@ -75,6 +75,28 @@ MOVE_SETTLE_MS = 20
 MAX_FRAME_LEN = 16 * 1024 * 1024
 _MODIFIER_NAMES = frozenset({"ctrl", "shift", "alt", "gui", "win", "cmd"})
 
+# Quit/close key combos that self-interrupt when this MCP server shares a
+# machine with the agent driving it. Real USB HID has no app-level
+# addressing — keystrokes land on whatever window is frontmost — so if the
+# agent app (Claude Code / Cursor / ChatGPT Desktop) is focused, cmd+q /
+# alt+f4 quit the agent itself mid-task (lost context, unrecoverable).
+# Detecting focus needs OS-specific window introspection that we keep out
+# of this portable, near-dependency-free server, so instead of blocking we
+# emit one best-effort heads-up the first time such a combo is sent. Never
+# blocks, never swallows the keystroke (a remote/cross-device target makes
+# the same combo perfectly legitimate). See INTEGRATIONS.md "known footgun".
+_GUI_MODIFIERS = frozenset({"gui", "win", "cmd"})  # all map to the GUI/Command key
+
+
+def _is_self_interrupt_combo(modifiers: list[str], key: str) -> bool:
+    mods = {m.lower() for m in modifiers}
+    k = key.strip().lower()
+    if k == "q" and (_GUI_MODIFIERS & mods):
+        return True  # cmd+Q  -> macOS "Quit application"
+    if k == "f4" and "alt" in mods:
+        return True  # alt+F4 -> Windows "Close application"
+    return False
+
 
 def _ensure_windows_dpi_awareness() -> None:
     """Enable per-monitor DPI awareness for this process on Windows.
@@ -467,6 +489,9 @@ class ClawTouchMcpServer:
         self.rate = RateLimiter(config.ops_per_sec)
         self.tools: dict[str, Tool] = {}
         self._initialized = False
+        # One-shot guard: flips True once we've warned about a self-interrupt
+        # combo (cmd+q / alt+f4). Best-effort heads-up, fired at most once.
+        self._warned_self_interrupt = False
         # release-on-idle: monotonic timestamp of last tool call. Init to now()
         # so server doesn't immediately release on startup before any call.
         self._last_used_at: float = time.monotonic()
@@ -1296,6 +1321,25 @@ class ClawTouchMcpServer:
         ok = await self.bridge.mouse_scroll(delta)
         return {"ok": ok, "delta": delta}
 
+    def _maybe_warn_self_interrupt(self, modifiers: list[str], key: str) -> None:
+        """One-shot stderr heads-up the first time a quit/close combo is
+        sent (see _is_self_interrupt_combo). Warn-only: the keystroke still
+        goes out — blocking would break the legitimate remote-target case."""
+        if self._warned_self_interrupt or not _is_self_interrupt_combo(modifiers, key):
+            return
+        self._warned_self_interrupt = True
+        combo = "+".join([*modifiers, key]) if modifiers else key
+        logger.warning(
+            "sent a quit/close combo (%s). USB HID has no app targeting — "
+            "keystrokes hit whatever window is frontmost. If this server "
+            "shares a machine with your agent (Claude Code / Cursor / ...) "
+            "and the agent is focused, this can quit the agent itself "
+            "mid-task. Mitigate: hid.click the target window first, or drive "
+            "a remote target (Pico 2 W). See INTEGRATIONS.md 'known footgun: "
+            "self-interrupt'. (shown once per session)",
+            combo,
+        )
+
     async def _tool_key(self, **kw) -> dict:
         self.rate.check()
         key_str = str(kw["key"])
@@ -1310,6 +1354,7 @@ class ClawTouchMcpServer:
                 merged = list(dict.fromkeys(modifiers + [p.lower() for p in head]))
                 modifiers = merged
                 key_str = tail
+        self._maybe_warn_self_interrupt(modifiers, key_str)
         ok = await self.bridge.key_combo(modifiers, key_str)
         return {"ok": ok}
 
@@ -1409,6 +1454,7 @@ class ClawTouchMcpServer:
         self.rate.check()
         key = str(kw["key"])
         modifiers = [m.lower() for m in (kw.get("modifiers") or [])]
+        self._maybe_warn_self_interrupt(modifiers, key)
         ok = await self.bridge.key_press(key, modifiers)
         return {"ok": ok, "key": key, "modifiers": modifiers, "state": "down"}
 
@@ -1427,6 +1473,7 @@ class ClawTouchMcpServer:
         key = str(kw["key"])
         duration_ms = max(1, min(10_000, int(kw.get("duration_ms", 500))))
         modifiers = [m.lower() for m in (kw.get("modifiers") or [])]
+        self._maybe_warn_self_interrupt(modifiers, key)
         await self.bridge.key_press(key, modifiers)
         try:
             await asyncio.sleep(duration_ms / 1000.0)

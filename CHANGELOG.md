@@ -7,6 +7,19 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — self-interrupt heads-up (cmd+q / alt+f4)
+
+Real USB HID has no app-level addressing — keystrokes go to whatever
+window is frontmost. When the server shares a machine with the agent
+driving it and the agent app is frontmost, `hid.key("cmd+q")` /
+`hid.key("alt+f4")` quit the agent itself mid-task. The server now logs a
+**one-time, warn-only** stderr heads-up the first time it sends such a
+quit-class combo — it never blocks or swallows the keystroke (the same
+combo is legitimate against a remote target). A new "Known footgun:
+self-interrupt" section in `INTEGRATIONS.md` (plus pointers in the macOS /
+Windows setup guides) documents the full key table and mitigations
+(click the target first / drive a remote target / self-regulate on focus).
+
 ### Fixed — Computer Use example + async test deps (codex cross-check)
 
 - **Anthropic Computer Use demo** now uses tool type `computer_20251124` +
