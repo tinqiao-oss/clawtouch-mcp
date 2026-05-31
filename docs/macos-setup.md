@@ -216,6 +216,31 @@ verified empirically on macOS 26.3.1 with the system Pinyin IME:
 | `hid.type("pinyin_test: ")` | `pinyin_test： ` — **the ASCII colon `:` silently becomes the fullwidth Chinese colon `：`** because Pinyin's "Chinese punctuation" toggle is on by default |
 | `hid.key` (navigation, modifiers) | Unaffected — keycodes bypass the IME composition buffer |
 
+**The robust fix for real text — paste via the clipboard.** Switching the
+input source (below) only makes *ASCII* reliable; you still cannot type
+Chinese or any non-US-layout glyph through raw HID keycodes at all. The way
+the ClawTouch desktop product handles this — and the pattern we recommend —
+is to **never type non-ASCII char-by-char: put the text on the clipboard
+and paste it**, which bypasses the IME composition buffer entirely:
+
+```bash
+# Exact text, instant, zero IME / candidate-picking — works for Chinese,
+# emoji, and punctuation regardless of the active input source.
+printf '%s' '你好，ClawTouch 上线了！' | pbcopy   # Win: clip · Linux: xclip -sel clip / wl-copy
+```
+
+then send the paste shortcut over HID:
+
+```python
+await bridge.key_combo(["cmd"], "v")   # Windows / Linux: ["ctrl"], "v"
+```
+
+Caveats: paste **overwrites the host clipboard** (save & restore it if the
+user might be mid-copy — same shared-resource care as the self-interrupt
+footgun), and the target field must accept a paste. For ASCII-only text
+where you'd rather keep using `hid.type`, switching to ABC (below) is the
+lighter option.
+
 **Implications for tests:**
 
 - **Don't** rely on accuracy-sensitive ASCII tests (e.g. comparing

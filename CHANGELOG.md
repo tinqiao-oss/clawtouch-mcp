@@ -20,6 +20,14 @@ self-interrupt" section in `INTEGRATIONS.md` (plus pointers in the macOS /
 Windows setup guides) documents the full key table and mitigations
 (click the target first / drive a remote target / self-regulate on focus).
 
+### Documentation — type non-ASCII / Chinese via clipboard paste
+
+The macOS and Windows setup guides now lead with the IME-bypass pattern
+(put text on the clipboard, then `hid.key("cmd+v")` / `"ctrl+v"`) as the
+robust way to enter Chinese, emoji, and punctuation — `hid.type` sends raw
+US-layout keycodes and cannot produce non-ASCII through an active IME.
+Input-source switching (ABC) stays as the lighter ASCII-only option.
+
 ### Fixed — Computer Use example + async test deps (codex cross-check)
 
 - **Anthropic Computer Use demo** now uses tool type `computer_20251124` +

@@ -202,6 +202,24 @@ in the agent and closes it mid-task — real USB HID has no app targeting.
 mitigations:
 [INTEGRATIONS.md → "Known footgun: self-interrupt"](../examples/integrations/INTEGRATIONS.md#known-footgun-self-interrupt-on-a-shared-machine).
 
+### Typing Chinese / non-ASCII: paste, don't type
+
+`hid.type` sends raw US-layout HID keycodes. With **Microsoft Pinyin** (or
+any IME) active, those keycodes feed the IME composition buffer —
+punctuation silently turns fullwidth and you cannot produce Chinese
+characters at all. The robust fix (same as the ClawTouch desktop product)
+is to **put the text on the clipboard and paste it**, which bypasses the
+IME entirely:
+
+```powershell
+Set-Clipboard '你好，ClawTouch 上线了！'   # or:  '...' | clip
+```
+
+then send the paste shortcut over HID: `bridge.key_combo(["ctrl"], "v")`.
+Paste **overwrites the clipboard** (save & restore if the user might be
+mid-copy). `hid.key` shortcuts (`ctrl+c`, `alt+tab`, ...) are layout-immune
+and unaffected by the IME.
+
 ### Display scaling (DPI) does not affect HID coordinates
 
 The Pico sends raw HID reports with physical-pixel coordinates. Windows
