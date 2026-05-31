@@ -173,6 +173,85 @@ clawtouch-mcp --mock --log-level INFO
 * `hid.screenshot` is **disabled unless** you pass `--allow-screenshot`.
 * `hid.release_all` exposed for use as a panic-stop tool from the agent.
 
+## Autonomy & safety — what an agent connected to this can do
+
+> Read this before connecting an autonomous agent. The runtime limits
+> above are flood / typo guards, **not** a security boundary against a
+> misbehaving agent.
+
+`clawtouch-mcp` turns your agent's tool calls into **real USB HID input** —
+keystrokes and mouse moves that travel the same driver path as a plugged-in
+keyboard or mouse, so at the input layer the OS treats them like physical
+device input. Being a genuine HID device — not synthetic injected input — is
+what makes the legitimate use cases work (locked-down kiosks, compatibility
+testing, accessibility, cross-machine RPA). The same property has a symmetric
+risk you should plan for:
+
+**An autonomous agent connected here has, in practice, the same reach over the
+host as a person sitting at the keyboard.** Through ordinary HID input it can
+open any application, run commands in a terminal, launch programs, install or
+remove software, and read, move, or delete files. And because the input is
+delivered as ordinary HID, an interactive confirmation prompt is not by itself
+a reliable barrier against it — treat any consent or permission dialog as
+something the agent may act on. `clawtouch-mcp` does **not** inspect the intent
+or content of what the agent sends; it faithfully forwards each call to the
+hardware.
+
+This can happen **without you intending it**, because the agent — not this
+server — decides what to do. The usual triggers are:
+
+- **Prompt injection.** Untrusted text the agent reads off the screen, a web
+  page, or an image can contain instructions that override yours and steer the
+  agent into actions you never asked for. Screen-reading / RPA workflows are a
+  setting where this applies.
+- **Model error.** The model can simply misunderstand the task and act on the
+  wrong window, the wrong file, or the wrong button.
+- **Over-broad autonomy.** The more open-ended the task and the fewer the
+  checkpoints, the larger the blast radius if either of the above occurs.
+
+This describes an **unintended failure mode** of an autonomous agent, not a
+supported use — deliberately using HID input to defeat a system's security or
+risk controls is out of scope under **Acceptable use** below. It is also a
+distinct concern from the **Content generation** (labeling) section and from
+the software bugs covered in [`SECURITY.md`](SECURITY.md); none of those cover
+an agent acting against your own intent. The MIT "AS IS / no warranty" clause
+is a liability disclaimer, not an informed-risk notice; the responsibility for
+running an autonomous agent safely sits with you as the deployer. This notice
+is provided for information only — it does not modify, narrow, or expand the
+MIT License, create any warranty or duty of care, or shift liability to
+Tinqiao; the MIT no-warranty / no-liability terms continue to govern in full.
+
+### Operator mitigations
+
+Treat an agent driving HID input like giving a capable but not-fully-trusted
+operator real hands on the machine. Recommended:
+
+- **Use a dedicated machine you can wipe (or a VM / container)** — not your
+  primary computer. Local mode puts the agent and target on one PC: the
+  convenient case, and also the one with the largest blast radius; prefer a
+  separate machine where you can.
+- **Run under a least-privilege OS account; do not run the target session or
+  the agent as administrator / root.** The agent inherits whatever that account
+  can do.
+- **Keep sensitive data and logged-in accounts off the target** — no saved
+  passwords, no authenticated sessions, no credentials in the prompt — so an
+  injection or mistake has less to reach.
+- **Keep a human in the loop.** Require explicit confirmation before
+  consequential or irreversible actions — installing/deleting software, sending
+  messages or email, financial transactions, agreeing to terms. Don't leave the
+  agent running unattended on an open-ended task.
+- **Isolate the network**, such as a domain allowlist, to reduce the agent's
+  exposure to malicious or injection-bearing content.
+- **Treat everything the agent reads from the screen or web as untrusted
+  input** and isolate it from sensitive data and actions, so a successful
+  injection can do less damage.
+- **Keep a panic stop reachable.** `hid.release_all` releases every held key and
+  button from the agent side; physically unplugging the Pico's USB cable is the
+  most reliable stop and removes the agent's input path entirely.
+
+If you deploy this on behalf of other people (accessibility, managed RPA),
+inform those end users of these risks and obtain their consent.
+
 ## See it in action
 
 A complete session: the server starts, an MCP client (could be Claude

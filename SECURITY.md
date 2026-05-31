@@ -41,7 +41,11 @@ the next patch release (typically within 2 weeks for confirmed issues).
 
 - **The behavior of LLM agents that use this server.** If an agent
   uses `hid.click` to do something the user didn't want, that's an
-  agent / prompt issue, not an MCP-server issue.
+  agent / prompt issue, not an MCP-server bug — so it is out of scope
+  for *this* vulnerability-reporting policy. It is, however, a real
+  deployment risk: see the **Autonomy & safety** section in the
+  [README](README.md) for the risk disclosure and operator
+  mitigations.
 - **Physical security of the Pico hardware.** Anyone with physical
   access to the device can do anything its USB HID profile allows
   regardless of this server.
