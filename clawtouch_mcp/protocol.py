@@ -163,6 +163,9 @@ def build_mouse_button_up(button: MouseButton, *, seq_id: int = 0) -> HidCommand
 
 
 def build_key_press(keycode: int, modifiers: int = 0, *, seq_id: int = 0) -> HidCommand:
+    """Positional order is ``(keycode, modifiers)`` — the reverse of
+    :func:`build_key_combo`. Wire payload is ``[modifiers, keycode]`` either
+    way; prefer keyword args to avoid swapping them."""
     payload = struct.pack("BB", int(modifiers), int(keycode))
     return HidCommand(CommandType.KEY_PRESS, payload, seq_id)
 
@@ -171,12 +174,15 @@ def build_key_release(keycode: int = 0, modifiers: int = 0, *, seq_id: int = 0) 
     """KEY_RELEASE payload is [modifiers, keycode] — same byte order as
     KEY_PRESS and KEY_COMBO (unified v1.1.1). Both zero (default) =
     release-all (firmware releases every held key/button). Pass explicit
-    keycode/modifiers to release one."""
+    keycode/modifiers to release one. Positional order is
+    ``(keycode, modifiers)`` — reverse of build_key_combo; prefer keyword args."""
     payload = struct.pack("BB", int(modifiers), int(keycode))
     return HidCommand(CommandType.KEY_RELEASE, payload, seq_id)
 
 
 def build_key_combo(modifiers: int, keycode: int, *, seq_id: int = 0) -> HidCommand:
+    """Positional order is ``(modifiers, keycode)`` — the reverse of
+    :func:`build_key_press` / :func:`build_key_release`. Prefer keyword args."""
     payload = struct.pack("BB", int(modifiers), int(keycode))
     return HidCommand(CommandType.KEY_COMBO, payload, seq_id)
 

@@ -59,6 +59,52 @@ when the user names ClawTouch / physical input directly.
 > surface or argument changed; only the wire byte order of the keyboard
 > frames built by `clawtouch_mcp.protocol` was unified.
 
+### Fixed — docs & examples (pre-publish sweep)
+
+- Replaced the stale `0.2.3` literal in the README / zh-CN README startup
+  transcripts and `docs/windows-setup.md` `device.info` sample with the
+  real package version `0.3.0` (the `v0.2.3+` "since version" markers are
+  intentionally left).
+- Corrected the advertised tool count to **15** (13 HID + 2 device) in the
+  zh-CN README, and expanded the abbreviated `tools/list` example in both
+  READMEs to list all 13 HID tools (was 9, omitting the v1.1 drag/key tools).
+- zh-CN README now links the **Windows** setup guide (was macOS-only) and
+  carries the `Commercial: clawtouch.cn` badge for EN/zh parity.
+- Clarified that `--ops-per-sec` rate-limits *tool calls*, not individual
+  HID reports (one `hid.drag` / long `hid.type` emits many).
+- `examples/computer_use`: removed a dead `MouseButton, modifiers_to_mask`
+  import; made the screenshot demos robust to `mss.MSS` vs `mss.mss`
+  (and floored `mss>=10.2` in the `[screenshot]` extra, where uppercase
+  `MSS` first appears); added a `--model` flag (default tracks the current
+  GA Opus) instead of a hard-pinned model; recommended `pip install -U`
+  for the beta/preview SDKs; fixed the README to say
+  `client.beta.messages.stream`.
+
+### Changed — server hardening
+
+- `hid.hover` now lower-clamps `duration_ms` (`max(0, …)`) to match
+  `hid.hold_key`.
+- `hid.type` reports the number of characters **actually sent** (control
+  bytes are stripped by default, so a lone `"\n"` now reports `chars: 0`
+  rather than `1`).
+- `MockBridge` / `UnavailableBridge` `type_text` gained the `allow_control`
+  keyword for signature parity with `SerialHidBridge`.
+- `build_key_press` / `build_key_release` / `build_key_combo` docstrings
+  warn that press/release take positional `(keycode, modifiers)` while
+  combo takes `(modifiers, keycode)` — prefer keyword args.
+
+### Added — tests & CI
+
+- Cross-repo byte-equality suite now covers the v1.1 drag opcodes
+  (`MOUSE_BUTTON_DOWN/UP`) and a drag round-trip.
+- New `tests/test_bridge_key_byte_order.py` exercises the real
+  `SerialHidBridge.key_press` / `key_release` serialization path end-to-end
+  and locks the wire payload to `[modifiers, keycode]` (the server tests
+  use `MockBridge`, which never builds a frame).
+- The cross-repo CI job now fails (not warns) when the sister
+  `clawtouch-hid` repo is unreachable, so the byte-equality net can no
+  longer be silently skipped on a green run.
+
 ## [0.3.0] — 2026-05-28 — Drag + hold gestures (protocol v1.1, Anthropic CUA tool-set parity)
 
 ### Added — six new MCP tools matching Anthropic Computer Use action set

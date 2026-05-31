@@ -77,6 +77,17 @@ class TestFakeCursorEnvHook:
             isinstance(result, tuple) and len(result) == 2
         )
 
+    def test_malformed_consults_real_query_not_env(self, monkeypatch):
+        # Stronger than the test above: prove a malformed env value actually
+        # FALLS THROUGH to the OS query instead of being silently parsed.
+        # Pin the platform dispatch to a sentinel so "fell through" is
+        # observable regardless of host OS or whether a real cursor exists.
+        import clawtouch_mcp.cursor as cur
+        monkeypatch.setattr(cur.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(cur, "_linux_get_cursor", lambda: (-7, -7))
+        monkeypatch.setenv(_FAKE_CURSOR_ENV, "garbage")
+        assert get_cursor_position() == (-7, -7)
+
     def test_env_var_overrides_real_query(self, monkeypatch):
         # Even on a host with a working OS cursor, the env hook wins.
         monkeypatch.setenv(_FAKE_CURSOR_ENV, "7,7")

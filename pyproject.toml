@@ -38,7 +38,7 @@ classifiers = [
 # Pillow is needed for DPI-aware resize (Retina screens) and JPEG encoding.
 # Without it the screenshot tool falls back to raw PNG at physical resolution
 # which overflows MCP client text buffers on high-DPI displays.
-screenshot = ["mss>=9.0", "Pillow>=10.0"]
+screenshot = ["mss>=10.2", "Pillow>=10.0"]
 
 [project.urls]
 Homepage = "https://clawtouch.cn"
@@ -55,10 +55,11 @@ packages = ["clawtouch_mcp"]
 [tool.hatch.build.targets.sdist]
 # Defaults to `git ls-files`; we set this explicitly so the sdist
 # contract is auditable from pyproject alone and survives a
-# tarball-from-zip workflow where .git isn't present. Anything
-# matching the include list is in; build/, dist/, .pytest_cache/,
-# __pycache__/, *.egg-info/ are excluded by virtue of not being in
-# the list, so stale artefacts can't poison the release.
+# tarball-from-zip workflow where .git isn't present. build/, dist/,
+# .pytest_cache/, *.egg-info/ are not in the list; __pycache__/ inside an
+# included dir (e.g. examples/) is dropped by hatchling's default excludes
+# (VCS-ignored paths + bytecode caches), not by the include list alone, so
+# stale artefacts can't poison the release.
 include = [
     "clawtouch_mcp/",
     "tests/",

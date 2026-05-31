@@ -7,7 +7,7 @@ software-synthesized mouse/keyboard with real USB HID input.
 
 | Demo | Provider | File | API |
 |------|----------|------|-----|
-| Claude Computer Use | Anthropic | [claude_demo.py](claude_demo.py) | `client.beta.messages.create` with `computer_20250124` tool |
+| Claude Computer Use | Anthropic | [claude_demo.py](claude_demo.py) | `client.beta.messages.stream` with `computer_20250124` tool |
 | OpenAI CUA | OpenAI | [openai_cua_demo.py](openai_cua_demo.py) | Responses API with `computer-use-preview` model |
 
 ## Why bother?
@@ -71,8 +71,10 @@ What it does **not** get you:
 
 ```bash
 pip install clawtouch-mcp[screenshot]  # mss for screenshots
-pip install anthropic                  # for claude_demo.py
-pip install openai                     # for openai_cua_demo.py
+# These demos drive beta / preview Computer Use APIs — install a recent SDK
+# (an old cached or transitively-pinned version can 404 on the beta endpoints):
+pip install -U anthropic               # for claude_demo.py
+pip install -U openai                  # for openai_cua_demo.py
 ```
 
 Set the API key for whichever provider you're using:
@@ -156,7 +158,7 @@ like Claude Desktop drives the HID device via stdio JSON-RPC).
 | | This demo | `clawtouch-mcp` |
 |---|---|---|
 | Who drives | Your Python script | An MCP client (Claude Desktop, Cursor, etc.) |
-| LLM call | You call `client.messages.create` | The client calls the API |
+| LLM call | You call `client.beta.messages.stream` | The client calls the API |
 | HID dispatch | Direct `bridge.mouse_*` calls | JSON-RPC `tools/call` → server → bridge |
 | Safety rails | Your code | Server enforces (`--screen`, `--ops-per-sec`) |
 | Use when... | You're building a Computer Use loop | You're plugging HID into an existing agent |

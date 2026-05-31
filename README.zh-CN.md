@@ -12,6 +12,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/clawtouch-mcp.svg)](https://pypi.org/project/clawtouch-mcp/)
 [![Python](https://img.shields.io/pypi/pyversions/clawtouch-mcp.svg)](https://pypi.org/project/clawtouch-mcp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Commercial: clawtouch.cn](https://img.shields.io/badge/commercial-clawtouch.cn-orange.svg)](https://clawtouch.cn)
 
 <p align="center">
   <img src="docs/assets/hero.svg" alt="clawtouch-mcp 数据流: AI agent 通过 MCP stdio JSON-RPC 调用 clawtouch-mcp, 后者通过 USB-CDC 发送带帧字节到 Raspberry Pi Pico 2 (跑 ClawTouch HID 固件), Pico 再输出标准 USB HID 报告到目标操作系统 (Windows / macOS / Linux)." width="900">
@@ -108,9 +109,12 @@ pip install clawtouch-mcp                 # 最小依赖 (只装串口)
 pip install 'clawtouch-mcp[screenshot]'   # 加装 mss 启用 hid.screenshot
 ```
 
-**macOS 用户**: 看 [`docs/macos-setup.md`](docs/macos-setup.md) — 平台特定坑
-(首次插 Pico 弹的键盘助理对话框 / 双 USB-CDC 端口 / Screen Recording
-权限 / 输入法不匹配引发的 type 乱码).
+**平台特定配置指南** (首次安装建议先看):
+
+* **Windows** — [`docs/windows-setup.md`](docs/windows-setup.md): 双 COM 口
+  枚举、VS Code Claude 扩展 `.mcp.json` 配置、需整窗重启、显示缩放注意事项。
+* **macOS** — [`docs/macos-setup.md`](docs/macos-setup.md): 首次插 Pico 弹的
+  键盘助理对话框、双 USB-CDC 端口、Screen Recording 权限、拼音输入法标点坑。
 
 ## 运行
 
@@ -202,7 +206,7 @@ JSON-RPC, 所有动作都通过真实 USB-CDC 帧到真实 Pico 2 硬件。
 
 ```text
 $ clawtouch-mcp --port COM7
-[INFO] clawtouch-mcp 0.2.3 启动 (mock=False)
+[INFO] clawtouch-mcp 0.3.0 启动 (mock=False)
 [INFO] 连接 Pico 2 (COM7, serial: E660ABCD12345678)
 [INFO] 自动探测屏幕: 2560x1440 (Windows SM_CXSCREEN/SM_CYSCREEN)
 [INFO] 注册 13 个 HID 工具 + 2 个 device 工具, 监听 stdio
@@ -213,16 +217,19 @@ $ clawtouch-mcp --port COM7
              "clientInfo":{"name":"any-mcp-client","version":"1.0"}}}
 > {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",
    "capabilities":{"tools":{"listChanged":false}},
-   "serverInfo":{"name":"clawtouch-mcp","version":"0.2.3"}}}
+   "serverInfo":{"name":"clawtouch-mcp","version":"0.3.0"}}}
 
 < {"jsonrpc":"2.0","method":"notifications/initialized"}
 
 < {"jsonrpc":"2.0","id":2,"method":"tools/list"}
 > {"jsonrpc":"2.0","id":2,"result":{"tools":[
-   {"name":"hid.click",...}, {"name":"hid.move",...},
-   {"name":"hid.type",...},  {"name":"hid.scroll",...},
-   {"name":"hid.key",...},   {"name":"hid.release_all",...},
-   {"name":"hid.screenshot",...}, {"name":"device.list",...},
+   {"name":"hid.click",...},  {"name":"hid.move",...},
+   {"name":"hid.hover",...},  {"name":"hid.type",...},
+   {"name":"hid.scroll",...}, {"name":"hid.key",...},
+   {"name":"hid.key_press",...}, {"name":"hid.key_release",...},
+   {"name":"hid.hold_key",...}, {"name":"hid.release_all",...},
+   {"name":"hid.mouse_button_down",...}, {"name":"hid.mouse_button_up",...},
+   {"name":"hid.drag",...},   {"name":"device.list",...},
    {"name":"device.info",...} ]}}
 
 # ── 一次 click + 一次 type (真实硬件在动) ──────────────────────────
@@ -254,8 +261,8 @@ $ clawtouch-mcp --port COM7
 }
 ```
 
-重启 Claude Desktop,在 MCP server 列表里能看到 `clawtouch`,带 9 个可用
-工具。试一下:
+重启 Claude Desktop,在 MCP server 列表里能看到 `clawtouch`,带 15 个可用
+工具 (13 个 HID + 2 个 device; 传 `--allow-screenshot` 再 +1)。试一下:
 
 > 帮我截屏,找到搜索框,点一下并输入 "hello world"。
 

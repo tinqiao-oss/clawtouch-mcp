@@ -36,7 +36,6 @@ import anthropic
 # going through the clawtouch-mcp server subprocess.
 from clawtouch_mcp.bridge import SerialHidBridge, auto_detect_port
 from clawtouch_mcp.cursor import availability_hint, get_cursor_position
-from clawtouch_mcp.protocol import MouseButton, modifiers_to_mask
 from clawtouch_mcp.keycodes import name_to_keycode
 from clawtouch_mcp.server import MockBridge
 
@@ -117,7 +116,14 @@ def _parse_key(text: str) -> tuple[list[str], str]:
 
 
 def _take_screenshot() -> dict:
-    """Return a Claude-shaped image content block."""
+    """Return a Claude-shaped image content block.
+
+    Note: this sends a full-resolution PNG of the primary monitor. The
+    clawtouch-mcp *server* downsamples screenshots (MAX_OUTPUT_PIXELS +
+    LANCZOS) to keep MCP buffers small; this direct-bridge demo does not,
+    so on a 4K / Retina display the per-iteration payload can be several
+    MB. Add a resize step if that matters for your loop.
+    """
     try:
         import mss
         import mss.tools
@@ -126,7 +132,11 @@ def _take_screenshot() -> dict:
             "screenshot requires the [screenshot] extra: "
             "pip install 'clawtouch-mcp[screenshot]'"
         )
-    with mss.MSS() as sct:  # `mss.mss()` deprecated in mss 10.x
+    # `mss.MSS` (uppercase) exists since mss 10.2; older 9.x/10.0/10.1 only
+    # have `mss.mss`. The [screenshot] extra floors mss>=10.2, but stay
+    # robust if an older mss is resolved transitively.
+    _MSS = getattr(mss, "MSS", None) or mss.mss
+    with _MSS() as sct:
         shot = sct.grab(sct.monitors[1])  # primary monitor
         png_bytes = mss.tools.to_png(shot.rgb, shot.size)
     return {
@@ -239,7 +249,7 @@ async def execute_action(
 # ─────────────────────────── Main loop ───────────────────────────
 
 async def run(task: str, bridge: Any, screen_w: int, screen_h: int,
-              max_iterations: int = 25) -> None:
+              max_iterations: int = 25, model: str = "claude-opus-4-8") -> None:
     """Standard Computer Use loop: send → tool_use → execute → tool_result → repeat."""
     client = anthropic.AsyncAnthropic()
     messages: list[dict] = [{"role": "user", "content": task}]
@@ -255,11 +265,12 @@ async def run(task: str, bridge: Any, screen_w: int, screen_h: int,
         #   reasoning budget each step needs. Drop this field if your
         #   model variant doesn't expose extended thinking.
         # - `model` and `betas` are coupled — the beta string changes
-        #   with each Computer Use model release; check Anthropic docs
-        #   before pinning. As of 2026 mid: claude-opus-4-7 + beta
-        #   `computer-use-2025-01-24` is the GA pairing.
+        #   with each Computer Use model release. **Verify the current model
+        #   + beta in Anthropic's Computer Use docs before running**: model
+        #   IDs are retired over time and a stale pin returns 404. Override
+        #   with `--model`; the default tracks the current GA Opus.
         async with client.beta.messages.stream(
-            model="claude-opus-4-7",
+            model=model,
             max_tokens=16384,
             thinking={"type": "adaptive"},
             tools=[{
@@ -352,6 +363,8 @@ def main() -> int:
                    help="WIDTHxHEIGHT for coordinate clamping (default 1920x1080)")
     p.add_argument("--max-iterations", type=int, default=25,
                    help="Loop safety limit (default 25)")
+    p.add_argument("--model", default="claude-opus-4-8",
+                   help="Anthropic model ID (verify the current Computer Use model in Anthropic docs)")
     p.add_argument("--log-level", default="INFO")
     args = p.parse_args()
 
@@ -367,7 +380,7 @@ def main() -> int:
     async def go():
         bridge = await make_bridge(args.mock, args.port)
         try:
-            await run(args.task, bridge, screen_w, screen_h, args.max_iterations)
+            await run(args.task, bridge, screen_w, screen_h, args.max_iterations, args.model)
         finally:
             await bridge.close()
 

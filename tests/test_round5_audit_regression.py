@@ -152,7 +152,7 @@ class TestIdleWatchCrashRecovery:
     relies on the next tool call to restart the watcher.
     """
 
-    def test_unexpected_exception_clears_slot_and_logs(self, caplog):
+    def test_unexpected_exception_clears_slot_and_logs(self, caplog, monkeypatch):
         config = ServerConfig(
             port="/dev/null",
             mock=True,
@@ -161,25 +161,27 @@ class TestIdleWatchCrashRecovery:
         )
         server = ClawTouchMcpServer(config)
 
+        real_isinstance = isinstance
+
+        def _boom(obj, cls):
+            if cls is SerialHidBridge:
+                raise RuntimeError("synthetic boom")
+            return real_isinstance(obj, cls)
+
+        # Force a crash inside the watch loop by shadowing isinstance ONLY
+        # in the server module's namespace (_idle_watch does
+        # `isinstance(self.bridge, SerialHidBridge)`). monkeypatch
+        # auto-restores at teardown — no process-wide builtins mutation that
+        # a skipped `finally` (or pytest-xdist reordering) could leak into
+        # later tests.
+        import clawtouch_mcp.server as srv_mod
+        monkeypatch.setattr(srv_mod, "isinstance", _boom, raising=False)
+
         async def _run():
-            # Force a crash inside the watch loop: monkey-patch
-            # isinstance so the check inside _idle_watch raises.
-            real_isinstance = isinstance
-
-            def _boom(obj, cls):
-                if cls is SerialHidBridge:
-                    raise RuntimeError("synthetic boom")
-                return real_isinstance(obj, cls)
-
-            import builtins
-            builtins.isinstance = _boom
-            try:
-                with caplog.at_level(logging.ERROR, logger="clawtouch_mcp.server"):
-                    server._idle_task = asyncio.create_task(server._idle_watch())
-                    # Give the watcher one tick to wake up and crash.
-                    await asyncio.sleep(0.05)
-            finally:
-                builtins.isinstance = real_isinstance
+            with caplog.at_level(logging.ERROR, logger="clawtouch_mcp.server"):
+                server._idle_task = asyncio.create_task(server._idle_watch())
+                # Give the watcher one tick to wake up and crash.
+                await asyncio.sleep(0.05)
 
         asyncio.run(_run())
 

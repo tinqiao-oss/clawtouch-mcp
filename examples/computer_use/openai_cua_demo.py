@@ -122,6 +122,10 @@ _OAI_KEY_ALIAS = {
 
 
 def _take_screenshot_b64() -> str:
+    # Full-resolution PNG of the primary monitor. Unlike the clawtouch-mcp
+    # server (which downsamples via MAX_OUTPUT_PIXELS + LANCZOS), this
+    # direct-bridge demo does not — a 4K / Retina frame can be several MB per
+    # iteration. Add a resize step if payload size matters for your loop.
     try:
         import mss
         import mss.tools
@@ -130,7 +134,11 @@ def _take_screenshot_b64() -> str:
             "screenshot requires the [screenshot] extra: "
             "pip install 'clawtouch-mcp[screenshot]'"
         )
-    with mss.MSS() as sct:  # `mss.mss()` deprecated in mss 10.x
+    # `mss.MSS` (uppercase) exists since mss 10.2; older 9.x/10.0/10.1 only
+    # have `mss.mss`. The [screenshot] extra floors mss>=10.2, but stay
+    # robust if an older mss is resolved transitively.
+    _MSS = getattr(mss, "MSS", None) or mss.mss
+    with _MSS() as sct:
         shot = sct.grab(sct.monitors[1])
         png = mss.tools.to_png(shot.rgb, shot.size)
     return base64.b64encode(png).decode("ascii")

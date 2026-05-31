@@ -136,6 +136,20 @@ class TestBuilderByteEquality:
             lambda: ext_proto.build_mouse_scroll(5, seq_id=12),
         )
 
+    def test_mouse_button_down_v11(self):
+        # v1.1 additive drag opcodes (0x13/0x14) — the additive frames most
+        # at risk of silent drift, so the byte-equality net must cover them.
+        _both(
+            lambda: mcp_proto.build_mouse_button_down(mcp_proto.MouseButton.LEFT, seq_id=20),
+            lambda: ext_proto.build_mouse_button_down(ext_proto.MouseButton.LEFT, seq_id=20),
+        )
+
+    def test_mouse_button_up_v11(self):
+        _both(
+            lambda: mcp_proto.build_mouse_button_up(mcp_proto.MouseButton.RIGHT, seq_id=21),
+            lambda: ext_proto.build_mouse_button_up(ext_proto.MouseButton.RIGHT, seq_id=21),
+        )
+
     def test_key_press_with_modifiers(self):
         _both(
             lambda: mcp_proto.build_key_press(keycode=0x04, modifiers=int(mcp_proto.ModifierKey.CTRL), seq_id=13),
@@ -197,3 +211,11 @@ class TestRoundTrip:
         parsed = mcp_proto.HidCommand.deserialize(wire)
         assert int(parsed.cmd_type) == int(ext_proto.CommandType.MOUSE_CLICK)
         assert parsed.seq_id == 99
+
+    def test_drag_opcode_round_trip(self):
+        # v1.1 MOUSE_BUTTON_DOWN built by mcp, parsed by the firmware-repo
+        # package — covers the additive drag opcode on both builder + parser.
+        wire = mcp_proto.build_mouse_button_down(mcp_proto.MouseButton.LEFT, seq_id=98).serialize()
+        parsed = ext_proto.HidCommand.deserialize(wire)
+        assert int(parsed.cmd_type) == int(mcp_proto.CommandType.MOUSE_BUTTON_DOWN)
+        assert parsed.seq_id == 98

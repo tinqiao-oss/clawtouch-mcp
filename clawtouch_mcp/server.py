@@ -283,7 +283,7 @@ class MockBridge:
         self._calls.append(("button_up", {"button": button}))
         return True
 
-    async def type_text(self, text: str, *, chunk_size: int = 32) -> bool:
+    async def type_text(self, text: str, *, chunk_size: int = 32, allow_control: bool = False) -> bool:
         self._calls.append(("type", {"text": text}))
         return True
 
@@ -401,8 +401,8 @@ class UnavailableBridge:
     async def mouse_button_up(self, button: str = "left") -> bool:
         return await self._try_or_fail("mouse_button_up", button)
 
-    async def type_text(self, text: str, *, chunk_size: int = 32) -> bool:
-        return await self._try_or_fail("type_text", text, chunk_size=chunk_size)
+    async def type_text(self, text: str, *, chunk_size: int = 32, allow_control: bool = False) -> bool:
+        return await self._try_or_fail("type_text", text, chunk_size=chunk_size, allow_control=allow_control)
 
     async def key_combo(self, modifiers: list[str], key: str) -> bool:
         return await self._try_or_fail("key_combo", modifiers, key)
@@ -1273,7 +1273,7 @@ class ClawTouchMcpServer:
             moved = await self._move_to_absolute(kw["x"], kw["y"])
         if "error" in moved:
             return moved
-        await asyncio.sleep(min(10_000, int(kw.get("duration_ms", 500))) / 1000.0)
+        await asyncio.sleep(max(0, min(10_000, int(kw.get("duration_ms", 500)))) / 1000.0)
         moved["ok"] = True
         return moved
 
@@ -1283,7 +1283,12 @@ class ClawTouchMcpServer:
         if len(text) > MAX_TYPE_LEN:
             raise ValueError(f"text too long ({len(text)} > {MAX_TYPE_LEN})")
         ok = await self.bridge.type_text(text)
-        return {"ok": ok, "chars": len(text)}
+        # Report characters actually sent: type_text strips control bytes
+        # (newline/tab/…) by default, so the wire count can be lower than
+        # len(text). Reporting the raw length would tell the agent "typed N
+        # chars" when some were silently dropped (e.g. a lone "\n").
+        sent = sum(1 for ch in text if not (ch < " " or ch == "\x7f"))
+        return {"ok": ok, "chars": sent}
 
     async def _tool_scroll(self, **kw) -> dict:
         self.rate.check()

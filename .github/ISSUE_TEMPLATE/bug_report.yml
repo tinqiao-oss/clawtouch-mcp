@@ -15,7 +15,7 @@ body:
     attributes:
       label: clawtouch-mcp version
       description: Output of `pip show clawtouch-mcp | grep Version`
-      placeholder: "0.2.0"
+      placeholder: "0.3.0"
     validations:
       required: true
 

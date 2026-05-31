@@ -181,7 +181,7 @@ Ask Claude to call `device.info`. Expected output:
 {
   "info": {"port": "COM6", "connected": true, "seq": 0, ...},
   "screen": {"width": 5120, "height": 1440, "source": "detected"},
-  "mcp_version": "0.2.3"
+  "mcp_version": "0.3.0"
 }
 ```
 

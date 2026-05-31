@@ -169,7 +169,11 @@ clawtouch-mcp --mock --log-level INFO
 * Coordinates **clamped** to `--screen WxH` so an agent can't move the mouse
   to bogus pixel positions.
 * Typed text **capped at 4096 chars** per call.
-* All operations **rate-limited** to `--ops-per-sec` (default 20).
+* All operations **rate-limited** to `--ops-per-sec` (default 20). This
+  counts *tool calls*, not individual HID reports — one call such as
+  `hid.drag` or a long `hid.type` emits many reports, so the effective
+  HID-report rate is higher. It is a flood / typo guard, not a security
+  throttle.
 * `hid.screenshot` is **disabled unless** you pass `--allow-screenshot`.
 * `hid.release_all` exposed for use as a panic-stop tool from the agent.
 
@@ -262,7 +266,7 @@ through real USB-CDC frames to real Pico 2 hardware.
 
 ```text
 $ clawtouch-mcp --port COM7
-[INFO] clawtouch-mcp 0.2.3 starting (mock=False)
+[INFO] clawtouch-mcp 0.3.0 starting (mock=False)
 [INFO] connected to Pico 2 on COM7 (serial: E660ABCD12345678)
 [INFO] screen auto-detected: 2560x1440 (Windows SM_CXSCREEN/SM_CYSCREEN)
 [INFO] 13 HID tools + 2 device tools registered; listening on stdio
@@ -273,16 +277,19 @@ $ clawtouch-mcp --port COM7
              "clientInfo":{"name":"any-mcp-client","version":"1.0"}}}
 > {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",
    "capabilities":{"tools":{"listChanged":false}},
-   "serverInfo":{"name":"clawtouch-mcp","version":"0.2.3"}}}
+   "serverInfo":{"name":"clawtouch-mcp","version":"0.3.0"}}}
 
 < {"jsonrpc":"2.0","method":"notifications/initialized"}
 
 < {"jsonrpc":"2.0","id":2,"method":"tools/list"}
 > {"jsonrpc":"2.0","id":2,"result":{"tools":[
-   {"name":"hid.click",...}, {"name":"hid.move",...},
-   {"name":"hid.type",...},  {"name":"hid.scroll",...},
-   {"name":"hid.key",...},   {"name":"hid.release_all",...},
-   {"name":"hid.screenshot",...}, {"name":"device.list",...},
+   {"name":"hid.click",...},  {"name":"hid.move",...},
+   {"name":"hid.hover",...},  {"name":"hid.type",...},
+   {"name":"hid.scroll",...}, {"name":"hid.key",...},
+   {"name":"hid.key_press",...}, {"name":"hid.key_release",...},
+   {"name":"hid.hold_key",...}, {"name":"hid.release_all",...},
+   {"name":"hid.mouse_button_down",...}, {"name":"hid.mouse_button_up",...},
+   {"name":"hid.drag",...},   {"name":"device.list",...},
    {"name":"device.info",...} ]}}
 
 # ── one click + one typed string (real hardware moves) ──────────────

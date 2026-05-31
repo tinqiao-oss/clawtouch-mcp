@@ -2,7 +2,7 @@ blank_issues_enabled: true
 
 contact_links:
   - name: 商务咨询 / Commercial inquiry
-    url: mailto:support@tinqiao.com?subject=%5BCommercial%5D%20clawtouch-mcp
+    url: https://clawtouch.cn
     about: |
       Commercial and OEM inquiries — please email support@tinqiao.com directly.
       Commercial discussions stay off public issue trackers; do not file sensitive

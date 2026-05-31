@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Before filing — please skim [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md)
+        Before filing — please skim [CONTRIBUTING.md](https://github.com/tinqiao-oss/clawtouch-mcp/blob/master/CONTRIBUTING.md)
         for what is **out of scope** (agent-loop logic, application-
         specific adapters, protocol changes). Feature requests in those
         areas will be closed.

@@ -52,7 +52,10 @@ jobs:
         with:
           repository: tinqiao-oss/clawtouch-hid
           path: _sister_hid
-        continue-on-error: true
+        # No continue-on-error: if the sister repo is unreachable (renamed,
+        # not yet published, private) the cross-repo byte-equality net is
+        # dead, so this job MUST go red rather than silently skip. The trio
+        # publishes atomically — see each repo's release checklist.
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -69,15 +72,14 @@ jobs:
             pip install -e ./_sister_hid
             echo "sister_installed=1" >> "$GITHUB_OUTPUT"
           else
-            echo "sister_installed=0" >> "$GITHUB_OUTPUT"
-            echo "::warning::clawtouch-hid sister repo not accessible — cross-repo suite will skip"
+            echo "::error::clawtouch-hid sister repo not checked out — cross-repo byte-equality suite cannot run"
+            exit 1
           fi
 
       - name: Run cross-repo suite
         run: pytest tests/test_cross_repo_protocol.py -v --no-header
 
       - name: Assert cross-repo suite actually ran (not all skipped)
-        if: steps.install.outputs.sister_installed == '1'
         run: |
           # If clawtouch-hid is installed but suite is fully skipped, fail loudly.
           out=$(pytest tests/test_cross_repo_protocol.py -q 2>&1 | tail -3)
