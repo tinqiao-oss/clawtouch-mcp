@@ -1963,7 +1963,15 @@ def _write_message(writer: io.TextIOBase, msg: dict, *, framed: bool) -> None:
         writer.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("ascii"))  # type: ignore[attr-defined]
         writer.buffer.write(body)  # type: ignore[attr-defined]
     else:
-        writer.write(data + "\n")
+        # Line-delimited (newline) mode. Write UTF-8 *bytes* via .buffer,
+        # the same as the framed branch — NOT text via the locale-encoded
+        # TextIOWrapper. On a non-UTF-8 console code page (cp936 / GBK on
+        # Chinese Windows, where sys.stdout.encoding defaults to 'gbk' for
+        # a piped stdout) `writer.write(data)` re-encodes any non-ASCII in
+        # the JSON to GBK — a single em-dash in a tool description is
+        # enough — and a UTF-8 MCP client then fails to decode the frame.
+        # JSON-RPC over stdio is UTF-8 by spec regardless of host locale.
+        writer.buffer.write((data + "\n").encode("utf-8"))  # type: ignore[attr-defined]
     writer.flush()
 
 

@@ -7,6 +7,23 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — stdio frames are UTF-8 on every host locale (Chinese Windows / cp936)
+
+The line-delimited (newline) stdio branch — the MCP-stdio default — wrote
+JSON through the locale-encoded `TextIOWrapper` (`writer.write(...)`). On a
+non-UTF-8 console code page (cp936 / GBK on Chinese Windows, where a piped
+`sys.stdout.encoding` defaults to `'gbk'`) any non-ASCII byte got
+GBK-encoded. A single em-dash in a tool description was enough: `tools/list`
+came back as GBK and a UTF-8 MCP client raised
+`UnicodeDecodeError: 'utf-8' codec can't decode byte 0xa1` — the session
+never established. The framed (Content-Length) branch was already correct
+(it wrote `data.encode("utf-8")` via `writer.buffer`); only the newline
+branch was affected. Both branches now write UTF-8 **bytes** via
+`writer.buffer`, so the wire encoding is UTF-8 regardless of host locale.
+Workaround for older builds: launch with `PYTHONUTF8=1` (or
+`PYTHONIOENCODING=utf-8`). New regression suite
+`tests/test_stdio_utf8_encoding.py` (4 tests). 237 → 241 tests.
+
 ### Fixed — composed tools now propagate HID sub-call failures (no false success)
 
 The composed tools (`hid.click`, `hid.hover`, `hid.drag`, `hid.hold_key`)

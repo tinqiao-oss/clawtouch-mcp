@@ -36,6 +36,31 @@ C:\Users\<you>\clawtouch-test-env\Scripts\python.exe -m pip install "clawtouch-m
 
 ## First-time Pico hookup
 
+### No setup dialog — but watch for BOOTSEL mode
+
+Unlike macOS (which pops a **Keyboard Setup Assistant** the first time you
+plug in), Windows shows **no dialog** — the board just appears in Device
+Manager as two `USB 串行设备 (COMx)` / `USB Serial Device (COMx)` entries.
+
+There is, however, a Windows-visible failure mode worth recognising. If you
+see a **removable drive labelled `RP2350` (~134 MB)** and **no COM ports**,
+the board is sitting in the **RP2350 ROM bootloader (BOOTSEL)** — it
+enumerates as `VID_2E8A&PID_000F` (RP2350 Boot + Mass Storage), *not* the
+firmware's `PID_000B`. In this state `auto_detect_port()` returns `None` and
+`list_pico_ports()` returns `[]`: the board is **invisible to detection**
+because the bootloader exposes no CDC serial port.
+
+```powershell
+PS> [System.IO.Ports.SerialPort]::GetPortNames()     # empty!
+PS> Get-Volume | Where-Object FileSystemLabel -eq 'RP2350'   # a ~134MB removable drive
+```
+
+**Fix: unplug and replug the Pico _without_ holding the white BOOTSEL
+button.** If firmware is flashed it boots normally — the `RP2350` drive is
+replaced by a ~3 MB `CIRCUITPY` drive and `COM5`/`COM6` appear
+(`MI_00` = console, `MI_02` = data). Only a board with *no* firmware in
+flash stays in BOOTSEL across a clean replug; that one needs reflashing.
+
 ### Pico shows up as TWO COM ports (this is normal)
 
 The standard ClawTouch firmware enables a USB composite device with
@@ -120,6 +145,50 @@ jump 100 pixels to the right (instantly — HID protocol sends one move
 report, OS renders immediately; smoothing is not in scope for this OSS
 layer).
 
+### Full keyboard round-trip (type → select-all → copy → verify)
+
+This is the Windows analogue of the macOS TextEdit/`pbpaste` check —
+it confirms the whole HID keyboard path end to end. Open a **fresh,
+empty Notepad tab first** and make sure it has focus (Notepad on Windows 11
+is single-instance with tabs — the keystrokes land in the *active* tab, so
+don't run this with an important document focused). The input method must be
+**English** (see the IME section below) or the result will be mangled.
+
+```python
+import asyncio, ctypes
+from clawtouch_mcp.bridge import SerialHidBridge, auto_detect_port
+
+def get_clipboard():           # CF_UNICODETEXT via Win32, no extra deps
+    u32, k32 = ctypes.windll.user32, ctypes.windll.kernel32
+    u32.GetClipboardData.restype = ctypes.c_void_p
+    k32.GlobalLock.restype = ctypes.c_void_p
+    u32.OpenClipboard(0)
+    try:
+        h = u32.GetClipboardData(13)
+        return ctypes.c_wchar_p(k32.GlobalLock(h)).value if h else ""
+    finally:
+        u32.CloseClipboard()
+
+async def main():
+    b = SerialHidBridge(auto_detect_port(), timeout=2.0)
+    await b.connect()
+    await b.key_combo(["ctrl"], "a")                       # select existing
+    await b.type_text("hello world from clawtouch hid")    # types into Notepad
+    await asyncio.sleep(0.3)
+    await b.key_combo(["ctrl"], "a"); await b.key_combo(["ctrl"], "c")
+    await asyncio.sleep(0.3)
+    print(repr(get_clipboard()))                           # expect the exact string
+    await b.release_all(); await b.close()
+
+asyncio.run(main())
+```
+
+Expected: `'hello world from clawtouch hid'` — **byte-for-byte, lower-case
+`h`**. Note the contrast with macOS: Windows Notepad has **no autocorrect**,
+so the first letter is *not* capitalised the way macOS TextEdit silently
+turns `hello` into `Hello`. (Verified on Windows 11 26100 with the data
+channel on `COM6`.)
+
 ## Integrating with Claude Code (VS Code extension)
 
 The Claude Code VS Code extension **does not** read `~/.claude.json`
@@ -202,23 +271,96 @@ in the agent and closes it mid-task — real USB HID has no app targeting.
 mitigations:
 [INTEGRATIONS.md → "Known footgun: self-interrupt"](../examples/integrations/INTEGRATIONS.md#known-footgun-self-interrupt-on-a-shared-machine).
 
-### Typing Chinese / non-ASCII: paste, don't type
+### Input method matters for `hid.type` — paste, don't type
 
-`hid.type` sends raw US-layout HID keycodes. With **Microsoft Pinyin** (or
-any IME) active, those keycodes feed the IME composition buffer —
-punctuation silently turns fullwidth and you cannot produce Chinese
-characters at all. The robust fix (same as the ClawTouch desktop product)
-is to **put the text on the clipboard and paste it**, which bypasses the
-IME entirely:
+`hid.type` sends raw US-ANSI HID keycodes; the active input method decides
+what characters they become. With **Microsoft Pinyin** in **Chinese mode**,
+those keycodes feed the IME composition buffer and the result is *not* what
+you typed. Verified empirically on Windows 11 26100 (system Microsoft Pinyin,
+typing into Notepad):
+
+| `hid.type(...)` input | What lands in the document (Pinyin / 中文 mode) |
+|---|---|
+| `hello world from clawtouch hid` | `helloworldfromclaw透彻` — **every space is eaten** (space = "commit candidate") and `touch hi` is reinterpreted as the Chinese word **透彻** |
+| `a:b;c,d.e!f?g` | `` (empty) — a letters+punctuation run is consumed by the composer and nothing commits |
+| `nihao` + `hid.key("enter")` | `nihao` — Enter commits the raw pinyin letters (no valid candidate picked) |
+
+The Windows langid stays `0x0804` whether Pinyin is in 中文 or 英文 sub-mode
+(the 中/英 toggle is internal to the IME, not a separate keyboard layout), so
+you **cannot** reliably detect the mode from `GetKeyboardLayout`. The same
+input typed with the IME switched to **English** (tap `Shift`, or `Win+Space`)
+comes through clean:
+
+| `hid.type(...)` input | English mode |
+|---|---|
+| `hello world from clawtouch hid` | `hello world from clawtouch hid` — exact, spaces preserved |
+| `a:b;c,d.e!f?g` | `a:b;c,d.e!f?g` — **ASCII colon/comma stay ASCII** (no fullwidth `：，`) |
+
+**The robust fix for real text — paste via the clipboard.** This is what the
+ClawTouch desktop product does and the pattern we recommend: never type
+non-ASCII char-by-char; put the text on the clipboard and paste it, which
+bypasses the IME composition buffer entirely. Verified to deliver the exact
+string — Chinese, fullwidth punctuation, em-dash and emoji — **regardless of
+IME mode**:
 
 ```powershell
-Set-Clipboard '你好，ClawTouch 上线了！'   # or:  '...' | clip
+Set-Clipboard '你好，ClawTouch 上线了！— emoji 🐾'   # or:  '...' | clip
 ```
 
 then send the paste shortcut over HID: `bridge.key_combo(["ctrl"], "v")`.
-Paste **overwrites the clipboard** (save & restore if the user might be
-mid-copy). `hid.key` shortcuts (`ctrl+c`, `alt+tab`, ...) are layout-immune
-and unaffected by the IME.
+
+Caveats: paste **overwrites the host clipboard** (save & restore it if the
+user might be mid-copy — same shared-resource care as the self-interrupt
+footgun above), and the target field must accept a paste. `hid.key`
+shortcuts (`ctrl+c`, `alt+tab`, …) send named keycodes that bypass the IME
+composition buffer and are unaffected by the input mode.
+
+### Verified modifier-key combos
+
+`hid.key` accepts `ctrl`, `alt`, `shift`, and `win` (aliases `gui` / `cmd`
+all map to the same HID GUI modifier — on Windows that is the **Windows
+key**, *not* a clipboard modifier). The clipboard/editing shortcuts live on
+**`ctrl`**, not `cmd`. Combos exercised end-to-end against Notepad on
+Windows 11 26100:
+
+| Combo | Behavior |
+|-------|----------|
+| `ctrl+a` | Select all ✅ |
+| `ctrl+c` / `ctrl+v` / `ctrl+x` | Copy / paste / cut ✅ (paste round-trips Chinese exactly) |
+| `ctrl+z` | Undo ✅ |
+| `win` / `gui` / `cmd` | Opens the Start menu (Windows key) — **not** ⌘; don't use it for clipboard |
+| `alt+f4` | Closes the focused window — see the self-interrupt footgun above; **not** tested destructively |
+
+### `hid.screenshot` needs no special permission (unlike macOS)
+
+On macOS 14+ `mss` returns a **black image** until you grant Screen
+Recording permission. **Windows has no such gate** — `hid.screenshot`
+(and bare `mss`) capture the real desktop on first call, no prompt, no
+settings toggle. Verified on Windows 11 26100: a full-screen grab of the
+primary 5120×1440 monitor returned a 29.5 MB BGRA buffer with non-black
+content immediately. The capture is the **physical** pixel grid and matches
+`device.info.screen` (see the DPI note below), so no permission flow and no
+scaling conversion are needed in your agent loop.
+
+### Non-UTF-8 console code page (cp936) and the stdio transport
+
+JSON-RPC over stdio is UTF-8 by spec, but on a **Chinese Windows install**
+a *piped* `sys.stdout` defaults to the locale code page (`cp936` / GBK,
+`sys.stdout.encoding == 'gbk'`). Builds **before** the
+`tests/test_stdio_utf8_encoding.py` fix wrote the newline-delimited stdio
+branch through that locale encoder, so any non-ASCII byte in a frame — a
+single em-dash in a tool description is enough — was emitted as GBK and a
+UTF-8 MCP client failed to decode it:
+
+```
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xa1 in position ...
+```
+
+…and the session never established. The framed (Content-Length) transport
+the VS Code extension uses was unaffected; the symptom only bit
+newline-delimited clients on a GBK console. Current builds write UTF-8 bytes
+on both transports. If you must run an older build, launch with
+`PYTHONUTF8=1` (or `PYTHONIOENCODING=utf-8`) to force a UTF-8 stdout.
 
 ### Display scaling (DPI) does not affect HID coordinates
 
@@ -265,14 +407,16 @@ monitors regardless of the clamp rectangle.
 | `ping()` returns `False` on v0.2.0 | Old dual-CDC detection bug | Upgrade to v0.2.1+ |
 | `hid.click` does nothing past x=1920 or y=1080 | `--screen 1920x1080` clamping a larger screen | Remove `--screen` from args (let v0.2.3+ auto-detect), or pass your real resolution |
 | `device.info` returns `screen.source: "unset"` | Auto-detect failed on this machine | Pass `--screen WxH` explicitly. Open an issue with your Windows version |
-| `hid.type` produces wrong characters | Active keyboard layout isn't US-ANSI | Switch input method to "ENG" in the system tray (Win+Space cycles) |
+| `hid.type` produces wrong characters / Chinese / dropped spaces | An IME (Microsoft Pinyin) is in 中文 mode | Switch to "ENG" (`Win+Space`, or tap `Shift` in Pinyin), or paste instead of type — see the input-method section |
+| `auto_detect_port()` returns `None` **and** a `RP2350` drive is mounted | Board is in BOOTSEL (`PID_000F`), no CDC port | Replug without holding BOOTSEL — see "watch for BOOTSEL mode" |
+| Client fails with `UnicodeDecodeError: ... byte 0xa1` on connect | Old build emitting GBK on a cp936 console | Update; or launch with `PYTHONUTF8=1` — see the cp936 note |
 | `Permission denied: 'COM6'` | Another process holds the port | Check Device Manager — close any PuTTY/serial-terminal session, or unplug/replug the Pico |
 
 ## Compatibility matrix
 
 | | Verified on | Notes |
 |---|---|---|
-| Windows 11 (x64) | 26100, MSVC Python 3.13 | ✅ Full e2e through VS Code Claude extension |
+| Windows 11 (x64) | 26100, Python 3.13.12 (uv), Pico 2 RP2350 | ✅ Full e2e: dual-CDC detect → `COM6` → `ping` → `type`/`ctrl+a`/`ctrl+c` clipboard round-trip → Chinese paste → `hid.screenshot`; MCP server `device.info` reports `screen 5120×1440 source=detected`. IME-mangling vs English vs paste all characterised on a cp936 console |
 | Windows 10 1809+ | _not yet tested_ | Same code paths — should work |
 | Windows 10 pre-1809 | unsupported | `SetProcessDpiAwareness(2)` (per-monitor v2) needs 1809+. v1 fallback works on older |
 | Pico 2 (RP2350) | Yes | VID `0x2E8A`, PID `0x000B` enumerated correctly |
