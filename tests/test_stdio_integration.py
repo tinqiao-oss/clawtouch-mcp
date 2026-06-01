@@ -20,7 +20,6 @@ import json
 import subprocess
 import sys
 
-import pytest
 
 
 TIMEOUT_SECS = 15

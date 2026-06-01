@@ -174,7 +174,6 @@ class TestIdleWatchCrashRecovery:
         # auto-restores at teardown — no process-wide builtins mutation that
         # a skipped `finally` (or pytest-xdist reordering) could leak into
         # later tests.
-        import clawtouch_mcp.server as srv_mod
         monkeypatch.setattr(srv_mod, "isinstance", _boom, raising=False)
 
         async def _run():

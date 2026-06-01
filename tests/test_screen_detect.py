@@ -13,7 +13,6 @@ import asyncio
 import json
 from unittest.mock import patch
 
-import pytest
 
 from clawtouch_mcp.server import ClawTouchMcpServer, MockBridge, ServerConfig
 

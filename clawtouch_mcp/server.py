@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
 from . import __version__
-from .bridge import SerialHidBridge, auto_detect_port, auto_detect_ports, list_pico_ports
+from .bridge import SerialHidBridge, auto_detect_ports, list_pico_ports
 from . import cursor as _cursor_mod
 from .cursor import (
     _seed_fake_cursor,
