@@ -114,17 +114,17 @@ requirement. Its irreplaceable value is the cases above: the target
 can't host an agent, needs the OS to see a genuine physical HID
 device, or has to be driven across machines / in physical isolation.
 
-We do **not** support, document, or assist with:
+These two are outside what it's for:
 
 - **Mass account creation / multi-account operations** on consumer
   platforms — a single-host tethered peripheral is structurally a
-  poor fit. Users are responsible for checking applicable laws and
-  platform policies in their own jurisdiction before any such use.
+  poor fit.
 - **Application-specific scripted shortcuts** (selectors, fixed-flow
   scripts for a particular site or app). Those belong in agent / RPA
   frameworks built on top of this primitive layer.
 
 If you're looking for either of the above, this isn't the right tool.
+For the compliance boundary, see "Acceptable use" below.
 
 ## Install
 
@@ -541,15 +541,19 @@ an LLM agent control of a desktop. They split into two camps:
   is user-extensible and the firmware itself is auditable.
 
 CMU's [**HIDAgent**](https://arxiv.org/abs/2602.00492) (Bigham et al.,
-2026-01) is the closest academic peer in hardware budget (< $30 Pico +
-CircuitPython) and design intent; it ships its own Python library
-rather than an MCP server.
+2026-01) is the closest academic peer in hardware budget (< $30:
+RP2040 + HDMI-to-USB + CH340 serial bridge) and design intent; it ships
+its own Python library rather than an MCP server.
 
-If your target is the same machine the agent runs on, the software-only
-MCPs above are simpler. ClawTouch is built for the cross-device case
-(agent on one machine, target on a separate desktop / laptop / VM),
-where a USB-only hardware path avoids screen-share, RDP, or
-"install this agent on the target machine" trade-offs.
+If you only need synthetic input on one machine and the app doesn't
+care where input comes from, the software-only MCPs above are simpler —
+no extra hardware to buy. ClawTouch's irreplaceable edge is the genuine
+hardware HID path: the OS sees a real physical keyboard / mouse — in
+local mode that's what makes it work for accessibility, compatibility
+testing, and apps that reject synthetic input, with no driver on the
+input side. On top of that, cross-host mode can drive a target that
+can't host an agent or must stay physically isolated — something a
+software-only server can't do at all.
 
 ## Open source roadmap
 
