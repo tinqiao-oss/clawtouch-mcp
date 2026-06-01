@@ -23,110 +23,72 @@
 ## What is this?
 
 A standalone Python process that speaks **Model Context Protocol** (MCP) over
-stdio and exposes mouse / keyboard primitives to whatever AI agent you have.
-Under the hood it talks to a **ClawTouch HID device** — a Raspberry Pi Pico 2
-running the open [ClawTouch HID firmware](#hardware) over USB serial — and
-translates `hid.click` / `hid.type` / `hid.scroll` tool calls into real HID
-reports that travel through the OS HID driver stack on **the same input path
-as any plugged-in external keyboard or mouse**.
-
-**Why care?** A physical USB HID peripheral routes input through the
-standard OS HID driver stack — the same path as any plug-in keyboard
-or mouse — and needs no mouse/keyboard driver or HID agent process
-installed on the target. The Pico is a standard USB HID class device,
-recognized natively by every OS. That fits locked-down kiosks,
-embedded test harnesses, cross-machine RPA, and any scenario where
-the target machine must stay clean on the HID-input side.
+stdio and exposes mouse / keyboard primitives — `hid.click`, `hid.type`,
+`hid.scroll`, key combos, `hid.screenshot` — to whatever AI agent you already
+use. Under the hood it talks over USB serial to a **ClawTouch HID device** (a
+Raspberry Pi Pico 2 running the open [ClawTouch HID firmware](#hardware), or any
+turnkey ClawTouch box) and translates each tool call into a real USB HID report.
+The target OS sees a **genuine physical keyboard and mouse** — input arrives on
+the same driver path as any plugged-in peripheral, not as a software-injected
+synthetic event.
 
 > 📦 MIT-licensed. No ClawTouch backend, no LLM, no agent loop on top —
 > just the raw HID plumbing so other agent stacks can talk to real hardware.
 
-## Deployment modes — is the agent on the same machine as the screen?
+> ⚠️ This gives an agent **real keyboard / mouse reach** over a machine —
+> the same reach as a person at the keyboard. Read [Safety](#safety) first.
 
-`clawtouch-mcp` covers the **input side only** (agent tool call → HID
-report → real input). The **visual side** (agent reads the screen to
-decide what to do next) is **not in this repo** — how you wire the two
-sides together depends on where the agent runs.
+## Why hardware HID?
 
-### Local mode — the common case
+Software automation (PyAutoGUI, OS-level input APIs, multimodal click-the-screen
+models) injects **synthetic** input events into a session — which requires an
+agent process running on the target machine, in that user session, with focus.
+A USB HID peripheral works the other way around: it emits **real** HID reports
+that travel the standard OS HID driver stack, exactly like a plugged-in keyboard
+or mouse. The OS recognizes the Pico natively as a standard USB HID class device
+and needs **no mouse / keyboard driver and no HID agent process** on the input
+side of the target. That difference is the whole point of this project — every
+other section below just builds on it.
 
-agent + `clawtouch-mcp` + Pico + the controlled screen all on **one
-PC**. `hid.screenshot` captures the screen of the machine the agent
-runs on, so the visual feedback loop closes naturally. The Pico is a
-standard USB HID device — this PC needs no driver and no HID agent on
-the input side (the `clawtouch-mcp` process itself does live here,
-because that's the agent's host).
+**Local mode is the common case** (agent + `clawtouch-mcp` + Pico + the screen
+all on one PC; the `clawtouch-mcp` process lives there because it's the agent's
+host, but the input side needs no driver). Cross-host control — agent on one
+machine driving a target on another over USB HID — is an *additional* capability
+the same hardware unlocks; see [Deployment modes](#deployment-modes).
 
-Good for: accessibility, single-machine RPA, compatibility testing,
-in-machine kiosk self-service.
+**Good for:**
 
-### Cross-host mode — input supported, visual is your problem
+- **Kiosks / locked-down machines** — drive a machine you can't (or won't)
+  install software on; nothing extra runs on the input side.
+- **Accessibility** — let a user drive their own computer via an agent issuing
+  HID commands, without fighting per-app synthetic-input compatibility.
+- **Compatibility testing** — verify your software handles *external* HID input
+  correctly, which can differ from injected synthetic events.
+- **Cross-host RPA / test rigs** — an agent on your dev laptop drives an
+  industrial PC, an offline test target, or a QA-lab phone, with no agent on
+  the target (visual feedback needs a separate path — see Deployment modes).
 
-agent + `clawtouch-mcp` on machine **A**; the Pico and the controlled
-screen are on machine **B**. This repo fully covers the input side
-(A → B over USB HID), **but `hid.screenshot` still captures A's
-screen, not B's** — the HID protocol carries input one-way only, and
-reverse screen capture isn't in the HID spec. You have to pick one
-of these for the visual path:
+**Not for:**
 
-- **HDMI capture card** — B's HDMI output feeds A's capture card, the
-  agent on A reads frames from there. B stays truly software-free at
-  the cost of extra capture hardware.
-- **VNC / RDP / screen sharing** — install a VNC server on B. Open
-  protocols with no vendor lock-in, but B is no longer software-free.
-- **API / log verification** — the agent doesn't watch B's screen in
-  real time; it verifies progress at checkpoints via an API, log file,
-  or database on B. Fits fixed-flow RPA, not open-ended tasks.
-- **Blind operation** — the agent issues a full pre-baked command
-  sequence without reading any feedback. Only works for fully
-  deterministic scenarios (e.g. a hand-tuned macro).
+- **Mass account creation / multi-account operations** — a single-host tethered
+  peripheral is structurally a poor fit; one device drives exactly one target,
+  and to drive ten machines you buy ten devices.
+- **Application-specific scripted shortcuts** (selectors, fixed-flow scripts for
+  a particular site or app). Those belong in agent / RPA frameworks built on top
+  of this primitive layer, not in this layer itself.
 
-Good for: industrial PCs that can't run a modern OS / strictly
-isolated embedded test targets / QA-lab phone farms.
+For standard desktop apps (browser, IDE, office suites) the software-only path
+is already enough — the hardware is just an extra option there, not a
+requirement. Its irreplaceable value is the cases above, where the target can't
+host an agent, must show the OS a genuine physical HID device, or has to be
+driven across machines. For the compliance boundary on the "not for" cases, see
+[Acceptable use](#acceptable-use).
 
-## Scope — what this is and isn't
+## Quickstart
 
-**One device, one target.** The hardware is a USB peripheral with a
-single host connection. Whatever you plug it into is the one machine
-it can drive. That's by design — this is a tethered control device,
-not a fleet automation tool. If you want to drive ten machines you buy
-ten devices.
+> ⚠️ Before you start: read [Safety](#safety) — a connected agent can operate this machine like a person at the keyboard.
 
-We support these scenarios:
-
-- **RPA / test automation** — bridge an AI agent to an old machine you
-  can't install software on, a kiosk shell, an industrial PC running
-  an unsupported OS, or a phone in your QA lab.
-- **Accessibility** — let a disabled user drive their own computer via
-  a screen reader plus an AI agent issuing HID commands, instead of
-  fighting with synthetic-input compatibility on each app.
-- **Compatibility testing** — verify your software treats external HID
-  input correctly, which can differ from injected synthetic input.
-- **Cross-machine workflows** — an agent on your dev laptop driving
-  the test machine in the rack, with no HID driver / HID agent on the
-  target (visual feedback needs a separate path — HDMI capture / VNC /
-  API checkpoints / blind operation; see "Deployment modes" above).
-
-For standard desktop apps (browser, IDE, office suites) the
-software-only path (multimodal LLM + OS-level synthetic input) is
-already enough — this hardware is just an extra path there, not a
-requirement. Its irreplaceable value is the cases above: the target
-can't host an agent, needs the OS to see a genuine physical HID
-device, or has to be driven across machines / in physical isolation.
-
-These two are outside what it's for:
-
-- **Mass account creation / multi-account operations** on consumer
-  platforms — a single-host tethered peripheral is structurally a
-  poor fit.
-- **Application-specific scripted shortcuts** (selectors, fixed-flow
-  scripts for a particular site or app). Those belong in agent / RPA
-  frameworks built on top of this primitive layer.
-
-If you're looking for either of the above, this isn't the right tool.
-For the compliance boundary, see "Acceptable use" below.
-
-## Install
+### Install
 
 ```bash
 pip install clawtouch-mcp                 # minimal (serial only)
@@ -142,7 +104,7 @@ pip install 'clawtouch-mcp[screenshot]'   # + mss + Pillow for hid.screenshot to
   Setup Assistant dialog on first plug-in, dual USB-CDC ports, Screen
   Recording permission, Pinyin IME punctuation gotchas.
 
-## Run
+### Run
 
 ```bash
 # 1. Auto-detect HID board AND auto-detect screen size (v0.2.3+)
@@ -164,153 +126,7 @@ clawtouch-mcp --mock --log-level INFO
 > see what was detected (`screen.source` is `"detected"` /
 > `"explicit"` / `"unset"`).
 
-## Runtime safety limits
-
-* Coordinates **clamped** to `--screen WxH` so an agent can't move the mouse
-  to bogus pixel positions.
-* Typed text **capped at 4096 chars** per call.
-* `hid.type` is for **ASCII / US-keyboard-layout text**. Control
-  characters (newline / tab / etc.) are **stripped** by default so an
-  agent's multi-line draft isn't accidentally submitted — send Enter with
-  `hid.key("enter")` and Tab with `hid.key("tab")`. Non-ASCII text (CJK,
-  emoji) is typed through the US layout and generally will **not** work;
-  drive the host IME or a clipboard path from your agent for those.
-* All operations **rate-limited** to `--ops-per-sec` (default 20). This
-  counts *tool calls*, not individual HID reports — one call such as
-  `hid.drag` or a long `hid.type` emits many reports, so the effective
-  HID-report rate is higher. It is a flood / typo guard, not a security
-  throttle.
-* `hid.screenshot` is **disabled unless** you pass `--allow-screenshot`.
-* `hid.release_all` exposed for use as a panic-stop tool from the agent.
-
-## Autonomy & safety — what an agent connected to this can do
-
-> Read this before connecting an autonomous agent. The runtime limits
-> above are flood / typo guards, **not** a security boundary against a
-> misbehaving agent.
-
-`clawtouch-mcp` turns your agent's tool calls into **real USB HID input** —
-keystrokes and mouse moves that travel the same driver path as a plugged-in
-keyboard or mouse, so at the input layer the OS treats them like physical
-device input. Being a genuine HID device — not synthetic injected input — is
-what makes the legitimate use cases work (locked-down kiosks, compatibility
-testing, accessibility, cross-machine RPA). The same property has a symmetric
-risk you should plan for:
-
-**An autonomous agent connected here has, in practice, the same reach over the
-host as a person sitting at the keyboard.** Through ordinary HID input it can
-open any application, run commands in a terminal, launch programs, install or
-remove software, and read, move, or delete files. And because the input is
-delivered as ordinary HID, an interactive confirmation prompt is not by itself
-a reliable barrier against it — treat any consent or permission dialog as
-something the agent may act on. `clawtouch-mcp` does **not** inspect the intent
-or content of what the agent sends; it faithfully forwards each call to the
-hardware.
-
-This can happen **without you intending it**, because the agent — not this
-server — decides what to do. The usual triggers are:
-
-- **Prompt injection.** Untrusted text the agent reads off the screen, a web
-  page, or an image can contain instructions that override yours and steer the
-  agent into actions you never asked for. Screen-reading / RPA workflows are a
-  setting where this applies.
-- **Model error.** The model can simply misunderstand the task and act on the
-  wrong window, the wrong file, or the wrong button.
-- **Over-broad autonomy.** The more open-ended the task and the fewer the
-  checkpoints, the larger the blast radius if either of the above occurs.
-
-This describes an **unintended failure mode** of an autonomous agent, not a
-supported use — deliberately using HID input to defeat a system's security or
-risk controls is out of scope under **Acceptable use** below. It is also a
-distinct concern from the **Content generation** (labeling) section and from
-the software bugs covered in [`SECURITY.md`](SECURITY.md); none of those cover
-an agent acting against your own intent. The MIT "AS IS / no warranty" clause
-is a liability disclaimer, not an informed-risk notice; the responsibility for
-running an autonomous agent safely sits with you as the deployer. This notice
-is provided for information only — it does not modify, narrow, or expand the
-MIT License, create any warranty or duty of care, or shift liability to
-Tinqiao; the MIT no-warranty / no-liability terms continue to govern in full.
-
-### Operator mitigations
-
-Treat an agent driving HID input like giving a capable but not-fully-trusted
-operator real hands on the machine. Recommended:
-
-- **Use a dedicated machine you can wipe (or a VM / container)** — not your
-  primary computer. Local mode puts the agent and target on one PC: the
-  convenient case, and also the one with the largest blast radius; prefer a
-  separate machine where you can.
-- **Run under a least-privilege OS account; do not run the target session or
-  the agent as administrator / root.** The agent inherits whatever that account
-  can do.
-- **Keep sensitive data and logged-in accounts off the target** — no saved
-  passwords, no authenticated sessions, no credentials in the prompt — so an
-  injection or mistake has less to reach.
-- **Keep a human in the loop.** Require explicit confirmation before
-  consequential or irreversible actions — installing/deleting software, sending
-  messages or email, financial transactions, agreeing to terms. Don't leave the
-  agent running unattended on an open-ended task.
-- **Isolate the network**, such as a domain allowlist, to reduce the agent's
-  exposure to malicious or injection-bearing content.
-- **Treat everything the agent reads from the screen or web as untrusted
-  input** and isolate it from sensitive data and actions, so a successful
-  injection can do less damage.
-- **Keep a panic stop reachable.** `hid.release_all` releases every held key and
-  button from the agent side; physically unplugging the Pico's USB cable is the
-  most reliable stop and removes the agent's input path entirely.
-
-If you deploy this on behalf of other people (accessibility, managed RPA),
-inform those end users of these risks and obtain their consent.
-
-## See it in action
-
-A complete session: the server starts, an MCP client (could be Claude
-Desktop, Cline, your own loop, anything) sends the standard MCP
-`initialize` handshake, lists the tools, and fires a click and a
-type-string. Stdout below is line-delimited JSON-RPC; everything goes
-through real USB-CDC frames to real Pico 2 hardware.
-
-```text
-$ clawtouch-mcp --port COM7
-[INFO] clawtouch-mcp 0.3.0 starting (mock=False)
-[INFO] connected to Pico 2 on COM7 (serial: E660ABCD12345678)
-[INFO] screen auto-detected: 2560x1440 (Windows SM_CXSCREEN/SM_CYSCREEN)
-[INFO] 13 HID tools + 2 device tools registered; listening on stdio
-
-# ── MCP client → server ─────────────────────────────────────────────
-< {"jsonrpc":"2.0","id":1,"method":"initialize",
-   "params":{"protocolVersion":"2024-11-05","capabilities":{},
-             "clientInfo":{"name":"any-mcp-client","version":"1.0"}}}
-> {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",
-   "capabilities":{"tools":{"listChanged":false}},
-   "serverInfo":{"name":"clawtouch-mcp","version":"0.3.0"}}}
-
-< {"jsonrpc":"2.0","method":"notifications/initialized"}
-
-< {"jsonrpc":"2.0","id":2,"method":"tools/list"}
-> {"jsonrpc":"2.0","id":2,"result":{"tools":[
-   {"name":"hid.click",...},  {"name":"hid.move",...},
-   {"name":"hid.hover",...},  {"name":"hid.type",...},
-   {"name":"hid.scroll",...}, {"name":"hid.key",...},
-   {"name":"hid.key_press",...}, {"name":"hid.key_release",...},
-   {"name":"hid.hold_key",...}, {"name":"hid.release_all",...},
-   {"name":"hid.mouse_button_down",...}, {"name":"hid.mouse_button_up",...},
-   {"name":"hid.drag",...},   {"name":"device.list",...},
-   {"name":"device.info",...} ]}}
-
-# ── one click + one typed string (real hardware moves) ──────────────
-< {"jsonrpc":"2.0","id":3,"method":"tools/call",
-   "params":{"name":"hid.click","arguments":{"x":640,"y":360}}}
-> {"jsonrpc":"2.0","id":3,"result":{"content":[
-   {"type":"text","text":"clicked at (640, 360)"}],"isError":false}}
-
-< {"jsonrpc":"2.0","id":4,"method":"tools/call",
-   "params":{"name":"hid.type","arguments":{"text":"Hello from MCP"}}}
-> {"jsonrpc":"2.0","id":4,"result":{"content":[
-   {"type":"text","text":"typed 14 chars in 0.42s"}],"isError":false}}
-```
-
-## Use with Claude Desktop
+### Use with Claude Desktop
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json`
 (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
@@ -336,7 +152,7 @@ list with 15 tools available (13 HID + 2 device; +1 if you pass
 (Requires `--allow-screenshot` to enable the `hid.screenshot` tool — off by
 default for privacy.)
 
-## Use with other MCP clients
+### Other MCP clients
 
 Copy-pasteable config for 7 verified clients (Claude Desktop / Code,
 Cursor, OpenClaw, Hermes Agent, ChatGPT Desktop / Codex CLI,
@@ -344,146 +160,179 @@ Cherry Studio, Trae IDE) — see
 [`examples/integrations/INTEGRATIONS.md`](examples/integrations/INTEGRATIONS.md).
 PRs adding new clients welcome.
 
-## Use with Computer Use loops
+## Deployment modes
 
-If you're building your own Computer Use loop (instead of plugging
-into an MCP client), see [`examples/computer_use/`](examples/computer_use/)
-for two reference implementations that route Anthropic / OpenAI agent
-actions through ClawTouch HID:
+*Is the agent on the same machine as the screen?* `clawtouch-mcp` covers the **input side only** (agent tool call → HID report → real input). The **visual side** (agent reads the screen to decide what to do next) is **not in this repo** — how you wire the two sides together depends on where the agent runs.
 
-- [Claude Computer Use → HID](examples/computer_use/claude_demo.py) —
-  `client.beta.messages.stream` with the `computer_20251124` tool
-- [OpenAI CUA → HID](examples/computer_use/openai_cua_demo.py) —
-  Responses API with `computer-use-preview`
+**Local mode — the common case.** agent + `clawtouch-mcp` + Pico + the controlled screen all on **one PC**. `hid.screenshot` captures that same screen, so the visual feedback loop closes naturally; the Pico is a standard USB HID device needing no driver. Good for accessibility, single-machine RPA, compatibility testing, in-machine kiosk self-service.
 
-Both demos import `clawtouch_mcp.bridge.SerialHidBridge` directly (no
-MCP subprocess) and run on a single machine.
+**Cross-host mode — input supported, visual is your problem.** agent + `clawtouch-mcp` on machine **A**; the Pico and the controlled screen on machine **B**. This repo fully covers the input side (A → B over USB HID), **but `hid.screenshot` still captures A's screen, not B's** — HID carries input one-way only; reverse screen capture isn't in the spec. Pick a visual path: **HDMI capture card** (B stays truly software-free, needs capture hardware) · **VNC / RDP** (open, no vendor lock-in, but B is no longer software-free) · **API / log verification** (check progress at checkpoints, not real-time; fixed-flow RPA only) · **blind operation** (pre-baked command sequence, no feedback; fully deterministic macros only). Good for industrial PCs that can't run a modern OS, strictly isolated embedded test targets, QA-lab phone farms.
 
-## Application skills (LLM guidance)
+## Safety
 
-[`clawtouch-skills`](https://github.com/tinqiao-oss/clawtouch-skills)
-is a companion repository of **markdown skill files** — operator
-manuals for specific applications that an LLM can load before driving
-that app through `clawtouch-mcp`. The first batch covers Chinese-
-market apps where LLM training data is thin and the delta between
-"LLM guesses" and "actual UI" is widest:
+> Read this before connecting an autonomous agent. The runtime limits
+> above are flood / typo guards, **not** a security boundary against a
+> misbehaving agent.
 
-- WPS Office, Feishu / Lark, DingTalk —
-  see [`tinqiao-oss/clawtouch-skills`](https://github.com/tinqiao-oss/clawtouch-skills)
+### Runtime safety limits
 
-Skills are soft guidance — the LLM still decides what to do.
+* Coordinates **clamped** to `--screen WxH` so an agent can't move the mouse
+  to bogus pixel positions.
+* Typed text **capped at 4096 chars** per call.
+* `hid.type` is for **ASCII / US-keyboard-layout text**. Control
+  characters (newline / tab / etc.) are **stripped** by default so an
+  agent's multi-line draft isn't accidentally submitted — send Enter with
+  `hid.key("enter")` and Tab with `hid.key("tab")`. Non-ASCII text (CJK,
+  emoji) is typed through the US layout and generally will **not** work;
+  drive the host IME or a clipboard path from your agent for those.
+* All operations **rate-limited** to `--ops-per-sec` (default 20). This
+  counts *tool calls*, not individual HID reports — one call such as
+  `hid.drag` or a long `hid.type` emits many reports, so the effective
+  HID-report rate is higher. It is a flood / typo guard, not a security
+  throttle.
+* `hid.screenshot` is **disabled unless** you pass `--allow-screenshot`.
+* `hid.release_all` exposed for use as a panic-stop tool from the agent.
 
-## Tools exposed
+### What an agent connected to this can do
 
-| Tool                     | Since | Purpose                                       |
-|--------------------------|-------|-----------------------------------------------|
-| `hid.click`              | v1.0  | Click at (x, y). Absolute by default (server queries the OS cursor via Win32 / CoreGraphics / X11, computes a delta, sends a relative move to the firmware); pass `relative=true` to skip the OS query and send a raw pixel delta. Wayland / OS-query failures → explicit error |
-| `hid.move`               | v1.0  | Move mouse to (x, y). Same absolute-by-default semantics as `hid.click`; `relative=true` sends a raw pixel delta |
-| `hid.hover`              | v1.0  | Move (absolute), then idle                    |
-| `hid.type`               | v1.0  | Type a UTF-8 string                           |
-| `hid.scroll`             | v1.0  | Wheel scroll (positive = up, negative = down) |
-| `hid.key`                | v1.0  | Named key / shortcut (`enter`, `ctrl+c`, …)   |
-| `hid.release_all`        | v1.0  | Panic stop — release every held button / key  |
-| `hid.mouse_button_down`  | **v1.1**  | Press a mouse button without releasing (drag start; matches CUA `left_mouse_down`) |
-| `hid.mouse_button_up`    | **v1.1**  | Release a previously-pressed mouse button (drag end; matches CUA `left_mouse_up`) |
-| `hid.drag`               | **v1.1**  | Drag from (`from_x`, `from_y`) to (`to_x`, `to_y`) while holding a button — composes `mouse_button_down` → glided `move` → `mouse_button_up`; matches CUA `left_click_drag` |
-| `hid.key_press`          | **v1.1**  | Press a key (or shortcut) without releasing — useful for `hold shift while clicking N times` multi-select |
-| `hid.key_release`        | **v1.1**  | Release a previously-pressed key; no args = release all keys + mouse buttons |
-| `hid.hold_key`           | **v1.1**  | Press → wait `duration_ms` → release (matches CUA `hold_key`) |
-| `hid.screenshot`         | v1.0  | Screenshot of primary monitor — JPEG q80 default, `format='png'` for lossless (opt-in) |
-| `device.list`            | v1.0  | List candidate HID board ports                |
-| `device.info`            | v1.0  | Active connection info                        |
+`clawtouch-mcp` turns your agent's tool calls into **real USB HID input** — the
+same property that makes the legitimate use cases work (kiosks, accessibility,
+compatibility testing, cross-host RPA) carries a symmetric risk:
 
-## Tool-selection guidance for LLMs
+**An autonomous agent connected here has, in practice, the same reach over the
+host as a person sitting at the keyboard.** It can open any application, run
+commands in a terminal, install or remove software, and read, move, or delete
+files. Because the input arrives as ordinary HID, a confirmation prompt is not
+by itself a reliable barrier — treat any consent dialog as something the agent
+may act on. `clawtouch-mcp` does **not** inspect intent or content; it
+faithfully forwards each call to the hardware.
 
-`clawtouch-mcp` ships two complementary mechanisms so an LLM client
-reliably picks `hid.*` tools when they're the right answer — and stays
-out of the way when they're not:
+This can happen **without you intending it**, because the *agent* decides what
+to do. The usual triggers:
 
-1. **Server-level `instructions` field** in the MCP 2024-11-05
-   `initialize` response. A 500-character string telling the client
-   *"Prefer hid.\* when no API or automation path exists for the target
-   application, or when the user explicitly asks for physical
-   keyboard/mouse interaction. For tasks solvable with file APIs,
-   browser automation, or OS APIs, prefer those instead."* Recognised by
-   Claude Desktop, Cursor, Hermes, ChatGPT Desktop and other
-   spec-compliant clients.
+- **Prompt injection.** Untrusted text the agent reads off the screen, a web
+  page, or an image can carry instructions that override yours.
+- **Model error.** The model misunderstands the task and acts on the wrong
+  window, file, or button.
+- **Over-broad autonomy.** The more open-ended the task and the fewer the
+  checkpoints, the larger the blast radius.
 
-2. **Per-tool `HID_PREFIX`** prepended to every `hid.*` tool's
-   `description` string. Tool-selection-time guidance — visible even if
-   the client ignores the server-level `instructions` field. The 13
-   baseline `hid.*` tools + the opt-in `hid.screenshot` all carry the
-   prefix:
+This is an **unintended failure mode**, not a supported use — deliberately
+using HID input to defeat a system's security controls is out of scope under
+**Acceptable use** below. It is also distinct from software bugs in
+[`SECURITY.md`](SECURITY.md): none of those cover an agent acting against your
+own intent. The MIT "AS IS / no warranty" clause is a liability disclaimer, not
+an informed-risk notice; responsibility for running an autonomous agent safely
+sits with you as the deployer. This notice is provided for information only —
+it does not modify, narrow, or expand the MIT License, create any warranty or
+duty of care, or shift liability to Tinqiao; the MIT no-warranty / no-liability
+terms continue to govern in full.
 
-   > *[Physical HID input — pick this when other automation paths (file
-   > APIs, browser automation, OS APIs) cannot accomplish the task, or
-   > when the user explicitly requests physical keyboard or mouse
-   > input.]*
+### Operator mitigations
 
-   `device.*` tools are unaffected (read-only diagnostics, no selection
-   ambiguity).
+Treat an agent driving HID input like giving a capable but not-fully-trusted
+operator real hands on the machine. Recommended:
 
-This addresses a real LLM-behavior risk: the original `hid.*`
-descriptions were physics-detailed (closed-loop convergence, OS pointer
-ballistics) but had no application-layer anchor — an LLM seeing *"open
-WPS Office"* had nothing telling it *"this is the right tool for
-that."* The guidance explicitly frames `hid.*` as a fallback layer that
-activates when other paths fail or when the user names ClawTouch
-directly.
+- **Use a dedicated, wipeable machine (or a VM / container)** — not your primary
+  computer. Local mode puts agent and target on one PC: convenient, but the
+  largest blast radius; prefer a separate machine where you can.
+- **Run under a least-privilege OS account**, never as administrator / root —
+  the agent inherits whatever that account can do.
+- **Keep secrets and logged-in accounts off the target** — no saved passwords,
+  no authenticated sessions, no credentials in the prompt.
+- **Keep a human in the loop** for consequential or irreversible actions
+  (installing/deleting software, sending messages, financial transactions,
+  agreeing to terms); don't leave the agent unattended on open-ended tasks.
+- **Isolate the network** (e.g. a domain allowlist) to limit exposure to
+  malicious or injection-bearing content.
+- **Treat everything read from screen or web as untrusted input** and keep it
+  away from sensitive data and actions.
+- **Keep a panic stop reachable.** `hid.release_all` releases every held key and
+  button from the agent side; physically unplugging the HID device's USB cable
+  is the most reliable stop and removes the agent's input path entirely.
 
-## Hardware
+If you deploy this on behalf of others (accessibility, managed RPA), inform
+those end users of these risks and obtain their consent.
 
-This server can talk to:
+## Tools
 
-1. **ClawTouch HID device** — turnkey hardware, drop-shipped, plug-and-play.
-   Order or get a sample at [clawtouch.cn](https://clawtouch.cn).
-2. **Any RP2350 board running [clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** —
-   the OSS firmware + protocol module (wire epoch 1, frozen envelope) live in their own public repo.
-   Buy a Pico 2 (~$8), flash the firmware, you're done.
+Sixteen tools register: **thirteen always-on `hid.*` input tools**, plus
+**`hid.screenshot`** (opt-in — off unless you pass `--allow-screenshot`), plus
+**two read-only `device.*` diagnostics**. That matches the startup log line
+`13 HID tools + 2 device tools registered` (the `--allow-screenshot` flag adds
+`hid.screenshot` on top, for 16).
 
-The wire protocol is the same for both — the server doesn't care which one it
-talks to.
+| Tool | Since | Purpose |
+|------|-------|---------|
+| `hid.click` | v1.0 | Click at (x, y) |
+| `hid.move` | v1.0 | Move the mouse to (x, y) |
+| `hid.hover` | v1.0 | Move to (x, y), then idle |
+| `hid.type` | v1.0 | Type a UTF-8 string |
+| `hid.scroll` | v1.0 | Wheel scroll up / down |
+| `hid.key` | v1.0 | Press a named key or shortcut (`enter`, `ctrl+c`, …) |
+| `hid.release_all` | v1.0 | Panic stop — release every held button and key |
+| `hid.mouse_button_down` | v1.1 | Press a mouse button without releasing (drag start) |
+| `hid.mouse_button_up` | v1.1 | Release a held mouse button (drag end) |
+| `hid.drag` | v1.1 | Drag from one point to another while holding a button |
+| `hid.key_press` | v1.1 | Press a key/shortcut without releasing |
+| `hid.key_release` | v1.1 | Release a held key (no args = release everything) |
+| `hid.hold_key` | v1.1 | Press, wait, then release |
+| `hid.screenshot` | v1.0 | Screenshot the primary monitor — JPEG q80 default, `format='png'` for lossless (opt-in, requires `--allow-screenshot`) |
+| `device.list` | v1.0 | List candidate HID board ports |
+| `device.info` | v1.0 | Active connection info |
 
-## FAQ
+**Coordinates & behavior.** Click / move / hover are **absolute by default**:
+the server queries the OS cursor position (Win32 / CoreGraphics / X11), computes
+the offset to your target, and sends a **relative delta** to the firmware — so
+`{"x": 640, "y": 360}` lands at that screen pixel. Pass `relative=true` to skip
+the OS query and send a raw pixel delta instead. Where the OS cursor can't be
+read (Wayland, or any OS-query failure) the call returns an **explicit error** —
+it never silently guesses and clicks the wrong place. `hid.drag` composes
+`mouse_button_down` → glided `move` → `mouse_button_up`; the `v1.1` button/key
+hold pair (`mouse_button_*`, `key_press` / `key_release`, `hold_key`) maps onto
+the Computer-Use Anthropic (CUA) action set.
 
-**Does this need a ClawTouch account / API key / cloud service?**
-No. This server only speaks USB serial to the HID board. There's no network
-call. No data leaves your machine.
+**Tool selection.** The server ships built-in selection guidance so an agent
+reaches for physical HID only when it's the right answer: an MCP `instructions`
+field in the `initialize` response, plus a per-tool `HID_PREFIX` prepended to
+every `hid.*` description (so the cue survives even if a client ignores the
+server-level field). Both say the same thing — prefer `hid.*` only as a
+**fallback**, when no file / browser / OS API can do the job, or when the user
+explicitly asks for physical keyboard / mouse input. The read-only `device.*`
+tools carry no prefix.
 
-**Can I use this without buying ClawTouch hardware?**
-Yes — buy an $8 Raspberry Pi Pico 2, flash the open-source
-[clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid) firmware,
-and the server will talk to it the same way as the turnkey device.
+## Examples
 
-**Why HID instead of OS-level mouse/keyboard APIs?**
-OS-level input APIs require an agent process to be running on the
-target machine and only work where such an agent can be installed. A
-USB HID peripheral routes through the standard OS HID driver stack
-and needs no mouse/keyboard driver or HID agent on the target —
-fitting kiosk automation, offline test rigs, accessibility tooling,
-and cross-machine RPA. (In local mode the agent process still lives
-on the same PC — just on the input side that PC needs no extra
-driver. In cross-host mode you'll need to wire up the visual feedback
-side separately; see "Deployment modes" above.)
+Most agents reach `clawtouch-mcp` through an MCP client (Claude Desktop / Code, Cursor, and others) — copy-pasteable configs for the verified clients are in [`examples/integrations/INTEGRATIONS.md`](examples/integrations/INTEGRATIONS.md).
 
-**Is there a JavaScript / TypeScript version?**
-Not yet. `clawtouch-bridge-sdk` (Python + Node) is planned — see roadmap.
+If you're building your own Computer Use loop instead, [`examples/computer_use/`](examples/computer_use/) has two reference implementations that route agent actions through ClawTouch HID:
 
-**How is this different from the closed-source ClawTouch desktop app?**
-This MCP server is the bottom HID primitive layer. The desktop product
-is a separate closed-source agent on top of the same hardware; contact
-`support@tinqiao.com` for details.
+- [Claude Computer Use → HID](examples/computer_use/claude_demo.py) — `client.beta.messages.stream` with the `computer_20251124` tool
+- [OpenAI CUA → HID](examples/computer_use/openai_cua_demo.py) — Responses API with `computer-use-preview`
 
-## Content generation — out of scope
+For per-application LLM guidance, [`clawtouch-skills`](https://github.com/tinqiao-oss/clawtouch-skills) is a companion repo of markdown operator manuals an LLM can load before driving a specific app. Skills are soft guidance — the LLM still decides what to do.
 
-`clawtouch-mcp` exposes hardware HID actions (mouse / keyboard / scroll
-/ key combos / screenshot) as MCP tools. It does **not** generate,
-synthesize, recommend, or otherwise produce text, image, audio, or
-video content. The calling LLM agent is the content-generating party
-and is solely responsible for any generated content and for
-compliance with any content-labeling or content-moderation
-obligations applicable in its jurisdiction (e.g. PRC *AI Generated
-Content Labeling Measure* effective 2025-09-01).
+### See it in action
+
+Start the server against your bridge, then any MCP client (Claude
+Desktop, Cline, or your own loop) speaks plain MCP `tools/call` over
+stdio. Each call becomes a real USB-CDC frame to real hardware —
+nothing synthetic.
+
+```text
+$ clawtouch-mcp --port COM7
+[INFO] connected to Pico 2 on COM7 (serial: E660ABCD12345678)
+[INFO] screen auto-detected: 2560x1440 (Windows SM_CXSCREEN/SM_CYSCREEN)
+[INFO] 13 HID tools + 2 device tools registered; listening on stdio
+
+# client → server : one click, then one typed string
+#                   (the cursor and keys actually move)
+→ tools/call  hid.click  {"x": 640, "y": 360}
+← result       "clicked at (640, 360)"
+
+→ tools/call  hid.type   {"text": "Hello from MCP"}
+← result       "typed 14 chars in 0.42s"
+```
 
 ## Acceptable use
 
@@ -513,102 +362,77 @@ redistribution of the source code. Users are independently
 responsible for evaluating their specific use case against
 applicable laws and the target platform's ToS.
 
+## Content generation — out of scope
+
+`clawtouch-mcp` exposes hardware HID actions (mouse / keyboard / scroll
+/ key combos / screenshot) as MCP tools. It does **not** generate,
+synthesize, recommend, or otherwise produce text, image, audio, or
+video content. The calling LLM agent is the content-generating party
+and is solely responsible for any generated content and for
+compliance with any content-labeling or content-moderation
+obligations applicable in its jurisdiction (e.g. PRC *AI Generated
+Content Labeling Measure* effective 2025-09-01).
+
+## Hardware
+
+This server can talk to:
+
+1. **ClawTouch HID device** — turnkey hardware, drop-shipped, plug-and-play.
+   Order or get a sample at [clawtouch.cn](https://clawtouch.cn).
+2. **Any RP2350 board running [clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** —
+   the OSS firmware + protocol module (wire epoch 1, frozen envelope) live in their own public repo.
+   Buy a Pico 2 (~$8), flash the firmware, you're done.
+
+The wire protocol is the same for both — the server doesn't care which one it
+talks to.
+
+## FAQ
+
+**Does this need a ClawTouch account / API key / cloud service?**
+No. This server only speaks USB serial to the HID board. There's no network
+call. No data leaves your machine.
+
+**Can I use this without buying ClawTouch hardware?**
+Yes — buy an $8 Raspberry Pi Pico 2, flash the open-source
+[clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid) firmware,
+and the server will talk to it the same way as the turnkey device.
+
+**How is this different from the closed-source ClawTouch desktop app?**
+This MCP server is the bottom HID primitive layer. The desktop product
+is a separate closed-source agent on top of the same hardware; contact
+`support@tinqiao.com` for details.
+
+**Is there a JavaScript / TypeScript version?**
+Not yet. `clawtouch-bridge-sdk` (Python + Node) is planned — see the
+[Open source roadmap](#open-source-roadmap-contributing--license).
+
 ## Related work
 
-The MCP / Computer-Use ecosystem already has several projects that hand
-an LLM agent control of a desktop. They split into two camps:
+The MCP / Computer-Use ecosystem already has projects that hand an LLM agent control of a desktop, in two camps. **Software-only MCP servers on the target PC** — [`domdomegg/computer-use-mcp`](https://github.com/domdomegg/computer-use-mcp), [`AB498/computer-control-mcp`](https://github.com/AB498/computer-control-mcp), the various [`mcp-pyautogui`](https://github.com/hathibelagal-dev/mcp-pyautogui) implementations, and ByteDance's [UI-TARS](https://github.com/bytedance/UI-TARS-desktop) — call PyAutoGUI / OS input APIs in-process: lowest friction, but the agent shares the target's OS / session / focus, and a crash disrupts the user's actual desktop. **Hardware-bridge servers** decouple the two: [`sunasaji/mcp-serial-hid-kvm`](https://github.com/sunasaji/mcp-serial-hid-kvm) (a CH9329 / CH9350L USB-HID ASIC plus capture card) is the closest direct peer in architecture, and CMU's [**HIDAgent**](https://arxiv.org/abs/2602.00492) (Bigham et al., 2026-01; < $30 RP2040 + HDMI-to-USB + CH340 serial bridge, shipped as a Python library) the closest academic peer. `clawtouch-mcp` follows the same decoupling but pairs with the open-firmware [`clawtouch-hid`](https://github.com/tinqiao-oss/clawtouch-hid) stack, so the wire protocol is user-extensible and the firmware is auditable — not a fixed-function ASIC.
 
-* **Software-only MCP servers on the target PC** —
-  [`domdomegg/computer-use-mcp`](https://github.com/domdomegg/computer-use-mcp),
-  [`AB498/computer-control-mcp`](https://github.com/AB498/computer-control-mcp),
-  and the various
-  [`mcp-pyautogui`](https://github.com/hathibelagal-dev/mcp-pyautogui)
-  implementations. These call PyAutoGUI / OS input APIs in-process on
-  the same machine the agent runs on. Lowest friction; the agent and
-  the target are coupled to the same OS / user session / focus state,
-  and an agent crash can disrupt the user's actual desktop.
-  ByteDance's [UI-TARS](https://github.com/bytedance/UI-TARS-desktop)
-  is in this same lane (multimodal model + screenshot-and-click).
-* **Hardware-bridge MCP servers** —
-  [`sunasaji/mcp-serial-hid-kvm`](https://github.com/sunasaji/mcp-serial-hid-kvm)
-  wraps a CH9329 / CH9350L USB-HID ASIC plus a video-capture card and
-  is the closest direct peer to ClawTouch in architecture. The target
-  PC sees only a USB keyboard / mouse; the agent can live on a
-  different machine entirely. `clawtouch-mcp` follows the same
-  decoupling pattern but pairs with the open-firmware
-  [`clawtouch-hid`](https://github.com/tinqiao-oss/clawtouch-hid)
-  Pico 2 stack rather than a fixed-function ASIC, so the wire protocol
-  is user-extensible and the firmware itself is auditable.
+ClawTouch's irreplaceable edge is the **genuine hardware HID path**: the OS sees a real physical keyboard / mouse. In local mode — the common case — that real HID plus zero driver on the input side is exactly what makes it work for accessibility, compatibility testing, and apps that reject synthetic input; if you only need synthetic input on one machine and the app doesn't care where input comes from, the software-only servers above are simpler. Cross-host mode is an *additional* capability on top: it can drive a target that can't host an agent or must stay physically isolated — something a software-only server can't do at all.
 
-CMU's [**HIDAgent**](https://arxiv.org/abs/2602.00492) (Bigham et al.,
-2026-01) is the closest academic peer in hardware budget (< $30:
-RP2040 + HDMI-to-USB + CH340 serial bridge) and design intent; it ships
-its own Python library rather than an MCP server.
+## Open source roadmap, contributing & license
 
-If you only need synthetic input on one machine and the app doesn't
-care where input comes from, the software-only MCPs above are simpler —
-no extra hardware to buy. ClawTouch's irreplaceable edge is the genuine
-hardware HID path: the OS sees a real physical keyboard / mouse — in
-local mode that's what makes it work for accessibility, compatibility
-testing, and apps that reject synthetic input, with no driver on the
-input side. On top of that, cross-host mode can drive a target that
-can't host an agent or must stay physically isolated — something a
-software-only server can't do at all.
+**Open-core model.** Hardware and protocol primitives are open; the integrated commercial product stays closed.
 
-## Open source roadmap
+| Component | Status |
+|---|---|
+| **clawtouch-mcp** (this repo) | ✅ Released |
+| **[clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** — firmware + protocol module, wire epoch 1 | ✅ Released |
+| **[clawtouch-skills](https://github.com/tinqiao-oss/clawtouch-skills)** — markdown skill files for LLM agents | ✅ Released |
+| **clawtouch-bridge-sdk** — Python + Node HID SDK | 🔵 Future |
+| Backend / desktop app / adapters / vision models | 🔒 Closed — `support@tinqiao.com` |
 
-ClawTouch follows an **open-core** model: hardware and protocol primitives
-are open, the integrated commercial product stays closed.
+### Contributing
 
-| Component                              | Status                       |
-|----------------------------------------|------------------------------|
-| **clawtouch-mcp**                      | ✅ Released (this repo)      |
-| **[clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** (firmware + protocol module, wire epoch 1) | ✅ Released |
-| **[clawtouch-skills](https://github.com/tinqiao-oss/clawtouch-skills)** (markdown skill files for LLM agents) | ✅ Released |
-| **clawtouch-bridge-sdk** (Python + Node HID SDK)   | 🔵 Future       |
-| Backend / desktop app / adapters / vision models   | 🔒 Closed source — contact `support@tinqiao.com` |
+PRs welcome for: new MCP tools mapping to existing HID primitives, bug fixes, client-integration examples, doc improvements, non-English README translations.
 
-## Architecture overview
+Not taking PRs for: agent-loop logic or application-level features (intentionally out of scope — see [Acceptable use](#acceptable-use)) or adapters for specific applications (those live in the closed-source desktop app).
 
-```mermaid
-flowchart LR
-    A["<b>LLM Agent</b><br/><sub>Claude Desktop / Cline /<br/>Cursor / OpenClaw / Hermes / ...</sub>"]
-        -->|"stdio<br/>JSON-RPC<br/>MCP 2024-11-05"| B["<b>clawtouch-mcp</b><br/><sub><i>this repo</i><br/>MCP server + 13 HID + 2 device tools</sub>"]
-    B -->|"USB-CDC<br/>v1.0 framed bytes"| C["<b>Pico 2</b><br/><sub>+ ClawTouch HID firmware<br/>(RP2350 / CircuitPython)</sub>"]
-    C -->|"USB HID<br/>reports"| D["<b>Target OS</b><br/><sub>Windows / macOS / Linux<br/>standard HID driver stack</sub>"]
-    classDef this fill:#fef3c7,stroke:#d97706,stroke-width:3px,color:#78350f;
-    class B this;
-```
+`clawtouch-mcp` is maintained by **Tinqiao Technology** — the team behind **ClawTouch** ([clawtouch.cn](https://clawtouch.cn)).
 
-For the bigger picture — how this MCP server fits into the larger
-Perception → Decision → Action loop ClawTouch uses, where data goes, and
-how the closed-source desktop app layers on top of the open HID
-primitives below — see the official technical documentation:
-
-* [System architecture &amp; data flow](https://clawtouch.cn/en/docs/architecture.html) — the three-layer model and how it compares to RPA / AutoHotkey / browser-extension automation
-* [Data security &amp; compliance](https://clawtouch.cn/en/docs/security.html) — what stays local, what crosses the network, what's encrypted
-
-## Contributing
-
-PRs are welcome for: new MCP tools that map to existing HID primitives, bug
-fixes, additional client integration examples, doc improvements,
-non-English README translations.
-
-We're _not_ taking PRs for: agent-loop logic or application-level
-features (intentionally out of scope — see [open source roadmap](#open-source-roadmap)),
-adapters for specific applications (those live in the closed-source
-desktop app).
-
-## About
-
-`clawtouch-mcp` is maintained by **Tinqiao Technology** — the team behind
-**ClawTouch** ([clawtouch.cn](https://clawtouch.cn)), building plug-in USB
-devices that let AI agents operate real Windows / macOS / Linux desktops
-at the HID layer. This MCP server is the open, primitive piece of that
-stack — see the [open source roadmap](#open-source-roadmap) for what's
-open vs. closed.
-
-## License
+### License
 
 MIT © Tinqiao Technology (Beijing) Co., Ltd. — see [LICENSE](LICENSE)
 (English, authoritative) and [LICENSE.zh-CN.md](LICENSE.zh-CN.md)
@@ -622,3 +446,17 @@ any trademark rights.
 
 For commercial deployments at scale, enterprise support, or OEM hardware
 discussion: `support@tinqiao.com`.
+
+## Architecture overview
+
+```mermaid
+flowchart LR
+    A["<b>LLM Agent</b><br/><sub>Claude Desktop / Cline /<br/>Cursor / OpenClaw / Hermes / ...</sub>"]
+        -->|"stdio<br/>JSON-RPC<br/>MCP 2024-11-05"| B["<b>clawtouch-mcp</b><br/><sub><i>this repo</i><br/>MCP server + 13 HID + 2 device tools</sub>"]
+    B -->|"USB-CDC<br/>v1.0 framed bytes"| C["<b>Pico 2</b><br/><sub>+ ClawTouch HID firmware<br/>(RP2350 / CircuitPython)</sub>"]
+    C -->|"USB HID<br/>reports"| D["<b>Target OS</b><br/><sub>Windows / macOS / Linux<br/>standard HID driver stack</sub>"]
+    classDef this fill:#fef3c7,stroke:#d97706,stroke-width:3px,color:#78350f;
+    class B this;
+```
+
+This repo is the MCP-server hop: it translates MCP tool calls into framed bytes over USB-CDC; the firmware turns them into standard USB HID reports. For how it fits the larger Perception → Decision → Action loop and how the closed-source desktop app layers on these open HID primitives, see the official technical documentation: [system architecture &amp; data flow](https://clawtouch.cn/en/docs/architecture.html) and [data security &amp; compliance](https://clawtouch.cn/en/docs/security.html).
