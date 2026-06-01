@@ -43,7 +43,7 @@ the next patch release (typically within 2 weeks for confirmed issues).
   uses `hid.click` to do something the user didn't want, that's an
   agent / prompt issue, not an MCP-server bug — so it is out of scope
   for *this* vulnerability-reporting policy. It is, however, a real
-  deployment risk: see the **Autonomy & safety** section in the
+  deployment risk: see the **Safety** section in the
   [README](README.md) for the risk disclosure and operator
   mitigations.
 - **Physical security of the Pico hardware.** Anyone with physical
