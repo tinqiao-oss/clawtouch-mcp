@@ -15,7 +15,7 @@
 [![Commercial: clawtouch.cn](https://img.shields.io/badge/commercial-clawtouch.cn-orange.svg)](https://clawtouch.cn)
 
 <p align="center">
-  <img src="docs/assets/hero.svg" alt="clawtouch-mcp 数据流: AI agent 通过 MCP stdio JSON-RPC 调用 clawtouch-mcp, 后者通过 USB-CDC 发送带帧字节到 Raspberry Pi Pico 2 (跑 ClawTouch HID 固件), Pico 再输出标准 USB HID 报告到目标操作系统 (Windows / macOS / Linux)." width="900">
+  <img src="https://raw.githubusercontent.com/tinqiao-oss/clawtouch-mcp/master/docs/assets/hero.png" alt="clawtouch-mcp 数据流: AI agent 通过 MCP stdio JSON-RPC 调用 clawtouch-mcp, 后者通过 USB-CDC 发送带帧字节到 Raspberry Pi Pico 2 (跑 ClawTouch HID 固件), Pico 再输出标准 USB HID 报告到目标操作系统 (Windows / macOS / Linux)." width="900">
 </p>
 
 ---

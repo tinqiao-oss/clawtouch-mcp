@@ -15,7 +15,7 @@
 [![Commercial: clawtouch.cn](https://img.shields.io/badge/commercial-clawtouch.cn-orange.svg)](https://clawtouch.cn)
 
 <p align="center">
-  <img src="docs/assets/hero.svg" alt="clawtouch-mcp data flow: an AI agent sends MCP tool calls over stdio JSON-RPC to clawtouch-mcp, which forwards framed bytes over USB-CDC to a Raspberry Pi Pico 2 running ClawTouch HID firmware, which emits standard USB HID reports to the target OS (Windows / macOS / Linux)." width="900">
+  <img src="https://raw.githubusercontent.com/tinqiao-oss/clawtouch-mcp/master/docs/assets/hero.png" alt="clawtouch-mcp data flow: an AI agent sends MCP tool calls over stdio JSON-RPC to clawtouch-mcp, which forwards framed bytes over USB-CDC to a Raspberry Pi Pico 2 running ClawTouch HID firmware, which emits standard USB HID reports to the target OS (Windows / macOS / Linux)." width="900">
 </p>
 
 ---
