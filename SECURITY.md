@@ -34,8 +34,7 @@ Please include:
 - Whether you intend to publish a CVE / blog post and your preferred
   disclosure timeline.
 
-We'll acknowledge within **3 business days** and aim to ship a fix in
-the next patch release (typically within 2 weeks for confirmed issues).
+We'll aim to acknowledge promptly and, for confirmed issues, ship a fix in a subsequent patch release.
 
 ## What is NOT in scope
 
