@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: clawtouch-mcp
+abstract: >-
+  An MCP (Model Context Protocol) server that exposes ClawTouch USB HID
+  hardware as agent tools, letting an LLM emit genuine physical keyboard and
+  mouse input on a target machine over USB-CDC.
+type: software
+authors:
+  - name: "Tinqiao Technology (Beijing) Co., Ltd."
+    website: "https://clawtouch.cn"
+repository-code: "https://github.com/tinqiao-oss/clawtouch-mcp"
+url: "https://github.com/tinqiao-oss/clawtouch-mcp"
+license: MIT
+keywords:
+  - MCP
+  - HID
+  - agent
+  - tool-use
+  - automation

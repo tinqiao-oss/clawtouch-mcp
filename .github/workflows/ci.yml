@@ -54,7 +54,7 @@ jobs:
         # No continue-on-error: if the sister repo is unreachable (renamed,
         # not yet published, private) the cross-repo byte-equality net is
         # dead, so this job MUST go red rather than silently skip. The trio
-        # publishes atomically — see each repo's release checklist.
+        # publishes atomically: publish clawtouch-hid before clawtouch-mcp.
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
