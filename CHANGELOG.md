@@ -7,6 +7,8 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-06-02 — stdio UTF-8 frames · composed-tool failure propagation
+
 ### Fixed — stdio frames are UTF-8 on every host locale (Chinese Windows / cp936)
 
 The line-delimited (newline) stdio branch — the MCP-stdio default — wrote
@@ -1192,7 +1194,8 @@ under the working name `openclaw-mcp` but were never published. The
   for this OSS release.
 - No multi-touch HID profile yet — only mouse and keyboard.
 
-[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.9...v0.3.0
 [0.2.9]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.7...v0.2.8
