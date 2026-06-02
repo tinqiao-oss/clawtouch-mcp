@@ -1,0 +1,20 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.tinqiao-oss/clawtouch-mcp",
+  "description": "MCP server exposing a real USB HID keyboard/mouse (Raspberry Pi Pico 2 running open-source firmware) as agent tools: move, click, drag, type, key combos, scroll. Works with any MCP client; includes a --mock mode for hardware-free testing.",
+  "repository": {
+    "url": "https://github.com/tinqiao-oss/clawtouch-mcp",
+    "source": "github"
+  },
+  "version": "0.3.2",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "clawtouch-mcp",
+      "version": "0.3.2",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
