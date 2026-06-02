@@ -1,3 +1,5 @@
+<!-- mcp-name: io.github.tinqiao-oss/clawtouch-mcp -->
+
 **English** | [简体中文](README.zh-CN.md)
 
 # clawtouch-mcp

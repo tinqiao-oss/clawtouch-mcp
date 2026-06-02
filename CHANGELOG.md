@@ -7,6 +7,19 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-06-02 — registry packaging (mcp-name marker + --mock Dockerfile)
+
+### Added — official MCP Registry readiness
+
+- README now carries an `mcp-name: io.github.tinqiao-oss/clawtouch-mcp` marker, so the
+  package can be claimed on the official MCP Registry (registry.modelcontextprotocol.io),
+  whose ownership check reads this marker from the published package README.
+- A `--mock` `Dockerfile` for registry / CI introspection (e.g. Glama): the container has
+  no USB hardware, so it starts in mock mode and still answers introspection requests
+  (lists the full tool surface).
+
+Metadata / packaging only — no code or tool behaviour changes; test suite unchanged.
+
 ## [0.3.1] — 2026-06-02 — stdio UTF-8 frames · composed-tool failure propagation
 
 ### Fixed — stdio frames are UTF-8 on every host locale (Chinese Windows / cp936)
