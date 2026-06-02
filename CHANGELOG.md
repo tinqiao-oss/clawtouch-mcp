@@ -1179,7 +1179,7 @@ under the working name `openclaw-mcp` but were never published. The
   capped at 4096 chars per call, rate-limited via `--ops-per-sec`.
 - **Stdio framing** auto-detection (Content-Length vs. line-delimited
   JSON) — works with Claude Desktop, Cline, Continue, Cursor,
-  [OpenClaw](https://github.com/openclaw), and
+  [OpenClaw](https://github.com/openclaw/openclaw), and
   [Hermes Agent](https://github.com/NousResearch/hermes-agent) out of
   the box.
 - Test suite: 43 tests cover protocol round-trip, keycode mapping,

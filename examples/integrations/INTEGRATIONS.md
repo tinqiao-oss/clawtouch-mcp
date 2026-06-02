@@ -206,7 +206,7 @@ in mind as a panic stop.
 
 ## OpenClaw
 
-[OpenClaw](https://github.com/openclaw) is a locally-running AI agent
+[OpenClaw](https://github.com/openclaw/openclaw) is a locally-running AI agent
 harness that treats MCP servers as first-class tool providers alongside
 its native skill packages.
 

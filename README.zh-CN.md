@@ -5,7 +5,7 @@
 > **给 AI agent 装一双真实的手。**
 > 一个 MCP server, 把 [Claude Desktop](https://claude.ai/download) /
 > [Cline](https://github.com/cline/cline) / [Continue](https://github.com/continuedev/continue) /
-> [Cursor](https://www.cursor.com/) / [OpenClaw](https://github.com/openclaw) /
+> [Cursor](https://www.cursor.com/) / [OpenClaw](https://github.com/openclaw/openclaw) /
 > [Hermes Agent](https://github.com/NousResearch/hermes-agent) 等任何 MCP 兼容客户端,
 > 变成能透过 USB HID 设备移动真实鼠标、按下真实按键的执行器。
 

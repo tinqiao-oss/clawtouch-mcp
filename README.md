@@ -5,7 +5,7 @@
 > **Give your AI agent real hands.**
 > An MCP server that turns any MCP-compatible client — [Claude Desktop](https://claude.ai/download),
 > [Cline](https://github.com/cline/cline), [Continue](https://github.com/continuedev/continue),
-> [Cursor](https://www.cursor.com/), [OpenClaw](https://github.com/openclaw),
+> [Cursor](https://www.cursor.com/), [OpenClaw](https://github.com/openclaw/openclaw),
 > [Hermes Agent](https://github.com/NousResearch/hermes-agent) and any other —
 > into something that can move a real mouse and press real keys through a USB HID device.
 
