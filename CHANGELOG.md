@@ -1207,16 +1207,6 @@ under the working name `openclaw-mcp` but were never published. The
   for this OSS release.
 - No multi-touch HID profile yet — only mouse and keyboard.
 
-[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.1...HEAD
-[0.3.1]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.9...v0.3.0
-[0.2.9]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.8...v0.2.9
-[0.2.8]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.7...v0.2.8
-[0.2.7]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.6...v0.2.7
-[0.2.6]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.5...v0.2.6
-[0.2.5]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.4...v0.2.5
-[0.2.4]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.3...v0.2.4
-[0.2.3]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.2...v0.2.3
-[0.2.2]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.1...v0.2.2
-[0.2.1]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/tinqiao-oss/clawtouch-mcp/releases/tag/v0.2.0
+[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/tinqiao-oss/clawtouch-mcp/releases/tag/v0.3.1
