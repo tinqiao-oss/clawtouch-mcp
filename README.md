@@ -15,6 +15,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/clawtouch-mcp.svg)](https://pypi.org/project/clawtouch-mcp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Commercial: clawtouch.cn](https://img.shields.io/badge/commercial-clawtouch.cn-orange.svg)](https://clawtouch.cn)
+[![clawtouch-mcp MCP server](https://glama.ai/mcp/servers/tinqiao-oss/clawtouch-mcp/badges/score.svg)](https://glama.ai/mcp/servers/tinqiao-oss/clawtouch-mcp)
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/tinqiao-oss/clawtouch-mcp/master/docs/assets/hero.png" alt="clawtouch-mcp data flow: an AI agent sends MCP tool calls over stdio JSON-RPC to clawtouch-mcp, which forwards framed bytes over USB-CDC to a Raspberry Pi Pico 2 running ClawTouch HID firmware, which emits standard USB HID reports to the target OS (Windows / macOS / Linux)." width="900">
