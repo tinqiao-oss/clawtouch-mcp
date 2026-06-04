@@ -146,7 +146,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`
 ```
 
 Restart Claude Desktop. You should see `clawtouch` show up in the MCP server
-list with 15 tools available (13 HID + 2 device; +1 if you pass
+list with 16 tools available (14 HID + 2 device; +1 if you pass
 `--allow-screenshot`). Try:
 
 > Take a screenshot of my screen, find the search box, click it, and type
@@ -259,11 +259,11 @@ those end users of these risks and obtain their consent.
 
 ## Tools
 
-Sixteen tools register: **thirteen always-on `hid.*` input tools**, plus
+Seventeen tools register: **fourteen always-on `hid.*` input tools**, plus
 **`hid.screenshot`** (opt-in — off unless you pass `--allow-screenshot`), plus
 **two read-only `device.*` diagnostics**. That matches the startup log line
-`13 HID tools + 2 device tools registered` (the `--allow-screenshot` flag adds
-`hid.screenshot` on top, for 16).
+`14 HID tools + 2 device tools registered` (the `--allow-screenshot` flag adds
+`hid.screenshot` on top, for 17).
 
 | Tool | Since | Purpose |
 |------|-------|---------|
@@ -280,6 +280,7 @@ Sixteen tools register: **thirteen always-on `hid.*` input tools**, plus
 | `hid.key_press` | v1.1 | Press a key/shortcut without releasing |
 | `hid.key_release` | v1.1 | Release a held key (no args = release everything) |
 | `hid.hold_key` | v1.1 | Press, wait, then release |
+| `hid.batch` | v0.4.0 | Run a pre-planned sequence of ≤10 HID actions in one call (strict order) |
 | `hid.screenshot` | v1.0 | Screenshot the primary monitor — JPEG q80 default, `format='png'` for lossless (opt-in, requires `--allow-screenshot`) |
 | `device.list` | v1.0 | List candidate HID board ports |
 | `device.info` | v1.0 | Active connection info |
@@ -293,7 +294,14 @@ read (Wayland, or any OS-query failure) the call returns an **explicit error** �
 it never silently guesses and clicks the wrong place. `hid.drag` composes
 `mouse_button_down` → glided `move` → `mouse_button_up`; the `v1.1` button/key
 hold pair (`mouse_button_*`, `key_press` / `key_release`, `hold_key`) maps onto
-the Computer-Use Anthropic (CUA) action set.
+the Computer-Use Anthropic (CUA) action set. `hid.batch` runs a short,
+pre-planned list of these actions (≤10) in one call, in strict order —
+a transport convenience for action lists you already know (e.g. several
+fixed coordinates a solver computed), **not** a control-flow / "act →
+observe → decide" layer; for that you still issue separate calls.
+Consecutive clicks are auto-spaced by a small default gap (~50 ms) so the
+OS doesn't merge or drop them; override per op with `delay_ms` (set 0 to
+opt out).
 
 **Tool selection.** The server ships built-in selection guidance so an agent
 reaches for physical HID only when it's the right answer: an MCP `instructions`
@@ -326,7 +334,7 @@ nothing synthetic.
 $ clawtouch-mcp --port COM7
 [INFO] connected to Pico 2 on COM7 (serial: E660ABCD12345678)
 [INFO] screen auto-detected: 2560x1440 (Windows SM_CXSCREEN/SM_CYSCREEN)
-[INFO] 13 HID tools + 2 device tools registered; listening on stdio
+[INFO] 14 HID tools + 2 device tools registered; listening on stdio
 
 # client → server : one click, then one typed string
 #                   (the cursor and keys actually move)
@@ -455,7 +463,7 @@ discussion: `support@tinqiao.com`.
 ```mermaid
 flowchart LR
     A["<b>LLM Agent</b><br/><sub>Claude Desktop / Cline /<br/>Cursor / OpenClaw / Hermes / ...</sub>"]
-        -->|"stdio<br/>JSON-RPC<br/>MCP 2024-11-05"| B["<b>clawtouch-mcp</b><br/><sub><i>this repo</i><br/>MCP server + 13 HID + 2 device tools</sub>"]
+        -->|"stdio<br/>JSON-RPC<br/>MCP 2024-11-05"| B["<b>clawtouch-mcp</b><br/><sub><i>this repo</i><br/>MCP server + 14 HID + 2 device tools</sub>"]
     B -->|"USB-CDC<br/>v1.0 framed bytes"| C["<b>Pico 2</b><br/><sub>+ ClawTouch HID firmware<br/>(RP2350 / CircuitPython)</sub>"]
     C -->|"USB HID<br/>reports"| D["<b>Target OS</b><br/><sub>Windows / macOS / Linux<br/>standard HID driver stack</sub>"]
     classDef this fill:#fef3c7,stroke:#d97706,stroke-width:3px,color:#78350f;

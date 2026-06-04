@@ -24,7 +24,7 @@ Every client config boils down to the same four facts:
    on every launch.
 
 After reloading or restarting, ask: *"List the MCP tools you have available."*
-You should see 15 tools by default (13 HID + 2 device), or 16 with
+You should see 16 tools by default (14 HID + 2 device), or 17 with
 `--allow-screenshot`:
 
 - **v1.0 baseline (frozen)**: `hid.click`, `hid.move`, `hid.hover`,
@@ -34,6 +34,9 @@ You should see 15 tools by default (13 HID + 2 device), or 16 with
   `hid.mouse_button_up`, `hid.drag`, `hid.key_press`, `hid.key_release`,
   `hid.hold_key` — drag and held-key primitives matching the Anthropic
   Computer Use action set
+- **v0.4.0 addition**: `hid.batch` — run a pre-planned sequence of ≤10
+  HID actions in one call (strict order; a transport convenience for
+  known action lists, not a control-flow layer)
 - **Opt-in**: `hid.screenshot` (only registered when `--allow-screenshot`
   is passed)
 
@@ -195,7 +198,7 @@ the MCP server on save — open Settings → MCP and you'll see `clawtouch`
 appear within a second or two.
 
 **Verify:** Cursor's Settings → MCP page shows a green dot next to
-`clawtouch` and lists 15 tools (16 with `--allow-screenshot`).
+`clawtouch` and lists 16 tools (17 with `--allow-screenshot`).
 
 **Note:** Cursor's agent mode will happily call `hid.click` on whatever
 coordinate it thinks is right — including outside the Cursor window.
@@ -222,7 +225,7 @@ openclaw mcp add clawtouch \
 ```
 
 Restart OpenClaw (or `openclaw mcp reload`) — `openclaw mcp list` shows
-`clawtouch (connected, 15 tools)`.
+`clawtouch (connected, 16 tools)`.
 
 Official MCP docs: <https://docs.openclaw.ai/cli/mcp>
 

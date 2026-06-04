@@ -7,6 +7,146 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-06-04 — `hid.batch`: pace back-to-back clicks (real-hardware mac dogfood)
+
+### Fixed — consecutive `hid.batch` clicks no longer merged/dropped by the OS
+
+A real-hardware dogfood on macOS (native Minesweeper) found that a
+`hid.batch` clicking several vertically-adjacent cells back-to-back had
+**only the last click register** — the earlier ones did nothing in the
+app, even though every click was sent and ACKed (`clicked: true`). The
+HID layer can't observe an app-level drop, so a `delay_ms: 40` on each op
+fixed it 100% — a clean A/B (zero gap fails, ~40 ms works).
+
+Root cause: ops ran with **zero inter-op gap**, so two clicks landed too
+close in time for the OS/app to treat them as discrete single-clicks
+(coalesced or dropped). `delay_ms` defaulting to 0 had made "gets merged"
+the default behaviour — the worst failure mode, since the call reports
+success while the app didn't act.
+
+Fix (host-side only — wire protocol / firmware unchanged):
+
+- **Click / button ops now get a small default settle gap
+  (`DEFAULT_CLICK_SETTLE_MS = 50` ms) when `delay_ms` is omitted**, so
+  back-to-back clicks are paced apart. Non-click ops still default to 0.
+- An **explicit `delay_ms` (including 0) overrides** the default —
+  advanced callers can opt out with `delay_ms: 0`.
+- The default gap only fills the space **between** ops (no needless wait
+  after the final op); an explicit `delay_ms` is honored even after the
+  last op.
+
+## [0.4.0] — 2026-06-04 — `hid.batch`: sequence a short pre-planned action list
+
+### Added — `hid.batch` tool
+
+A new always-on tool that runs a **short, pre-planned sequence of HID
+actions (≤10) in one call**, in strict order — collapsing N tool
+round-trips into one. Each op is `{type, ...params, delay_ms?}` over the
+types `click` / `move` / `button_down` / `button_up` / `key` / `type` /
+`scroll`, with the **same semantics as the standalone tools** (absolute
+moves run the identical closed-loop converge; `key` accepts the same
+`ctrl+c` shorthand). It returns a top-level
+`{ok, count, failed_index, stopped_early, released_all, results:[…]}`
+where each per-op entry carries the fields its standalone tool would
+return (`converged` / `clicked` / `chars` / …).
+
+**Why this lives in OSS.** `hid.batch` is the same kind of host-side
+composition over existing HID primitives as `hid.drag` / `hid.hold_key`
+and the `move_ms` glide option — it adds **no wire-protocol opcode and no
+firmware change**, it just sequences `mouse_move` / `mouse_click` /
+`key_combo` / `type_text` / `mouse_scroll` / `mouse_button_*` calls that
+already exist. It is a **transport convenience**, not an orchestration
+layer: there is no branching, no reading a result mid-sequence, and no
+looping, so an `act → observe → decide → act` flow still uses separate
+calls. It's useful only for action lists you *already* know (e.g. several
+fixed coordinates a solver computed); the logic that produces such a list
+is out of scope for this minimal HID layer.
+
+Safety design:
+
+- **Hard cap of 10 ops, enforced in the handler** (not just the schema
+  `maxItems`, which a raw JSON-RPC client can bypass). This drives real
+  keyboard/mouse on the host and stdio is strictly serial — while a batch
+  runs, no other tool call (not even `hid.release_all` to stop it) can get
+  in — so a small cap keeps any single batch short-lived.
+- **Per-op exception isolation.** A failing op (a too-long `type`, a
+  bridge timeout, hardware unavailable) becomes that op's
+  `{ok:false, error, bridge_diagnostic}` entry instead of aborting the
+  run and discarding the results gathered so far.
+- **Held-state cleanup.** With `stop_on_error=true` (default), the run
+  halts at the first failure; if a button/key was pressed before the stop,
+  `release_all` fires so nothing stays held. A *clean* run is **not**
+  auto-released — a batch may intentionally leave a button down for a
+  follow-up call (mirrors `hid.mouse_button_down`).
+- **Honest `isError`.** The top-level `ok` is the AND of every op, so a
+  partial failure (e.g. 3/10) surfaces as `isError:true` with the full
+  per-op results intact rather than a false "batch succeeded".
+
+### Changed
+
+- Advertised tool count corrected to **16** (14 HID + 2 device; 17 with
+  `--allow-screenshot`) across the README / docs.
+
+## [0.3.3] — 2026-06-04 — absolute-click convergence recalibration (real-hardware mac dogfood)
+
+### Fixed — `hid.click` / `hid.move` no longer refuse near-miss landings (glide mode, macOS)
+
+A real-hardware dogfood on macOS Retina (real Pico, firmware 1.1.2) found
+that consecutive `hid.click` calls in **glide mode** (`move_ms > 0`)
+intermittently returned `converged: false` / `ok: false` and **skipped the
+click** — even though the cursor had landed only 4-7 px from the target,
+well inside the clickable element. The click gate added in 0.3.1 ("don't
+click where we never confirmed reaching") was correctly refusing; the
+underlying convergence was mis-calibrated, not the gate.
+
+A moves-only controlled experiment (faithful re-implementation of the
+server's converge/slide, run on real hardware, 12 moves per mode) isolated
+the cause — the iteration budget is the *only* variable between the two
+absolute paths:
+
+| mode  | converge iters | non-converge |
+| ----- | -------------- | ------------ |
+| snap  | 4              | 0 / 12       |
+| glide | 3              | 2 / 12       |
+
+Glide's post-slide converge was hard-coded to `MOVE_MAX_ITERS - 1` (= 3) on
+the assumption that "the slide already landed within tens of px so fewer
+settles are enough." Real ballistics refuted that: the slide's final
+micro-step is itself amplified, leaving a residual the same order as a
+cold-start move (failure trace `62 → 20 → 7 px`, still shrinking ~30 %/pass
+— one more pass would have landed it). It was **not** concurrency, rate
+limiting, Retina point-vs-pixel scaling, or wrong agent coordinates — the
+failing landings were ~4 px from their *own* target (a sequential near-miss
+signature, not the hundreds-of-px signature of cursor contention).
+
+Recalibration (host-side only — wire protocol and firmware unchanged):
+
+- **`MOVE_MAX_ITERS` 4 → 10.** A generous *ceiling*, not a budget: the
+  converge loop early-exits the instant the residual is within tolerance
+  (a normal move still settles in 2-5 passes), so the headroom only costs
+  wall-clock on a genuinely struggling move and makes accuracy independent
+  of move distance / screen size with no per-distance calibration.
+- **Glide post-slide converge now gets the FULL `MOVE_MAX_ITERS`** (was
+  `MOVE_MAX_ITERS - 1`). The slide earns no smaller budget.
+- **`MOVE_TOLERANCE` 3 → 5 px.** 3 px sat right on macOS's ±2 px cursor-
+  report quantization band, so the loop could oscillate at 3-4 px and never
+  *terminate* as converged. 5 px is comfortably above the jitter floor and
+  still far inside any clickable target (smallest common UI ~16 px). The
+  observed 4-7 px near-misses now converge and click via the normal path —
+  i.e. "close enough to click" is expressed as what counts as on-target,
+  not a fail-open path that would weaken the 0.3.1 no-false-success contract.
+- **Non-convergence `hint` reworded** — no longer leads with "competing
+  input device" (which mis-attributed a calibration issue to an external
+  cause); it now notes the actual landing is usually within a few px and
+  surfaces the iteration count.
+
+Constants stay baked in (no CLI knobs). `tests/test_move_convergence.py`
+updated: the glide-budget test now pins the full `MOVE_MAX_ITERS` (was
+`- 1`), plus a new high-amplification regression that asserts a glide move
+needing more than the old 3-pass budget now converges instead of tripping
+the click gate. The two `examples/computer_use` reference reimplementations
+track the new defaults. 241 → 242 tests; zero regression.
+
 ## [0.3.2] — 2026-06-02 — registry packaging (mcp-name marker + --mock Dockerfile)
 
 ### Added — official MCP Registry readiness
@@ -1207,6 +1347,7 @@ under the working name `openclaw-mcp` but were never published. The
   for this OSS release.
 - No multi-touch HID profile yet — only mouse and keyboard.
 
-[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/tinqiao-oss/clawtouch-mcp/releases/tag/v0.3.1

@@ -236,10 +236,10 @@ servers?"* — click **Trust / Approve**.
 In a new Claude chat, type `/mcp` (slash command). You should see:
 
 ```
-clawtouch    connected   16 tools
+clawtouch    connected   17 tools
 ```
 
-(15 tools if you didn't pass `--allow-screenshot`; `hid.screenshot` is
+(16 tools if you didn't pass `--allow-screenshot`; `hid.screenshot` is
 opt-in by default.)
 
 ### Step 4 — confirm hardware
@@ -250,7 +250,7 @@ Ask Claude to call `device.info`. Expected output:
 {
   "info": {"port": "COM6", "connected": true, "seq": 0, ...},
   "screen": {"width": 5120, "height": 1440, "source": "detected"},
-  "mcp_version": "0.3.2"
+  "mcp_version": "0.4.1"
 }
 ```
 

@@ -131,7 +131,7 @@ clawtouch-mcp --mock --log-level INFO
 ```
 
 重启 Claude Desktop,在 MCP server 列表里能看到 `clawtouch`,带 15 个可用
-工具 (13 个 HID + 2 个 device; 传 `--allow-screenshot` 再 +1)。试一下:
+工具 (14 个 HID + 2 个 device; 传 `--allow-screenshot` 再 +1)。试一下:
 
 > 帮我截屏,找到搜索框,点一下并输入 "hello world"。
 
@@ -223,10 +223,10 @@ MIT 协议,不构成任何担保或注意义务,亦不将责任转移给亭桥;M
 
 ## 工具清单
 
-共注册 16 个工具:**13 个常驻 `hid.*` 输入工具**,外加 **`hid.screenshot`**
+共注册 17 个工具:**14 个常驻 `hid.*` 输入工具**,外加 **`hid.screenshot`**
 (opt-in —— 不传 `--allow-screenshot` 时默认关闭),再加 **2 个只读 `device.*`
-诊断工具**。这与启动日志那行 `13 HID tools + 2 device tools registered` 一致
-(`--allow-screenshot` 会在此之上再加上 `hid.screenshot`,凑满 16 个)。
+诊断工具**。这与启动日志那行 `14 HID tools + 2 device tools registered` 一致
+(`--allow-screenshot` 会在此之上再加上 `hid.screenshot`,凑满 17 个)。
 
 | 工具 | 起始版本 | 用途 |
 |------|----------|------|
@@ -243,6 +243,7 @@ MIT 协议,不构成任何担保或注意义务,亦不将责任转移给亭桥;M
 | `hid.key_press` | v1.1 | 按下某键 / 快捷键但不松开 |
 | `hid.key_release` | v1.1 | 松开按住的键(无参 = 全部释放) |
 | `hid.hold_key` | v1.1 | 按下 → 等待 → 松开 |
+| `hid.batch` | v0.4.0 | 一次调用按严格顺序跑 ≤10 个 HID 动作(预先排好的序列) |
 | `hid.screenshot` | v1.0 | 主显示器截屏 —— 默认 JPEG q80,传 `format='png'` 取无损(默认关闭,需 `--allow-screenshot` 启用) |
 | `device.list` | v1.0 | 列出候选 HID 板串口 |
 | `device.info` | v1.0 | 当前连接信息 |
@@ -254,7 +255,12 @@ MIT 协议,不构成任何担保或注意义务,亦不将责任转移给亭桥;M
 (Wayland,或任何 OS 查询失败)调用返回**显式错误** —— 绝不会静默猜测、点到错
 误的位置。`hid.drag` 由 `mouse_button_down` → 滑动 `move` → `mouse_button_up`
 组合而成;`v1.1` 的按住类工具(`mouse_button_*`、`key_press` / `key_release`、
-`hold_key`)对位映射到 Computer-Use Anthropic(CUA)动作集。
+`hold_key`)对位映射到 Computer-Use Anthropic(CUA)动作集。`hid.batch`
+一次调用按严格顺序跑一串(≤10)这类动作 —— 这是给**预先排好的动作序列**(例如
+solver 算出的若干固定坐标)用的传输便利,**不是**编排 / "动作 → 观察 → 决策"
+的控制流层;后者仍需分多次调用。连续 click 之间会自动垫一个小默认间隔
+(~50ms), 防 OS 把背靠背的点击合并/丢弃;可用每个 op 的 `delay_ms` 覆盖
+(设 0 关闭)。
 
 **工具选择。**server 内置选择引导,让 agent 只在该用的时候才去选物理 HID:
 `initialize` 响应里的 MCP `instructions` 字段,加上贴在每个 `hid.*` description
@@ -273,7 +279,7 @@ Cline,或你自己的循环)都用最朴素的 MCP `tools/call` 经 stdio 通信
 $ clawtouch-mcp --port COM7
 [INFO] 连接 Pico 2 (COM7, serial: E660ABCD12345678)
 [INFO] 自动探测屏幕: 2560x1440 (Windows SM_CXSCREEN/SM_CYSCREEN)
-[INFO] 注册 13 个 HID 工具 + 2 个 device 工具, 监听 stdio
+[INFO] 注册 14 个 HID 工具 + 2 个 device 工具, 监听 stdio
 
 # 客户端 → server : 先一次点击, 再输入一段字符串
 #                   (光标和按键是真的在动)
@@ -399,7 +405,7 @@ MIT © 北京亭桥科技有限公司 — 见 [LICENSE](LICENSE) (英文版, 法
 ```mermaid
 flowchart LR
     A["<b>LLM Agent</b><br/><sub>Claude Desktop / Cline /<br/>Cursor / OpenClaw / Hermes / ...</sub>"]
-        -->|"stdio<br/>JSON-RPC<br/>MCP 2024-11-05"| B["<b>clawtouch-mcp</b><br/><sub><i>本仓库</i><br/>MCP server + 13 HID + 2 device 工具</sub>"]
+        -->|"stdio<br/>JSON-RPC<br/>MCP 2024-11-05"| B["<b>clawtouch-mcp</b><br/><sub><i>本仓库</i><br/>MCP server + 14 HID + 2 device 工具</sub>"]
     B -->|"USB-CDC<br/>v1.0 带帧字节"| C["<b>Pico 2</b><br/><sub>+ ClawTouch HID 固件<br/>(RP2350 / CircuitPython)</sub>"]
     C -->|"USB HID<br/>报告"| D["<b>目标 OS</b><br/><sub>Windows / macOS / Linux<br/>标准 HID 驱动栈</sub>"]
     classDef this fill:#fef3c7,stroke:#d97706,stroke-width:3px,color:#78350f;

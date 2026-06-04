@@ -82,7 +82,7 @@ def test_already_at_target_short_circuits_with_zero_iters(server):
 
 
 def test_within_tolerance_short_circuits(server):
-    # Start 2 px off target — within MOVE_TOLERANCE (3) so the loop
+    # Start 2 px off target — within MOVE_TOLERANCE (5) so the loop
     # should treat it as converged without emitting any HID report.
     _cursor_mod._seed_fake_cursor(500 - 2, 400 + 2)
     result = _run(server._move_to_absolute(500, 400))
@@ -150,17 +150,16 @@ def test_stepped_mode_converges_after_slide(server):
     assert abs(result["y"] - 400) <= MOVE_TOLERANCE
 
 
-def test_stepped_mode_converge_uses_one_fewer_iter_budget(server):
-    """Glide-mode post-slide converge gets MOVE_MAX_ITERS - 1
-    (= 3) iterations, not MOVE_MAX_ITERS — the slide already
-    landed within tens of pixels so 3 settles is sufficient. Use
-    a noop bridge for the converge stage so we can count moves
-    emitted strictly inside the converge loop."""
+def test_stepped_mode_converge_uses_full_iter_budget(server):
+    """Glide-mode post-slide converge gets the FULL MOVE_MAX_ITERS
+    budget (same as snap), NOT one fewer. The slide's final micro-step
+    is itself ballistics-amplified, so it lands tens of px off — the
+    same order as a cold-start move — and earns no smaller budget.
+    (Regression: an earlier ``MOVE_MAX_ITERS - 1`` left glide landings
+    4-7 px off that the click gate then refused; real-hardware mac
+    dogfood 2026-06-04.) Use a noop bridge so the converge stage never
+    lands, and confirm it bails after exactly MOVE_MAX_ITERS."""
     _cursor_mod._seed_fake_cursor(0, 0)
-    # Disable the bridge AFTER the slide by patching it during the
-    # converge phase: easier approach is to count moves before/after.
-    # Use noop from the start so slide also emits 0 reflux, then
-    # confirm converge emits exactly MOVE_MAX_ITERS - 1 attempts.
 
     async def noop_move(x, y, *, relative=False):
         server.bridge._calls.append(("move", {"x": x, "y": y, "relative": relative}))
@@ -169,4 +168,19 @@ def test_stepped_mode_converge_uses_one_fewer_iter_budget(server):
     server.bridge.mouse_move = noop_move
     result = _run(server._stepped_move_to_absolute(500, 400, move_ms=100))
     assert result["converged"] is False
-    assert result["iters"] == MOVE_MAX_ITERS - 1
+    assert result["iters"] == MOVE_MAX_ITERS
+
+
+def test_stepped_mode_converges_under_strong_amplification(server):
+    """Regression (real-hardware mac dogfood 2026-06-04): under stronger
+    ballistics amplification the glide's post-slide residual needs MORE
+    than the old 3-pass budget to settle. With the full MOVE_MAX_ITERS
+    budget (and the looser MOVE_TOLERANCE) the move now converges and the
+    click gate is no longer tripped on a 4-7 px near-miss. The same
+    scenario at the old (3-iter / 3-px) calibration left converged=False."""
+    _install_overshoot_bridge(server, accel=1.3, start=(0, 0))
+    result = _run(server._stepped_move_to_absolute(1200, 800, move_ms=130))
+    assert result["converged"] is True, result
+    assert result["iters"] > 3, result  # needed more than the old glide budget
+    assert abs(result["x"] - 1200) <= MOVE_TOLERANCE
+    assert abs(result["y"] - 800) <= MOVE_TOLERANCE

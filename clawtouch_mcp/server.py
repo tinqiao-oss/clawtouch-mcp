@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
-"""MCP stdio server exposing 10 HID tools.
+"""MCP stdio server exposing the ClawTouch HID input + device tool set.
 
 Implements the subset of MCP spec (2024-11-05 / 2025-03-26) needed by
 OpenClaw, Hermes, Claude Desktop, Cline, etc.:
@@ -52,20 +52,62 @@ MAX_TYPE_LEN = 4096
 # longer than any reasonable demo needs, so we cap rather than let an
 # agent / typo lock up the server.
 MAX_MOVE_MS = 5000
+# hid.batch caps. The op count cap is the primary safety rail for the
+# batch tool: this drives REAL keyboard/mouse on the host, so a large
+# blind burst (LLM hallucination / prompt injection feeding a huge
+# array) would fire that many real actions at the frontmost window with
+# no chance to interrupt — stdio is strictly serial, so while a batch
+# runs NO other tool call (not even hid.release_all to stop it) can get
+# in. A small cap keeps any single batch short-lived; the OSS stdio
+# server has no global F9 panic key / status bar to fall back on. The
+# server enforces this in the handler (NOT just schema maxItems) because
+# a raw JSON-RPC client can bypass client-side schema validation.
+#   - MAX_BATCH_OPS=10: enough for a pre-computed action list (e.g. a
+#     minesweeper solver emitting several fixed coordinates); more than
+#     that is better expressed as separate observe-decide-act calls.
+#   - MAX_BATCH_DELAY_MS=2000: per-op post-delay ceiling, so a stray
+#     delay_ms can't pin the serial transport for an unbounded time
+#     (worst case 10 * 2 s = 20 s head-of-line, deliberately bounded).
+MAX_BATCH_OPS = 10
+MAX_BATCH_DELAY_MS = 2000
+# Default inter-op settle inserted AFTER click/button ops when the caller
+# did not set delay_ms. Real macOS dogfood (native Minesweeper,
+# 2026-06-04): a hid.batch of vertically-adjacent clicks fired back-to-back
+# with zero gap had only the LAST click register — the OS/app coalesced or
+# dropped the earlier ones even though every HID click was sent and ACKed
+# (clicked:true). The HID layer can't observe an app-level drop, so the fix
+# is to PACE discrete clicks. ~40 ms made the repro 100% reliable; 50 ms is
+# the default with margin. An explicit delay_ms (including 0, for advanced
+# callers who want none) overrides it; non-click ops default to 0 as before.
+DEFAULT_CLICK_SETTLE_MS = 50
+_SETTLE_OP_TYPES = frozenset({"click", "button_down", "button_up"})
 # Closed-loop convergence constants for absolute cursor moves.
 # macOS pointer ballistics non-linearly scales single HID deltas
 # (measured ~110% in low-speed segment on Ventura ARM64), so a single
 # fire-and-forget mouse_move overshoots/undershoots by 10-90 px and
 # returns ok=true while the cursor is still drifting. We iterate:
 # query OS cursor → compute residual → send delta → settle → repeat.
-# Per-pass residual shrinks to ~30% of previous (empirically).
-#   - MOVE_TOLERANCE=3 px: macOS reports quantize to ±2 px; tighter
-#     would spin forever on intrinsic jitter.
-#   - MOVE_MAX_ITERS=4: pass 4 lands ≤2 px in measured runs; further
-#     iterations have <1 px marginal benefit.
+# Per-pass residual shrinks to ~30% of previous (empirically), so the
+# loop converges geometrically toward the ±2 px report-quantization
+# floor. The loop EARLY-EXITS the instant residual ≤ MOVE_TOLERANCE,
+# so MOVE_MAX_ITERS is a generous *ceiling*, not a fixed budget: a
+# normal move converges in 2-5 passes regardless of the cap, and the
+# headroom only costs wall-clock on a genuinely struggling move (stuck
+# cursor / competing input). This makes accuracy independent of move
+# distance and screen size with no per-distance calibration.
+#   - MOVE_TOLERANCE=5 px: comfortably above macOS's ±2 px report
+#     quantization, so the loop reliably TERMINATES as converged at the
+#     floor instead of oscillating on intrinsic jitter (tol=3 sat right
+#     on the jitter band). Still far inside any clickable target
+#     (smallest common UI ~16 px).
+#   - MOVE_MAX_ITERS=10: generous ceiling (early-exit keeps the common
+#     case at 2-5 passes). Was 4, calibrated to specific test targets;
+#     that proved too tight once the glide path (_stepped_move_to_absolute)
+#     spent a pass on its post-slide residual and left a 4-7 px near-miss
+#     the click gate then refused (real-hardware mac dogfood 2026-06-04).
 #   - MOVE_SETTLE_MS=20: ~2× macOS HID report cycle (8-10 ms).
-MOVE_TOLERANCE = 3
-MOVE_MAX_ITERS = 4
+MOVE_TOLERANCE = 5
+MOVE_MAX_ITERS = 10
 MOVE_SETTLE_MS = 20
 # Upper bound on the Content-Length header of an incoming framed
 # JSON-RPC message. The MCP spec allows arbitrary message sizes but in
@@ -990,6 +1032,118 @@ class ClawTouchMcpServer:
             handler=self._tool_hold_key,
         ))
         self._register(Tool(
+            name="hid.batch",
+            description=(
+                HID_PREFIX +
+                "Run a SHORT, PRE-PLANNED sequence of HID actions (max "
+                f"{MAX_BATCH_OPS}) in ONE call, in strict order. This is a "
+                "transport convenience for an action list you ALREADY know "
+                "— e.g. clicking several fixed coordinates a solver has "
+                "computed — collapsing N tool round-trips into one. It is "
+                "NOT an orchestration / control-flow layer: no branching, "
+                "no reading a result mid-sequence, no looping. For "
+                "'act → observe → decide → act' you still issue separate "
+                "calls (an action that depends on an earlier action's "
+                "outcome cannot be pre-planned into a batch).\n\n"
+                "Each op is {type, ...params, delay_ms?}. Types:\n"
+                "  • click / move — (x, y, relative, button, double, "
+                "move_ms); identical absolute closed-loop converge and "
+                "ACK semantics to hid.click / hid.move.\n"
+                "  • button_down / button_up — (button).\n"
+                "  • key — (key, modifiers); same 'ctrl+c' shorthand as "
+                "hid.key.\n"
+                "  • type — (text).\n"
+                "  • scroll — (delta).\n"
+                "`delay_ms` pauses AFTER that op "
+                f"(0–{MAX_BATCH_DELAY_MS} ms). Omit it and click/button ops "
+                f"get a small default gap (~{DEFAULT_CLICK_SETTLE_MS} ms) so "
+                "the OS doesn't merge or drop back-to-back clicks; non-click "
+                "ops default to 0. Set delay_ms explicitly (including 0) to "
+                "override.\n\n"
+                "Execution: ops run strictly sequentially. With "
+                "stop_on_error=true (default) the run halts at the first "
+                "op that fails; if any button/key was pressed before the "
+                "stop, release_all fires so nothing stays held. Returns "
+                "{ok (= every op ok), count, failed_index, stopped_early, "
+                "released_all, results:[per-op dicts carrying the same "
+                "fields the standalone tool returns — e.g. converged / "
+                "clicked / chars]}. Held state is NOT auto-released on "
+                "clean completion, so a batch may intentionally leave a "
+                "button/key down for a follow-up call.\n\n"
+                f"Capped at {MAX_BATCH_OPS} ops: this drives real input "
+                "and a batch cannot be interrupted mid-run (stdio is "
+                "serial), so a large blind burst is refused at the "
+                "boundary."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "ops": {
+                        "type": "array",
+                        "minItems": 0,
+                        "maxItems": MAX_BATCH_OPS,
+                        "description": (
+                            f"Up to {MAX_BATCH_OPS} HID actions, executed "
+                            "in array order."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "enum": ["click", "move", "button_down",
+                                             "button_up", "key", "type",
+                                             "scroll"],
+                                },
+                                "x": {"type": "integer"},
+                                "y": {"type": "integer"},
+                                "button": {"type": "string",
+                                           "enum": ["left", "right", "middle"],
+                                           "default": "left"},
+                                "double": {"type": "boolean", "default": False},
+                                "relative": {"type": "boolean", "default": False},
+                                "move_ms": {"type": "integer", "default": 0,
+                                            "minimum": 0, "maximum": MAX_MOVE_MS},
+                                "key": {"type": "string"},
+                                "modifiers": {
+                                    "type": "array",
+                                    "items": {"type": "string",
+                                              "enum": ["ctrl", "shift", "alt",
+                                                       "gui", "win", "cmd"]},
+                                    "default": [],
+                                },
+                                "text": {"type": "string"},
+                                "delta": {"type": "integer"},
+                                "delay_ms": {"type": "integer",
+                                             "minimum": 0,
+                                             "maximum": MAX_BATCH_DELAY_MS,
+                                             "description": (
+                                                 "Pause AFTER this op (ms). "
+                                                 "Omit for a smart default: "
+                                                 f"~{DEFAULT_CLICK_SETTLE_MS} ms "
+                                                 "after click/button ops (so "
+                                                 "back-to-back clicks aren't "
+                                                 "merged/dropped by the OS), 0 "
+                                                 "otherwise. Set explicitly "
+                                                 "(including 0) to override."
+                                             )},
+                            },
+                            "required": ["type"],
+                        },
+                    },
+                    "stop_on_error": {
+                        "type": "boolean", "default": True,
+                        "description": (
+                            "Halt at the first failing op (default). "
+                            "false = run every op, recording failures."
+                        ),
+                    },
+                },
+                "required": ["ops"],
+            },
+            handler=self._tool_batch,
+        ))
+        self._register(Tool(
             name="device.list",
             description="List candidate Pico serial ports.",
             input_schema={"type": "object", "properties": {}},
@@ -1148,11 +1302,13 @@ class ClawTouchMcpServer:
             # "commands landed but the cursor drifted" for the agent.
             "move_acked": all_acked,
             "hint": (
-                "cursor did not converge to target within tolerance; "
-                "possible causes: competing input device (trackpad / "
-                "physical mouse) active during the move, extreme "
-                "pointer-acceleration settings, or a UI dead zone. "
-                "Inspect actual (x, y) and decide whether to retry."
+                f"cursor did not converge within tolerance after {max_iters} "
+                "iterations. The actual (x, y) is usually only a few px from "
+                "target and may be close enough to act on — inspect the "
+                "residual. If the residual is large, a competing input device "
+                "(trackpad / physical mouse) moving the cursor mid-move, "
+                "extreme pointer-acceleration settings, or a UI dead zone is "
+                "the likely cause; decide whether to retry."
             ),
         }
 
@@ -1227,15 +1383,19 @@ class ClawTouchMcpServer:
             accumulated_dy = target_dy
             if i < steps:
                 await asyncio.sleep(step_ms / 1000)
-        # Slide done — closed-loop converge. 3 iters is enough here
-        # because the slide already landed within tens of pixels;
-        # snap-mode budgets 4 iters for cold-start moves up to ~1500 px.
+        # Slide done — closed-loop converge with the SAME budget as snap
+        # mode (full MOVE_MAX_ITERS, not one fewer). The slide's final
+        # micro-step is itself ballistics-amplified, so it lands the
+        # cursor tens of px off — the same order as a cold-start move —
+        # and earns no smaller budget. (Regression: an earlier
+        # ``MOVE_MAX_ITERS - 1`` left glide landings 4-7 px off that the
+        # click gate then refused; real-hardware mac dogfood 2026-06-04.)
         # ``ok`` comes from the converge stage (cursor-verified ground
         # truth): if the slide dropped a report but converge still pulled
         # the cursor onto target, the move genuinely succeeded — we record
         # ``slide_acked`` for diagnostics without masking that success.
         result = await self._converge_to_target(
-            target_x, target_y, max_iters=MOVE_MAX_ITERS - 1,
+            target_x, target_y, max_iters=MOVE_MAX_ITERS,
         )
         if "error" in result:
             return result
@@ -1399,20 +1559,28 @@ class ClawTouchMcpServer:
             combo,
         )
 
-    async def _tool_key(self, **kw) -> dict:
-        self.rate.check()
-        key_str = str(kw["key"])
-        modifiers = [m.lower() for m in (kw.get("modifiers") or [])]
-        # Shortcut shorthand: "ctrl+c" / "ctrl+alt+l" — split modifiers
-        # from the prefix when every "+"-separated head token is a known
-        # modifier name. Keeps "+" itself usable as a literal key.
+    def _split_key_shorthand(
+        self, key_str: str, modifiers_arg: list[str] | None,
+    ) -> tuple[list[str], str]:
+        """Normalise a key + modifiers pair, splitting shorthand like
+        ``"ctrl+c"`` / ``"ctrl+alt+l"`` into (modifiers, key) when every
+        ``"+"``-separated head token is a known modifier name. Keeps
+        ``"+"`` itself usable as a literal key. Shared by ``hid.key`` and
+        the ``hid.batch`` ``key`` op so both parse shortcuts identically."""
+        modifiers = [m.lower() for m in (modifiers_arg or [])]
         if "+" in key_str and len(key_str) > 1:
             parts = key_str.split("+")
             head, tail = parts[:-1], parts[-1]
             if tail and all(p.lower() in _MODIFIER_NAMES for p in head):
-                merged = list(dict.fromkeys(modifiers + [p.lower() for p in head]))
-                modifiers = merged
+                modifiers = list(dict.fromkeys(modifiers + [p.lower() for p in head]))
                 key_str = tail
+        return modifiers, key_str
+
+    async def _tool_key(self, **kw) -> dict:
+        self.rate.check()
+        modifiers, key_str = self._split_key_shorthand(
+            str(kw["key"]), kw.get("modifiers"),
+        )
         self._maybe_warn_self_interrupt(modifiers, key_str)
         ok = await self.bridge.key_combo(modifiers, key_str)
         return {"ok": ok}
@@ -1579,6 +1747,259 @@ class ClawTouchMcpServer:
             "press_acked": bool(press_ok),
             "release_acked": bool(release_ok),
         }
+
+    # ── hid.batch — sequence a short pre-planned action list ──
+    #
+    # Design notes (the four things that make this safe, not just fast):
+    #  1. Rate limit is checked ONCE for the whole batch, then each op
+    #     dispatches to the SAME leaf helpers the standalone tools use
+    #     (_move_to_absolute / _stepped_* / bridge.*), which do not
+    #     self-rate-check — so a mid-batch op can never raise a rate
+    #     RuntimeError. cap10 vs 20 ops/sec never trips the limiter, but
+    #     accounting once (not per op) is the intended design.
+    #  2. Every op runs inside try/except so a raised exception (rate
+    #     limit, "text too long" ValueError, HidUnavailableError) becomes
+    #     that op's {ok: False, error, bridge_diagnostic} instead of
+    #     escaping to dispatch's generic catch — which would discard all
+    #     the per-op results gathered so far.
+    #  3. The whole loop is wrapped in try/finally: on ABNORMAL
+    #     termination (an op failed and stop_on_error halted the run)
+    #     where a button/key was pressed, release_all fires so a held
+    #     button/modifier can't poison the host's subsequent input. A
+    #     clean run does NOT auto-release — a batch may intentionally
+    #     leave state held for a follow-up call (mirrors hid.mouse_button_down).
+    #  4. The return ALWAYS carries a top-level `ok` (= all ops ok). The
+    #     dispatch layer keys isError off that top-level ok, so a partial
+    #     failure (3/10 ok) surfaces as isError:true with the full results
+    #     array intact — without it the agent would be told the whole
+    #     batch succeeded. (Note: _on_tool_call only injects
+    #     bridge_diagnostic into the top-level dict, so per-op failures
+    #     attach their own diagnostic here.)
+    #
+    # Convergence / ACK logic is REUSED via the leaf helpers, never
+    # re-implemented, so each op inherits the failure-propagation contract
+    # pinned by test_composed_tool_failure_propagation.
+
+    def _batch_op_error(self, index: int, op: dict, exc: Exception) -> dict:
+        """Convert an exception raised while running one op into that op's
+        structured failure entry, pulling in the bridge's specific
+        diagnostic when present (the dispatch layer only injects that for
+        the top-level dict, not array elements)."""
+        out: dict[str, Any] = {
+            "index": index,
+            "type": op.get("type"),
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        br = getattr(self, "bridge", None)
+        br_detail = getattr(br, "last_error_detail", None) if br else None
+        if br_detail:
+            out["bridge_diagnostic"] = br_detail
+        return out
+
+    async def _run_batch_op(self, index: int, op: dict) -> dict:
+        """Execute ONE batch op through the standalone tools' leaf helpers
+        so converge / ACK / click-gate semantics are identical and live in
+        exactly one place. Returns a per-op dict that always carries
+        {index, type, ok}. May raise — the caller wraps this in try/except
+        and routes any exception through _batch_op_error."""
+        t = op.get("type")
+        base: dict[str, Any] = {"index": index, "type": t}
+        move_ms = max(0, min(MAX_MOVE_MS, int(op.get("move_ms") or 0)))
+
+        if t in ("move", "click"):
+            relative = bool(op.get("relative", False))
+            if relative:
+                dx, dy = int(op["x"]), int(op["y"])
+                if move_ms > 0:
+                    r = await self._stepped_relative_move(dx, dy, move_ms)
+                else:
+                    ok = await self.bridge.mouse_move(dx, dy, relative=True)
+                    r = {"ok": ok, "dx": dx, "dy": dy, "relative": True}
+            else:
+                if move_ms > 0:
+                    r = await self._stepped_move_to_absolute(
+                        int(op["x"]), int(op["y"]), move_ms,
+                    )
+                else:
+                    r = await self._move_to_absolute(int(op["x"]), int(op["y"]))
+            # Cursor-unavailable structured error → this op failed; carry
+            # the reason through and force ok:False.
+            if "error" in r:
+                return {**base, **r, "ok": False}
+            if t == "click":
+                if self._move_failed(r):
+                    # Positioning failed — do NOT click somewhere we never
+                    # confirmed reaching; surface the move failure.
+                    return {**base, **r, "ok": False}
+                click_ok = await self.bridge.mouse_click(
+                    button=str(op.get("button", "left")),
+                    double=bool(op.get("double", False)),
+                )
+                r["clicked"] = click_ok
+                r["ok"] = click_ok
+            return {**base, **r}
+
+        if t == "button_down":
+            button = str(op.get("button", "left"))
+            ok = await self.bridge.mouse_button_down(button=button)
+            return {**base, "ok": ok, "button": button, "state": "down"}
+
+        if t == "button_up":
+            button = str(op.get("button", "left"))
+            ok = await self.bridge.mouse_button_up(button=button)
+            return {**base, "ok": ok, "button": button, "state": "up"}
+
+        if t == "key":
+            modifiers, key_str = self._split_key_shorthand(
+                str(op["key"]), op.get("modifiers"),
+            )
+            self._maybe_warn_self_interrupt(modifiers, key_str)
+            ok = await self.bridge.key_combo(modifiers, key_str)
+            return {**base, "ok": ok}
+
+        if t == "type":
+            text = str(op["text"])
+            if len(text) > MAX_TYPE_LEN:
+                raise ValueError(f"text too long ({len(text)} > {MAX_TYPE_LEN})")
+            ok = await self.bridge.type_text(text)
+            sent = sum(1 for ch in text if not (ch < " " or ch == "\x7f"))
+            return {**base, "ok": ok, "chars": sent}
+
+        if t == "scroll":
+            delta = int(op["delta"])
+            ok = await self.bridge.mouse_scroll(delta)
+            return {**base, "ok": ok, "delta": delta}
+
+        raise ValueError(f"unknown batch op type: {t!r}")
+
+    def _op_settle_ms(self, op: dict) -> int:
+        """Effective pause (ms) to apply AFTER this op. When delay_ms is
+        omitted, click/button ops get DEFAULT_CLICK_SETTLE_MS so the OS
+        doesn't merge/drop back-to-back clicks (real macOS dogfood); other
+        op types get 0. An explicit delay_ms (including 0) overrides the
+        default. Coerces defensively — a non-int delay_ms must not crash
+        the batch."""
+        raw = op.get("delay_ms")
+        if raw is None:
+            return DEFAULT_CLICK_SETTLE_MS if op.get("type") in _SETTLE_OP_TYPES else 0
+        try:
+            return max(0, min(MAX_BATCH_DELAY_MS, int(raw)))
+        except (TypeError, ValueError):
+            return 0
+
+    async def _tool_batch(self, **kw) -> dict:
+        self.rate.check()                       # ① rate-check once for the batch
+        ops = kw.get("ops")
+        if ops is None:
+            ops = []
+        if not isinstance(ops, list):
+            raise ValueError(f"ops must be an array, got {type(ops).__name__}")
+        # Hard cap enforced HERE, not just in the schema: the server does
+        # not validate tool args against inputSchema, and a raw JSON-RPC
+        # client can bypass client-side validation entirely.
+        if len(ops) > MAX_BATCH_OPS:
+            raise ValueError(
+                f"hid.batch accepts at most {MAX_BATCH_OPS} ops, got {len(ops)}"
+            )
+        stop_on_error = bool(kw.get("stop_on_error", True))
+        results: list[dict] = []
+        failed_index: Optional[int] = None
+        stopped_early = False
+        pressed_something = False               # any button_down issued?
+        released = False
+        cleanup_attempted = False
+        cleanup_error: Optional[str] = None
+        try:
+            for i, op in enumerate(ops):
+                if not isinstance(op, dict):
+                    results.append({
+                        "index": i, "type": None, "ok": False,
+                        "error": f"op must be an object, got {type(op).__name__}",
+                    })
+                    if failed_index is None:
+                        failed_index = i
+                    if stop_on_error:
+                        stopped_early = True
+                        break
+                    continue
+                # Only button_down leaves HELD state needing cleanup. The
+                # `key` op uses key_combo (atomic press+release — no held
+                # key), and the held key_press primitive is intentionally
+                # NOT exposed in batch; button_up needs no marking either.
+                # Marking `key` here would fire a needless release_all and
+                # mis-report released_all=True on an abnormal stop.
+                if op.get("type") == "button_down":
+                    pressed_something = True
+                try:
+                    r = await self._run_batch_op(i, op)       # ④ per-op try/except
+                except Exception as e:
+                    r = self._batch_op_error(i, op, e)
+                else:
+                    # Non-exception failure (a leaf returned ok:False — bridge
+                    # timeout / seq mismatch / firmware ERROR / no convergence)
+                    # carries no reason on its own; attach the bridge's specific
+                    # diagnostic so EVERY per-op failure has the same context the
+                    # exception path (_batch_op_error) already provides. The
+                    # dispatch layer only injects this for the top-level dict,
+                    # not array elements.
+                    if not r.get("ok", False) and "bridge_diagnostic" not in r:
+                        det = getattr(self.bridge, "last_error_detail", None)
+                        if det:
+                            r["bridge_diagnostic"] = det
+                results.append(r)
+                if not r.get("ok", False):
+                    if failed_index is None:
+                        failed_index = i
+                    if stop_on_error:
+                        stopped_early = True
+                        break
+                # Inter-op settle. Click/button ops get a small DEFAULT gap so
+                # the OS doesn't coalesce/drop back-to-back clicks (real macOS
+                # dogfood: zero-gap adjacent clicks merged, only the last
+                # registered). An explicit delay_ms (incl. 0) overrides the
+                # default and is honored even after the final op; the implicit
+                # default only fills GAPS between ops (no needless trailing
+                # wait). The sleep is intentionally OUTSIDE the per-op
+                # try/except: the op result is already recorded, and the only
+                # thing asyncio.sleep raises is CancelledError (a BaseException)
+                # — which must propagate to abort the batch, with the finally
+                # below still running release_all cleanup on the way out.
+                settle = self._op_settle_ms(op)
+                explicit = op.get("delay_ms") is not None
+                if settle and (explicit or i < len(ops) - 1):
+                    await asyncio.sleep(settle / 1000.0)
+        finally:
+            # ③ Clean up held state ONLY on abnormal termination. A batch
+            # that ran to the end (all ok, or stop_on_error=false) may have
+            # intentionally left a button/key down for a follow-up call.
+            if stopped_early and pressed_something:
+                cleanup_attempted = True
+                try:
+                    await self.bridge.release_all()     # rate-exempt panic stop
+                    released = True
+                except Exception as e:
+                    cleanup_error = f"{type(e).__name__}: {e}"
+                    logger.warning(
+                        "hid.batch cleanup release_all failed: %s",
+                        cleanup_error, exc_info=True,
+                    )
+        result: dict[str, Any] = {
+            "ok": len(results) == len(ops) and all(r.get("ok", False) for r in results),
+            "count": len(results),
+            "failed_index": failed_index,
+            "stopped_early": stopped_early,
+            "released_all": released,
+            "results": results,
+        }
+        # Disambiguate released_all=False: "no cleanup needed" vs "cleanup
+        # attempted but release_all itself failed" (e.g. hardware became
+        # unavailable). Surface the latter so a held button isn't silently
+        # left stuck. We do NOT re-raise — that would discard the per-op
+        # results the batch is contractually obliged to return.
+        if cleanup_attempted and not released:
+            result["cleanup_error"] = cleanup_error or "release_all failed"
+        return result
 
     async def _tool_device_list(self, **_kw) -> dict:
         return {"ports": list_pico_ports()}

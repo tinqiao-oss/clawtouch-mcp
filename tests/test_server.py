@@ -53,11 +53,11 @@ def _run(coro):
 
 
 class TestToolRegistry:
-    def test_baseline_15_tools(self, server):
-        # 13 HID + 2 device = 15 default tools (7 v1.0 HID + 6 v1.1 HID +
-        # device.list + device.info). hid.screenshot is the 1 opt-in
-        # tool gated by --allow-screenshot and tested separately. Total
-        # tool surface = 13 + 2 + 1 = 16.
+    def test_baseline_16_tools(self, server):
+        # 14 HID + 2 device = 16 default tools (7 v1.0 HID + 6 v1.1 HID +
+        # hid.batch + device.list + device.info). hid.screenshot is the 1
+        # opt-in tool gated by --allow-screenshot and tested separately.
+        # Total tool surface = 14 + 2 + 1 = 17.
         names = set(server.tools.keys())
         expected = {
             # v1.0
@@ -67,6 +67,8 @@ class TestToolRegistry:
             # v1.1 — independent primitives + composed gestures
             "hid.mouse_button_down", "hid.mouse_button_up", "hid.drag",
             "hid.key_press", "hid.key_release", "hid.hold_key",
+            # v0.4.0 — pre-planned action sequencing
+            "hid.batch",
         }
         assert names == expected
 
@@ -90,8 +92,8 @@ class TestDispatch:
             "jsonrpc": "2.0", "id": 2, "method": "tools/list",
         }))
         tools = result["result"]["tools"]
-        # 9 v1.0 + 6 v1.1 = 15 (screenshot excluded — opt-in)
-        assert len(tools) == 15
+        # 9 v1.0 + 6 v1.1 + hid.batch = 16 (screenshot excluded — opt-in)
+        assert len(tools) == 16
         for t in tools:
             assert {"name", "description", "inputSchema"} <= set(t.keys())
 

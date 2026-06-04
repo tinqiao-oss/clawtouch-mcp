@@ -46,9 +46,11 @@ from clawtouch_mcp.server import MockBridge
 # HID deltas (~110% in the low-speed segment), so a fire-and-forget
 # move overshoots / undershoots by 10-90 px and leaves the cursor in
 # the wrong UI cell for the subsequent click. We iterate until the
-# residual is ≤3 px or we've burned 4 attempts.
-_MOVE_TOLERANCE = 3
-_MOVE_MAX_ITERS = 4
+# residual is ≤5 px or we've burned 10 attempts — the loop early-exits
+# the instant it's within tolerance, so 10 is a generous ceiling that
+# only costs time on a struggling move (2-5 passes is the normal case).
+_MOVE_TOLERANCE = 5
+_MOVE_MAX_ITERS = 10
 _MOVE_SETTLE_MS = 20
 
 
