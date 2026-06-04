@@ -7,6 +7,45 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-06-04 — doc fixes + stdio loop robustness hardening
+
+### Fixed — stdio loop no longer crashes on valid-but-malformed JSON-RPC
+
+An external audit found two ways a non-conforming or adversarial peer could
+take the whole stdio session down (a conforming MCP client never hits
+either — both are robustness hardening, no behavior change for real hosts):
+
+- **Valid JSON that isn't an object** (`[]`, `"x"`, `5`, `true`) used to
+  raise `AttributeError` at `dispatch()`'s `msg.get(...)` — which runs
+  *before* the parse-error guard and so slipped through to `run_stdio`'s
+  fatal handler, killing the session and dropping every later message.
+  `dispatch()` now type-checks and returns JSON-RPC **-32600 Invalid
+  Request** (`id: null`), keeping the connection alive — mirroring the
+  existing -32700 handling for invalid JSON.
+- **Short Content-Length frame**: `_read_exact` returns a truncated buffer
+  on EOF; `_read_framed` then `json.loads`-ed it, so a short body whose
+  prefix was coincidentally complete JSON could be processed as a whole
+  message. It now verifies `len(body) == Content-Length` and raises a parse
+  error (-32700) on a short read.
+
+Regression tests added for both paths (unit + end-to-end subprocess).
+
+### Fixed — zh README quick-start tool count (15 → 16)
+
+`README.zh-CN.md` quick-start said "15 个可用工具" while its own inline
+breakdown (14 HID + 2 device) sums to 16 — and the server registers 16 by
+default (17 with `--allow-screenshot`). Matches the English README and the
+`len(tools) == 16` test.
+
+### Fixed — tool description matched pre-0.3.3 convergence constants
+
+The `hid.click` / `hid.move` tool description (which agents read at
+`tools/list`) still advertised the convergence numbers from before the
+0.3.3 recalibration — "up to 4 iterations, ≤3 px tolerance" and a "3-iter"
+glide converge. The shipped values are `MOVE_MAX_ITERS = 10`,
+`MOVE_TOLERANCE = 5`, and glide gets the full converge budget. Updated the
+description text to match. Description-only — no behavior or API change.
+
 ## [0.4.1] — 2026-06-04 — `hid.batch`: pace back-to-back clicks (real-hardware mac dogfood)
 
 ### Fixed — consecutive `hid.batch` clicks no longer merged/dropped by the OS

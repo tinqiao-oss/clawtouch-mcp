@@ -130,7 +130,7 @@ clawtouch-mcp --mock --log-level INFO
 }
 ```
 
-重启 Claude Desktop,在 MCP server 列表里能看到 `clawtouch`,带 15 个可用
+重启 Claude Desktop,在 MCP server 列表里能看到 `clawtouch`,带 16 个可用
 工具 (14 个 HID + 2 个 device; 传 `--allow-screenshot` 再 +1)。试一下:
 
 > 帮我截屏,找到搜索框,点一下并输入 "hello world"。

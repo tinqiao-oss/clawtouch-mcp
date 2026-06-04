@@ -168,3 +168,20 @@ class TestStdioStability:
         assert "error" in err_resp
         assert err_resp["error"]["code"] == -32601  # method not found
         assert "Traceback" not in err
+
+    def test_non_object_json_does_not_crash_session(self):
+        # A single valid-but-non-object JSON line ([] / "x") used to raise
+        # AttributeError in dispatch() (msg.get before the try) and take the
+        # whole stdio loop down, dropping every subsequent message. It must now
+        # come back as -32600 Invalid Request and leave the session alive.
+        responses, err = _spawn_and_exchange([
+            _initialize_req(1),
+            [],  # valid JSON, not a JSON-RPC object
+            {"jsonrpc": "2.0", "id": 2, "method": "ping"},
+        ])
+        assert "Traceback" not in err, err
+        # The trailing ping proves the session survived the bad line.
+        ping_resp = next((r for r in responses if r.get("id") == 2), None)
+        assert ping_resp is not None and ping_resp.get("result") == {}, responses
+        # The bad line itself came back as Invalid Request (-32600, id null).
+        assert any(r.get("error", {}).get("code") == -32600 for r in responses), responses

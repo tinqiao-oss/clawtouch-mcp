@@ -728,19 +728,19 @@ class ClawTouchMcpServer:
                 "mode returns an error and the caller must use "
                 "relative=true.\n\n"
                 "Absolute mode runs a closed-loop converge (query → "
-                "delta → settle, up to 4 iterations, ≤3 px tolerance) "
+                "delta → settle, up to 10 iterations, ≤5 px tolerance) "
                 "to absorb OS pointer-ballistics non-linearity (macOS "
                 "scales single HID deltas ~110% in the low-speed "
                 "segment, so a fire-and-forget move overshoots by "
                 "10-90 px). The returned `x`/`y` are the actual "
                 "landing coordinates; `target_x`/`target_y` echo the "
-                "request; `converged: true` means residual ≤3 px. "
+                "request; `converged: true` means residual ≤5 px. "
                 "Click fires regardless of convergence — inspect "
                 "`converged` if you need to retry on missed targets.\n\n"
                 "Optional `move_ms` switches to glide mode: the move "
                 "is broken into ~10 ms HID reports over N ms (linear "
-                "interpolation, then a 3-iter converge to clean up "
-                "the final landing). Default 0 = snap mode."
+                "interpolation, then a closed-loop converge pass to "
+                "clean up the final landing). Default 0 = snap mode."
             ),
             input_schema={
                 "type": "object",
@@ -2160,6 +2160,17 @@ class ClawTouchMcpServer:
         ``except Exception`` only catches genuine protocol-layer
         failures left over after that.
         """
+        # Valid JSON that isn't a JSON-RPC *object* — `[]`, `"x"`, `5`,
+        # `true`, `null` — would otherwise raise AttributeError on the
+        # msg.get() calls below. json.loads already succeeded, so run_stdio's
+        # parse-error guard (which only catches JSONDecodeError/ValueError)
+        # misses it, and the AttributeError reaches run_stdio's outer
+        # `except Exception: ...; raise` — killing the whole session over one
+        # bad line. Per JSON-RPC 2.0 a non-Request payload is -32600 Invalid
+        # Request; id=None because there's no parsable id to echo (same as the
+        # -32700 parse-error path).
+        if not isinstance(msg, dict):
+            return _error_response(None, -32600, "Invalid Request: message must be a JSON object")
         jid = msg.get("id")
         method = msg.get("method")
         params = msg.get("params") or {}
@@ -2409,6 +2420,14 @@ async def _read_framed(length: int) -> dict:
             f"Content-Length {length} exceeds MAX_FRAME_LEN ({MAX_FRAME_LEN}B)"
         )
     body = await _read_exact(length)
+    # _read_exact returns a SHORT buffer on EOF (its loop breaks when the
+    # stream closes mid-frame). Without this check a truncated body whose
+    # prefix is coincidentally complete valid JSON would be processed as a
+    # whole message. Treat a short read as a parse error — ValueError lands
+    # in run_stdio's `except (json.JSONDecodeError, ValueError)` → -32700,
+    # session stays alive (consistent with the length guards above).
+    if len(body) != length:
+        raise ValueError(f"short frame: got {len(body)} of {length} bytes")
     return json.loads(body)
 
 

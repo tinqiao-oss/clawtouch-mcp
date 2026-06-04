@@ -15,11 +15,13 @@ import json
 
 import pytest
 
+import clawtouch_mcp.server as ctmcp
 from clawtouch_mcp.server import (
     MAX_TYPE_LEN,
     ClawTouchMcpServer,
     MockBridge,
     ServerConfig,
+    _read_framed,
 )
 
 
@@ -112,6 +114,39 @@ class TestDispatch:
             "jsonrpc": "2.0", "id": 99, "method": "nonexistent",
         }))
         assert result["error"]["code"] == -32601
+
+    def test_non_object_message_returns_invalid_request(self, server):
+        # Valid JSON that isn't a JSON-RPC *object* — [], "x", 5, True —
+        # used to hit AttributeError on msg.get() and kill the whole stdio
+        # loop. dispatch() must now return -32600 Invalid Request (id=None),
+        # not raise.
+        for bad in ([], "x", 5, True):
+            result = _run(server.dispatch(bad))
+            assert result["error"]["code"] == -32600, bad
+            assert result["id"] is None, bad
+
+
+class TestStdioFraming:
+    def test_read_framed_rejects_short_body(self, monkeypatch):
+        # A peer that advertises Content-Length larger than the bytes it
+        # sends, then closes, makes _read_exact return a SHORT buffer. If that
+        # prefix is coincidentally valid JSON it must NOT be parsed as a whole
+        # message — _read_framed raises ValueError (→ -32700, session alive).
+        async def fake_read_exact(n):
+            return b'{"jsonrpc":"2.0","id":1,"method":"ping"}'  # 40 bytes
+        monkeypatch.setattr(ctmcp, "_read_exact", fake_read_exact)
+        with pytest.raises(ValueError, match="short frame"):
+            _run(_read_framed(200))  # claim far more than the 40 bytes sent
+
+    def test_read_framed_accepts_exact_body(self, monkeypatch):
+        body = b'{"jsonrpc":"2.0","id":1,"method":"ping"}'
+
+        async def fake_read_exact(n):
+            assert n == len(body)
+            return body
+        monkeypatch.setattr(ctmcp, "_read_exact", fake_read_exact)
+        msg = _run(_read_framed(len(body)))
+        assert msg["method"] == "ping"
 
     def test_unknown_tool_returns_iserror_content(self, server):
         # MCP spec compliance: tool-level errors (including "unknown
