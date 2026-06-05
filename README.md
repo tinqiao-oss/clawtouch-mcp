@@ -94,8 +94,10 @@ driven across machines. For the compliance boundary on the "not for" cases, see
 ### Install
 
 ```bash
-pip install clawtouch-mcp                 # minimal (serial only)
-pip install 'clawtouch-mcp[screenshot]'   # + mss + Pillow for hid.screenshot tool
+pip install clawtouch-mcp                     # minimal (serial only)
+pip install 'clawtouch-mcp[screenshot]'       # + mss + Pillow (JPEG, Retina resize)
+pip install 'clawtouch-mcp[screenshot-min]'   # mss only — no native deps, works
+                                              # under hardened-runtime hosts
 ```
 
 **Platform-specific setup guides** (recommended on first install):
@@ -416,6 +418,23 @@ is a separate closed-source agent on top of the same hardware; contact
 **Is there a JavaScript / TypeScript version?**
 Not yet. `clawtouch-bridge-sdk` (Python + Node) is planned — see the
 [Open source roadmap](#open-source-roadmap-contributing--license).
+
+**`hid.screenshot` fails with `ImportError: dlopen(... _imaging ...) code
+signature ... different Team IDs`?**
+Your host Python has a hardened runtime with *library validation*, which only
+allows native extensions signed with the host's own Team ID — so it blocks
+Pillow's `_imaging` (some bundled/launcher Pythons do this). The server
+**auto-detects** this and falls back to the no-native **`mss-png`** backend,
+returning a PNG with an explanatory `note` in the metadata — you don't have to
+do anything. mss itself is pure-Python (ctypes → CoreGraphics, a platform
+framework that's exempt), so it loads fine; only Pillow's compiled extension
+is blocked. To force it, pass `--screenshot-backend mss-png` or install the
+lean `pip install 'clawtouch-mcp[screenshot-min]'` (mss only). To keep Pillow
+(JPEG + higher-quality resize), run `clawtouch-mcp` from a Python without
+library validation, or grant the host Python the
+`com.apple.security.cs.disable-library-validation` entitlement. Either way the
+screenshot's `backend` field and `scale_x`/`scale_y` tell the agent what it
+got — always divide click coordinates by `scale_x`/`scale_y`.
 
 ## Related work
 

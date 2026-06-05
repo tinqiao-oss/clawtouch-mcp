@@ -269,6 +269,11 @@ class ServerConfig:
     baudrate: int = 115200
     mock: bool = False
     allow_screenshot: bool = False
+    # screenshot encode backend: 'auto' (Pillow when its native _imaging
+    # loads, else the no-native 'mss-png' path) | 'pillow' | 'mss-png'.
+    # mss-png needs no compiled extension → works under hardened-runtime
+    # library-validation Python hosts that reject Pillow's _imaging.so.
+    screenshot_backend: str = "auto"
     # release-on-idle: 若 idle_close_after 秒内无 tools/call → close 串口
     # (替换为 UnavailableBridge), 让其他进程 (如 ClawTouch desktop) 拿到
     # 同一块板. 下次 tools/call 通过 UnavailableBridge._try_promote 自动
@@ -424,6 +429,14 @@ class UnavailableBridge:
                 bridge = SerialHidBridge(port, baudrate=self._baudrate)
                 await bridge.connect()
                 self._server.bridge = bridge
+                # Re-arm the idle-release watcher now that we hold a real
+                # serial port again: _on_tool_call already ran
+                # _ensure_idle_watch_started while the bridge was still
+                # UnavailableBridge (so it no-op'd at the isinstance check).
+                # Without this, a single tool call right after a lazy reconnect
+                # followed by permanent silence would hold the COM port forever,
+                # defeating HID coexistence with the ClawTouch desktop.
+                self._server._ensure_idle_watch_started()
                 logger.info(
                     "HID became available — promoted to real bridge on %s", port,
                 )
@@ -494,11 +507,92 @@ class UnavailableBridge:
         }
 
 
+def _decimate_rgb(rgb: bytes, raw_w: int, raw_h: int,
+                  target_w: int, target_h: int):
+    """Nearest-neighbour integer-stride downsample of an RGB byte buffer,
+    pure Python (no Pillow / numpy). Used by the 'mss-png' screenshot backend
+    to avoid returning a full physical-resolution Retina PNG (which would
+    re-introduce the base64 buffer overflow the Pillow resize was added to
+    prevent).
+
+    Picks an integer factor f ≈ raw_w/target_w (2 on Retina) and keeps every
+    f-th pixel/row. Per output row it does 3 C-speed strided slice-assigns,
+    so a full Retina frame decimates in milliseconds. Returns
+    ``(out_w, out_h, rgb_bytes)``; f<=1 returns the input unchanged. Fractional
+    DPI (e.g. Windows 125%) rounds to the nearest integer factor — the caller
+    reports the resulting scale honestly so click coords stay correct.
+    """
+    # Integer factor large enough that the decimated frame fits the target in
+    # BOTH dimensions — ceil, NOT round. A 1.0–1.5x cap-only shrink (e.g. a
+    # 5.94Mpx grab → 4Mpx cap target = 1.22x) rounds to f=1, which would skip
+    # decimation and return a full-res multi-MB PNG, silently bypassing the 4M
+    # output cap (the base64 overflow the cap exists to stop). ceil(a/b) for
+    # positive ints == -(-a // b).
+    if target_w and target_h:
+        f = max(1, -(-raw_w // target_w), -(-raw_h // target_h))
+    else:
+        f = 1
+    if f <= 1:
+        return raw_w, raw_h, rgb
+    out_w, out_h = raw_w // f, raw_h // f
+    if out_w < 1 or out_h < 1:
+        return raw_w, raw_h, rgb
+    src_stride = raw_w * 3
+    dst_stride = out_w * 3
+    step = 3 * f
+    out = bytearray(out_w * out_h * 3)
+    for oy in range(out_h):
+        s = oy * f * src_stride
+        row = rgb[s:s + src_stride]
+        o = oy * dst_stride
+        out[o + 0:o + dst_stride:3] = row[0::step][:out_w]
+        out[o + 1:o + dst_stride:3] = row[1::step][:out_w]
+        out[o + 2:o + dst_stride:3] = row[2::step][:out_w]
+    return out_w, out_h, bytes(out)
+
+
+def _screenshot_pillow_note(err: BaseException, *, forced: bool) -> str:
+    """Translate Pillow's cryptic dlopen / library-validation failure into a
+    human-readable, actionable message (the original ImportError text is a
+    wall of 'code signature ... different Team IDs' that reads as unfixable)."""
+    s = str(err)
+    libval = ("code signature" in s
+              or "library validation" in s.lower()
+              or "Team ID" in s
+              or "not valid for use in process" in s)
+    if libval:
+        why = ("the host Python has hardened-runtime library validation "
+               "enabled, which blocked Pillow's native _imaging extension "
+               "(signed with a different Team ID)")
+        fix = ("To use Pillow instead, run clawtouch-mcp from a Python "
+               "without library validation, or grant the host Python the "
+               "com.apple.security.cs.disable-library-validation entitlement")
+    elif isinstance(err, ImportError):
+        why = "Pillow is not installed"
+        fix = ("install it for JPEG + Retina downscaling: "
+               "pip install 'clawtouch-mcp[screenshot]'")
+    else:
+        why = f"Pillow could not be loaded ({type(err).__name__}: {err})"
+        fix = "reinstall Pillow or pass --screenshot-backend mss-png"
+    if forced:
+        return f"--screenshot-backend=pillow was requested but {why}. {fix}."
+    return (f"Screenshot is using the no-Pillow 'mss-png' backend because "
+            f"{why}. Images are PNG at (down-sampled) logical resolution. "
+            f"{fix}.")
+
+
 # ═══════════════════ Server ═══════════════════
 
 class ClawTouchMcpServer:
     def __init__(self, config: ServerConfig):
         self.config = config
+
+        # Screenshot encode backend — resolved + cached lazily on the
+        # first capture (a failing Pillow dlopen must not be retried
+        # every screenshot).
+        self._ss_backend: Optional[str] = None
+        self._ss_image = None       # cached PIL.Image module when backend=pillow
+        self._ss_note: Optional[str] = None
 
         # Windows DPI awareness MUST be set before any cursor / screen
         # query — both `_detect_screen` (here, when auto-detect runs)
@@ -1160,20 +1254,23 @@ class ClawTouchMcpServer:
                 name="hid.screenshot",
                 description=(
                     HID_PREFIX +
-                    "Take a screenshot (requires --allow-screenshot + the "
-                    "'[screenshot]' extras: mss + Pillow). The image is "
-                    "returned as MCP image content (vision-token path) so "
-                    "Retina captures don't overflow the tool-result text "
-                    "buffer. Default format is JPEG q80 — for pixel-perfect "
-                    "OCR-style work pass format='png'. "
-                    "Captured at the logical-point space on high-DPI displays "
-                    "(auto-resized when the physical buffer is noticeably "
-                    "larger than the configured --screen WxH), so hid.click "
-                    "coordinates derived from the screenshot are 1:1 with "
-                    "click_point space; scale_x / scale_y will be ~1.0 on "
-                    "macOS Retina after auto-resize. Capped at 4M output "
-                    "pixels; oversized requests are silently downsampled "
-                    "(see the raw_size field for what mss originally grabbed)."
+                    "Take a screenshot (requires --allow-screenshot + mss; "
+                    "Pillow optional via the '[screenshot]' extras for JPEG "
+                    "+ higher-quality Retina downscaling). Returned as MCP "
+                    "image content (vision-token path) so Retina captures "
+                    "don't overflow the tool-result text buffer. Default "
+                    "format is JPEG q80 — pass format='png' for pixel-perfect "
+                    "OCR-style work. Captured at logical-point space on "
+                    "high-DPI displays (auto-downsampled when the physical "
+                    "buffer is noticeably larger than --screen WxH), so "
+                    "hid.click coordinates from the screenshot are 1:1 with "
+                    "click_point space; scale_x / scale_y ~1.0 on Retina. "
+                    "ALWAYS divide screenshot coords by scale_x / scale_y "
+                    "before clicking. The metadata 'backend' field is "
+                    "'pillow' or 'mss-png' — the latter is a no-native-"
+                    "extension fallback auto-selected under hardened-runtime "
+                    "library-validation hosts (PNG only). Capped at 4M "
+                    "output pixels (see raw_size for the original grab)."
                 ),
                 input_schema={
                     "type": "object",
@@ -2016,20 +2113,70 @@ class ClawTouchMcpServer:
             "mcp_version": __version__,
         }
 
+    def _probe_pillow(self):
+        """Import PIL.Image and force its native ``_imaging`` extension to
+        load. Isolated as a method so (a) the dlopen — where hardened-runtime
+        library validation rejects non-platform extensions — happens in one
+        place, and (b) tests can monkeypatch it to simulate that rejection."""
+        from PIL import Image  # noqa: PLC0415 — lazy; _imaging dlopen here
+        Image.new("RGB", (1, 1))  # force any deferred native init
+        return Image
+
+    def _resolve_screenshot_backend(self) -> str:
+        """Pick (and cache) the screenshot encode backend.
+
+        'auto' (default): use Pillow when its native _imaging loads, else fall
+        back to the no-native 'mss-png' path (which works under hardened-
+        runtime / library-validation Python hosts such as bundled launchers).
+        Cached so a failing Pillow dlopen isn't retried on every screenshot.
+        """
+        if self._ss_backend is not None:
+            return self._ss_backend
+        forced = (self.config.screenshot_backend or "auto").lower()
+        if forced not in ("auto", "pillow", "mss-png"):
+            raise ValueError(
+                "screenshot_backend must be auto|pillow|mss-png, got "
+                f"{forced!r}"
+            )
+        if forced == "mss-png":
+            self._ss_backend = "mss-png"
+            return self._ss_backend
+        try:
+            self._ss_image = self._probe_pillow()
+            self._ss_backend = "pillow"
+        except Exception as e:  # ImportError (dlopen reject) / OSError / ...
+            if forced == "pillow":
+                raise RuntimeError(_screenshot_pillow_note(e, forced=True))
+            self._ss_backend = "mss-png"
+            self._ss_note = _screenshot_pillow_note(e, forced=False)
+            logger.warning(self._ss_note)
+        return self._ss_backend
+
     async def _tool_screenshot(self, **kw) -> "ImageResult":
         try:
-            import mss  # type: ignore
-            from PIL import Image  # type: ignore
+            import mss  # type: ignore  # pure-Python; loads under lib validation
         except ImportError as e:
             raise RuntimeError(
-                "screenshot tool requires the '[screenshot]' extras: "
-                "pip install 'clawtouch-mcp[screenshot]' "
-                f"(missing: {e.name})"
+                "screenshot needs mss: pip install "
+                "'clawtouch-mcp[screenshot-min]' (mss only, no native deps) "
+                "or '[screenshot]' (adds Pillow for JPEG/Retina downscale). "
+                f"missing: {getattr(e, 'name', e)}"
             )
+        backend = self._resolve_screenshot_backend()  # 'pillow' | 'mss-png'
         fmt = (kw.get("format") or "jpeg").lower()
         if fmt not in ("jpeg", "png"):
             raise ValueError(
                 f"format must be 'jpeg' or 'png', got {fmt!r}"
+            )
+        notes: list = []
+        if self._ss_note:
+            notes.append(self._ss_note)
+        if backend == "mss-png" and fmt == "jpeg":
+            # JPEG encoding needs Pillow; on the no-Pillow backend return
+            # PNG rather than failing the call.
+            fmt = "png"
+            notes.append(
+                "JPEG needs Pillow; returned PNG on the mss-png backend."
             )
         # Cap measured on OUTPUT pixels (after auto-resize), not on the
         # raw mss grab — the previous design read monitor["width"] *
@@ -2079,15 +2226,12 @@ class ClawTouchMcpServer:
                 monitor = primary
             shot = sct.grab(monitor)
             raw_w, raw_h = shot.width, shot.height
-            img = Image.frombytes("RGB", (raw_w, raw_h), shot.rgb)
 
-            # Step 1 — for full-screen captures, downsample to LOGICAL
-            # resolution when the physical buffer is noticeably bigger
-            # than the configured screen size. This is the Retina path
-            # on macOS (~2x ratio) and Windows >100% DPI; on Linux /
-            # 100% DPI the buffer matches screen_w/h and this is a
-            # no-op. We use 1.2x as the threshold instead of !=1.0 to
-            # tolerate a pixel of fractional scaling rounding noise.
+            # Downsample policy (shared by BOTH backends): for full-screen
+            # captures, collapse the physical buffer to LOGICAL resolution
+            # when it's noticeably bigger than the configured screen size —
+            # the Retina ~2x path on macOS / Windows >100% DPI; a no-op at
+            # 100% DPI / Linux. 1.2x threshold tolerates fractional rounding.
             target_w, target_h = raw_w, raw_h
             if (not kw.get("region")
                     and self.config.screen_w and self.config.screen_h
@@ -2095,54 +2239,70 @@ class ClawTouchMcpServer:
                 target_w = self.config.screen_w
                 target_h = self.config.screen_h
 
-            # Step 2 — even after the logical-resize step, the result
-            # might still exceed MAX_OUTPUT_PIXELS (4K monitor at 1×,
-            # or an absurdly large region). Ratio-downsample to fit.
+            # Cap output pixels (4K at 1×, or an absurd region) so the
+            # base64 payload can't overflow the MCP client text buffer.
             if target_w * target_h > MAX_OUTPUT_PIXELS:
                 ratio = (MAX_OUTPUT_PIXELS / (target_w * target_h)) ** 0.5
                 target_w = max(1, int(target_w * ratio))
                 target_h = max(1, int(target_h * ratio))
 
-            if (target_w, target_h) != (raw_w, raw_h):
-                img = img.resize((target_w, target_h), Image.LANCZOS)
-
-            buf = io.BytesIO()
-            if fmt == "jpeg":
-                img.save(buf, format="JPEG", quality=80, optimize=True)
-                mime = "image/jpeg"
-            else:
-                img.save(buf, format="PNG", optimize=True)
+            if backend == "pillow":
+                Image = self._ss_image
+                img = Image.frombytes("RGB", (raw_w, raw_h), shot.rgb)
+                if (target_w, target_h) != (raw_w, raw_h):
+                    img = img.resize((target_w, target_h), Image.LANCZOS)
+                buf = io.BytesIO()
+                if fmt == "jpeg":
+                    img.save(buf, format="JPEG", quality=80, optimize=True)
+                    mime = "image/jpeg"
+                else:
+                    img.save(buf, format="PNG", optimize=True)
+                    mime = "image/png"
+                image_bytes = buf.getvalue()
+                out_w, out_h = target_w, target_h
+            else:  # mss-png — no native extension; library-validation safe
+                # Pure-Python integer-stride decimation to (≈) target, then
+                # mss's pure-Python zlib PNG encoder. Can't do fractional DPI
+                # or JPEG, but loads where Pillow's _imaging is blocked.
+                out_w, out_h, rgb = _decimate_rgb(
+                    shot.rgb, raw_w, raw_h, target_w, target_h)
+                image_bytes = mss.tools.to_png(rgb, (out_w, out_h))
                 mime = "image/png"
-            image_bytes = buf.getvalue()
 
-            # After resize the screenshot pixel space matches the click
-            # coordinate space, so scale_x / scale_y collapse to ~1.0
-            # for full-screen captures. We still compute and emit them
-            # so existing agent code that divides by scale stays correct
-            # (it just divides by 1.0 and is unchanged).
+            # Screenshot pixel space vs click-coordinate space. Both
+            # backends downsample full-screen Retina to ~logical, so on
+            # the common path scale_x/y collapse to ~1.0; on mss-png with
+            # fractional DPI (can't integer-decimate exactly) the scale is
+            # reported honestly so callers divide correctly. Always emit
+            # them so agent code that divides by scale stays correct.
             scale_x = 1.0
             scale_y = 1.0
             if (self.config.screen_w and self.config.screen_h
                     and not kw.get("region")):
-                scale_x = target_w / self.config.screen_w
-                scale_y = target_h / self.config.screen_h
+                scale_x = out_w / self.config.screen_w
+                scale_y = out_h / self.config.screen_h
 
+        metadata = {
+            "width": out_w,
+            "height": out_h,
+            "scale_x": round(scale_x, 4),
+            "scale_y": round(scale_y, 4),
+            "format": fmt,
+            "mime_type": mime,
+            "size_bytes": len(image_bytes),
+            # What mss originally grabbed — agents can tell a resize
+            # happened (raw_size != width/height). ~2x on Retina.
+            "raw_size": [raw_w, raw_h],
+            # Which encode path produced this. 'mss-png' = the no-Pillow
+            # fallback (e.g. a hardened-runtime library-validation host).
+            "backend": backend,
+        }
+        if notes:
+            metadata["note"] = " ".join(notes)
         return ImageResult(
             image_bytes=image_bytes,
             mime_type=mime,
-            metadata={
-                "width": target_w,
-                "height": target_h,
-                "scale_x": round(scale_x, 4),
-                "scale_y": round(scale_y, 4),
-                "format": fmt,
-                "mime_type": mime,
-                "size_bytes": len(image_bytes),
-                # Expose what mss originally grabbed so agents can
-                # tell when an auto-resize happened. On Retina this
-                # will be roughly 2x the (width, height) above.
-                "raw_size": [raw_w, raw_h],
-            },
+            metadata=metadata,
         )
 
     # ═══════════════════ JSON-RPC dispatch ═══════════════════
@@ -2173,7 +2333,17 @@ class ClawTouchMcpServer:
             return _error_response(None, -32600, "Invalid Request: message must be a JSON object")
         jid = msg.get("id")
         method = msg.get("method")
-        params = msg.get("params") or {}
+        params = msg.get("params")
+        if params is None:
+            params = {}
+        elif not isinstance(params, dict):
+            # Malformed params → JSON-RPC -32602 Invalid params, NOT -32603
+            # Internal error (which would mislead a client into thinking the
+            # server crashed) and without leaking the raw Python AttributeError.
+            # A Notification (no id) is never replied to, even when malformed.
+            if jid is None:
+                return None
+            return _error_response(jid, -32602, "Invalid params: must be an object")
         try:
             if method == "initialize":
                 result = self._on_initialize(params)
@@ -2197,6 +2367,12 @@ class ClawTouchMcpServer:
                     self._stop_event.set()
                 return None
             else:
+                # Never reply to a Notification (JSON-RPC 2.0 §4.1), even an
+                # unhandled one — only a request (with an id) gets -32601.
+                # MCP clients legitimately send notifications this server
+                # doesn't handle (progress, roots/list_changed, future spec).
+                if jid is None:
+                    return None
                 return _error_response(jid, -32601, f"method not found: {method}")
             if jid is None:
                 return None  # notification — no response
@@ -2477,6 +2653,12 @@ async def run_stdio(server: ClawTouchMcpServer) -> None:
     open. We now catch the parse error per-message, write a -32700
     response, and continue.
     """
+    n_hid = sum(1 for n in server.tools if n.startswith("hid."))
+    n_device = sum(1 for n in server.tools if n.startswith("device."))
+    logger.info(
+        "%d HID tools + %d device tools registered; listening on stdio",
+        n_hid, n_device,
+    )
     # Decide framing on first message
     framed: Optional[bool] = None
     try:

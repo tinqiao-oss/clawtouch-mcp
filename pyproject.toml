@@ -12,7 +12,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "clawtouch-mcp"
-version = "0.4.2"
+version = "0.4.3"
 description = "MCP stdio server exposing HID mouse/keyboard tools backed by ClawTouch Pico hardware."
 readme = "README.md"
 # PEP 639 SPDX expression form (modern packaging). Avoid the deprecated
@@ -35,9 +35,14 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-# Pillow is needed for DPI-aware resize (Retina screens) and JPEG encoding.
-# Without it the screenshot tool falls back to raw PNG at physical resolution
-# which overflows MCP client text buffers on high-DPI displays.
+# Screenshot capture uses mss (pure-Python; loads under macOS hardened-runtime
+# library validation). Pillow adds JPEG encoding + higher-quality Retina
+# downscaling, but its native _imaging extension is rejected by some hardened-
+# runtime hosts (different Team ID) — there the server auto-falls back to the
+# 'mss-png' backend (pure-Python PNG, integer-decimated to logical resolution).
+#   screenshot-min : mss only — works everywhere, PNG output.
+#   screenshot     : mss + Pillow — JPEG + LANCZOS resize when _imaging loads.
+screenshot-min = ["mss>=10.2"]
 screenshot = ["mss>=10.2", "Pillow>=10.0"]
 # Test deps. pytest-asyncio is REQUIRED — the suite has async tests that
 # silently skip (false-green) without it. CI and CONTRIBUTING use this extra.

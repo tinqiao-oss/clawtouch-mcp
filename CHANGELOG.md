@@ -7,6 +7,74 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-06-05 — screenshot works under hardened-runtime library-validation hosts
+
+### Added — no-Pillow `mss-png` screenshot backend + auto-degrade
+
+`hid.screenshot` previously hard-required both mss **and** Pillow. On a host
+Python with a hardened runtime + *library validation* (reported on a bundled
+py3.13/arm64 launcher), loading Pillow's native `_imaging` extension is
+rejected by macOS:
+
+```
+ImportError: dlopen(.../PIL/_imaging...so): code signature ... not valid
+for use in process: ... (non-platform) have different Team IDs
+```
+
+…and the tool then failed outright with a misleading "install `[screenshot]`"
+message — even though the extra was already installed. Platform frameworks
+(CoreGraphics) are exempt and mss is pure-Python (ctypes → CoreGraphics), so
+mss loads fine; only Pillow's compiled extension is blocked.
+
+- New **`mss-png`** backend: grabs via mss, decimates to logical resolution
+  with a pure-Python integer-stride downsample (so it can't re-introduce the
+  base64 buffer overflow the Pillow resize prevents), and encodes with mss's
+  pure-Python `to_png` (zlib). No native extension → loads where Pillow's
+  `_imaging` is blocked.
+- **`--screenshot-backend {auto,pillow,mss-png}`** (default `auto`): Pillow
+  when its `_imaging` loads, else `mss-png`. The probe is cached, so a failing
+  dlopen isn't retried on every screenshot.
+- On degrade the call **succeeds** (returns the image) with a metadata
+  `note` that translates the dlopen error into a fix instead of erroring:
+  run from a Python without library validation, or grant the host the
+  `com.apple.security.cs.disable-library-validation` entitlement.
+- Metadata gains a **`backend`** field; `scale_x`/`scale_y` stay honest — the
+  mss-png path downsamples Retina to logical so scale collapses to ~1.0 like
+  the Pillow path (fractional DPI is reported honestly so callers divide
+  correctly). The tool description reminds agents to always divide click
+  coordinates by `scale_x`/`scale_y`.
+- New **`screenshot-min`** extra (mss only): a library-validation-safe
+  screenshot install with no native dependency. `[screenshot]` is unchanged
+  (mss + Pillow) for JPEG + LANCZOS resize.
+
+### Fixed
+
+- The `pyproject` comment claimed a no-Pillow PNG fallback that did not
+  actually exist in the code; the fallback now exists and the comment matches.
+
+### Fixed — pre-release multi-dimension audit
+
+A deep audit before publishing 0.4.3 surfaced one regression and four smaller
+conformance gaps, all fixed here:
+
+- **mss-png bypassed the 4M-pixel output cap** (regression, this release): the
+  integer decimation factor used `round()`, so a cap-only shrink in the 4–9M
+  pixel band (e.g. a 5.94M Retina grab → 4M target = 1.22×) rounded to f=1 and
+  returned a full-res multi-MB PNG — the exact base64 overflow the cap exists
+  to prevent, on the no-Pillow path that is the default under library
+  validation. Now uses `ceil` so the decimated frame always fits the cap.
+- Unhandled JSON-RPC **notifications** no longer get a spurious `id:null`
+  `-32601` reply (JSON-RPC 2.0 §4.1: never reply to a notification).
+- Non-dict `params` now returns **-32602 Invalid params** instead of -32603
+  with a leaked Python `AttributeError`.
+- The idle-release watcher is **re-armed after a lazy reconnect**, so a single
+  tool call right after a reconnect can't hold the COM port forever (HID
+  coexistence with the ClawTouch desktop).
+- `run_stdio` now emits the `N HID tools + M device tools registered;
+  listening on stdio` startup line the READMEs already document.
+
+296 tests (was 274); no behaviour change on the Pillow path.
+
 ## [0.4.2] — 2026-06-04 — doc fixes + stdio loop robustness hardening
 
 ### Fixed — stdio loop no longer crashes on valid-but-malformed JSON-RPC

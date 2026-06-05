@@ -24,6 +24,12 @@ def main() -> int:
     parser.add_argument("--mock", action="store_true", help="Do not touch hardware; log calls only.")
     parser.add_argument("--allow-screenshot", action="store_true",
                         help="Enable the hid.screenshot tool (requires mss).")
+    parser.add_argument("--screenshot-backend", default="auto",
+                        choices=["auto", "pillow", "mss-png"],
+                        help="Screenshot encode backend (default auto: Pillow "
+                             "when its native _imaging loads, else mss-png — a "
+                             "no-native-extension PNG path that works under "
+                             "hardened-runtime library-validation hosts).")
     parser.add_argument("--idle-close-after", type=float, default=30.0,
                         help="Release the COM port after this many seconds with "
                              "no tool call (default 30; 0 disables). Lets other "
@@ -60,6 +66,7 @@ def main() -> int:
         ops_per_sec=args.ops_per_sec,
         mock=args.mock,
         allow_screenshot=args.allow_screenshot,
+        screenshot_backend=args.screenshot_backend,
         idle_close_after=args.idle_close_after,
     )
     if args.screen:
