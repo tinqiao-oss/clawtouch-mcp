@@ -99,6 +99,21 @@ class TestDispatch:
         for t in tools:
             assert {"name", "description", "inputSchema"} <= set(t.keys())
 
+    def test_hid_click_description_matches_gated_behavior(self, server):
+        """The hid.click description must NOT claim the click fires
+        regardless of convergence — _tool_click skips the click when the
+        move fails (no convergence / cursor unavailable / un-ACKed report;
+        see test_hid_batch.py + composed-failure suite). This pins the doc
+        to the implementation so the contradiction can't silently return."""
+        result = _run(server.dispatch({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/list",
+        }))
+        tools = result["result"]["tools"]
+        click = next(t for t in tools if t["name"] == "hid.click")
+        desc = click["description"]
+        assert "regardless of convergence" not in desc
+        assert "only fires after the move succeeds" in desc
+
     def test_tool_call_click(self, server):
         result = _run(server.dispatch({
             "jsonrpc": "2.0", "id": 3, "method": "tools/call",

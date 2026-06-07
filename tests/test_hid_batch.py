@@ -284,6 +284,64 @@ def test_no_cleanup_when_failure_had_no_press(server):
     assert _count(server, "release_all") == 0
 
 
+def test_continue_on_error_releases_button_when_button_up_fails(server):
+    """stop_on_error=false: a button_down that succeeds followed by a
+    button_up that FAILS for a recoverable (non-device-gone) reason must
+    STILL fire release_all so the button isn't left physically held. Before
+    the fix the finally only released on `stopped_early`, so a continue-on-
+    error run leaked the held button (returned ok:False with no cleanup and
+    no signal). The batch still runs the trailing op (continue-on-error)."""
+    server.bridge.last_error_detail = "firmware ERROR BAD_BUTTON"   # not device-gone
+
+    async def fail_up(button="left"):
+        server.bridge._calls.append(("button_up", {"button": button}))
+        return False  # firmware rejected the release; button stays down
+
+    server.bridge.mouse_button_up = fail_up
+    ops = [
+        {"type": "button_down", "button": "left"},
+        {"type": "button_up", "button": "left"},   # fails, NOT device-gone
+        {"type": "scroll", "delta": 1},             # still runs
+    ]
+    result = _run(server._tool_batch(ops=ops, stop_on_error=False))
+    assert result["ok"] is False
+    assert result["stopped_early"] is False          # device alive → no forced stop
+    assert result["failed_index"] == 1
+    assert result["count"] == 3                       # continue-on-error ran all
+    assert result["released_all"] is True             # ③ fix: button released
+    assert _count(server, "release_all") == 1
+    assert _count(server, "scroll") == 1
+
+
+def test_batch_stops_on_device_nonresponse_even_continue_on_error(server):
+    """A device that goes non-responsive mid-batch stops the run even with
+    stop_on_error=false — continuing would only grind each remaining op
+    through its full ACK timeout (a dead device can't recover mid-batch).
+    The remaining ops do not execute."""
+    _cursor_mod._clear_fake_cursor()
+    server.bridge.last_error_detail = (
+        "ACK timeout after 1.0s (no frame header received from firmware)"
+    )
+
+    async def dead_move(x, y, *, relative=False):
+        server.bridge._calls.append(("move", {"x": x, "y": y, "relative": relative}))
+        return False  # firmware never ACKs
+
+    server.bridge.mouse_move = dead_move
+    ops = [
+        {"type": "click", "x": 50, "y": 40, "relative": True},   # device dead → fails
+        {"type": "scroll", "delta": 1},                          # must NOT run
+    ]
+    result = _run(server._tool_batch(ops=ops, stop_on_error=False))
+    assert result["ok"] is False
+    assert result["stopped_early"] is True       # device-gone forced the stop
+    assert result["failed_index"] == 0
+    assert result["count"] == 1                   # second op never ran
+    assert _count(server, "scroll") == 0
+    # the failing op carried the device diagnostic that drove the stop
+    assert "ack timeout" in result["results"][0]["bridge_diagnostic"].lower()
+
+
 # ── hard op cap ──────────────────────────────────────────────────────
 
 def test_too_many_ops_rejected(server):

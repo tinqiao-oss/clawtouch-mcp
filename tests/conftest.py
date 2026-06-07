@@ -44,8 +44,13 @@ def _fake_cursor_for_tests(monkeypatch):
     # Centred on a 1920x1080 screen so deltas in tests come out as
     # `target - 960` / `target - 540` — easy to reason about.
     monkeypatch.setenv("CLAWTOUCH_FAKE_CURSOR", "960,540")
+    # The env hook is gated OFF by default (real-hardware safety); the test
+    # suite is the canonical place it's allowed. Enable it for every test and
+    # restore the default on teardown so the gating itself stays testable.
+    _cursor_mod._set_fake_cursor_allowed(True)
     # Always start each test with a clean dynamic state — prior tests
     # may have left MockBridge-seeded state behind.
     _cursor_mod._clear_fake_cursor()
     yield
     _cursor_mod._clear_fake_cursor()
+    _cursor_mod._set_fake_cursor_allowed(False)

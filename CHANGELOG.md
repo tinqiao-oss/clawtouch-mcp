@@ -7,6 +7,69 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.5] — 2026-06-07 — Retina --screen guard · mouse_move magnitude docs · move/batch dead-device hardening
+
+### Added — macOS Retina `--screen` pixel/point guard
+
+- On macOS the OS cursor query returns CoreGraphics **points**, not pixels
+  (Retina scales points:pixels 2:1), but `--screen` / clamp / the converge
+  loop are pixel-agnostic and trust whatever `WxH` you pass. A physical-pixel
+  `--screen` on a Retina display (e.g. `2880x1800` for a `1440x900`-point
+  screen) made every absolute click un-convergeable: the point-space cursor
+  can never reach the pixel-space target, so the converge loop exhausts
+  `MOVE_MAX_ITERS` and returns `ok:false`. The server now warns at startup
+  when an explicit `--screen` looks like physical Retina pixels (the
+  ~2x-in-both-axes signature, distinguished from a wider multi-monitor
+  bounding box that grows in one axis), warning rather than rejecting. The
+  `--screen` help text now states it expects logical size (points on Retina).
+
+### Documented — `mouse_move` int16/int8 magnitude contract
+
+- `build_mouse_move` packs signed int16 deltas (±32767), but a USB HID Boot
+  Mouse report carries only int8 per axis (-127..127). Adafruit HID's
+  `Mouse.move()` splits any `|delta| > 127` into successive reports, so a
+  large delta is delivered in full over multiple reports — a stable library
+  behavior the firmware relies on and never clamps. This was undocumented;
+  `build_mouse_move`'s docstring (with the companion protocol-v1.md note and
+  firmware comment) now state the int16 range and the split contract.
+
+### Fixed — move/batch dead-device hang, batch held-state leak, doc + env-hook hardening
+
+- **Death-spiral guard on the move loops.** A dead/unplugged device never
+  ACKs a mouse report, and each un-ACKed report blocks the bridge for the
+  full per-ACK timeout (~1 s). The glide/converge loops would issue up to
+  ~100 slide steps + 10 converge passes → ~110 s of dead-air for a single
+  move, and a continue-on-error `hid.batch` multiplied that by op count
+  (~19 min for 10 ops), all while stdio is serial-blocked. The loops now
+  bail after `MAX_CONSECUTIVE_MOVE_TIMEOUTS` (3) consecutive un-ACKed
+  reports (counter resets on any ACK, so a transient single drop still
+  rides through), flagging `device_nonresponsive` so callers skip the
+  dependent click. `MAX_MOVE_MS` bounded the glide *sleeps*; this bounds the
+  *ACK-wait* dead-air it never covered.
+- **`hid.batch` stops on device non-response even with `stop_on_error=false`.**
+  A dead device can't recover mid-batch, so the run now halts on the first
+  op that reports `device_nonresponsive` / an ACK-timeout diagnostic instead
+  of grinding every remaining op through its full timeout. Recoverable
+  per-op errors (bad arg / firmware ERROR / seq mismatch / no convergence)
+  still honor `stop_on_error` as before.
+- **`hid.batch` held-state leak in continue-on-error mode.** Cleanup
+  (`release_all`) fired only on `stopped_early`, so a `stop_on_error=false`
+  run whose `button_up` failed after a `button_down` returned `ok:false`
+  yet left the button physically held with no cleanup and no signal. Cleanup
+  now also fires when the run had any failure (`failed_index` set); a fully
+  clean run still leaves a button held on purpose for a follow-up call.
+- **`hid.click` description corrected.** It claimed "Click fires regardless
+  of convergence", but the click is (correctly) skipped when the move fails
+  (no convergence / cursor unavailable / un-ACKed report). The text now
+  matches the gated behavior; a tools/list regression test pins it.
+- **`CLAWTOUCH_FAKE_CURSOR` env hook gated to test/mock mode.** The hook is
+  now honored only when explicitly enabled (test suite / `--mock` startup);
+  on a real-hardware run a stray/leaked value is ignored (warned once) and
+  the OS cursor query is used, so a polluted env can't make an absolute
+  click compute its delta off a phantom cursor.
+
+312 tests; no behaviour change on real-hardware paths.
+
 ## [0.4.3] — 2026-06-05 — screenshot works under hardened-runtime library-validation hosts
 
 ### Added — no-Pillow `mss-png` screenshot backend + auto-degrade
@@ -1454,7 +1517,8 @@ under the working name `openclaw-mcp` but were never published. The
   for this OSS release.
 - No multi-touch HID profile yet — only mouse and keyboard.
 
-[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.5...HEAD
+[0.4.5]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.3...v0.4.5
 [0.3.3]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/tinqiao-oss/clawtouch-mcp/releases/tag/v0.3.1

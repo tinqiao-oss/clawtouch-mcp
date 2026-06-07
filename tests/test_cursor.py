@@ -94,6 +94,31 @@ class TestFakeCursorEnvHook:
         assert get_cursor_position() == (7, 7)
 
 
+class TestFakeCursorHookGating:
+    """The env hook is a TEST/MOCK-only seam. On a real-hardware run (hook
+    disabled) a stray/leaked CLAWTOUCH_FAKE_CURSOR must be IGNORED, not
+    honored — else it would make an absolute click compute its delta off a
+    phantom cursor and land on the wrong spot."""
+
+    def test_env_ignored_when_hook_disabled(self, monkeypatch):
+        # Pin the platform query to a sentinel so "fell through to the OS
+        # query" is observable regardless of host OS.
+        monkeypatch.setattr(cursor.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(cursor, "_linux_get_cursor", lambda: (-9, -9))
+        monkeypatch.setenv(_FAKE_CURSOR_ENV, "111,222")
+        cursor._set_fake_cursor_allowed(False)        # real-hardware mode
+        try:
+            assert get_cursor_position() == (-9, -9)  # env IGNORED, OS query used
+        finally:
+            cursor._set_fake_cursor_allowed(True)     # restore autouse default
+
+    def test_env_honored_when_hook_enabled(self, monkeypatch):
+        # Sanity: with the hook enabled (test/mock mode) the env value wins.
+        monkeypatch.setenv(_FAKE_CURSOR_ENV, "111,222")
+        cursor._set_fake_cursor_allowed(True)
+        assert get_cursor_position() == (111, 222)
+
+
 class TestAvailabilityHint:
     def test_returns_non_empty_string(self):
         # The hint goes into the error payload that agents see, so it

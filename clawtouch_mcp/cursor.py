@@ -29,11 +29,44 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import logging
 import os
 import platform
 
 
 _FAKE_CURSOR_ENV = "CLAWTOUCH_FAKE_CURSOR"
+
+# Whether the CLAWTOUCH_FAKE_CURSOR env hook is honored. OFF by default so a
+# stray/leaked env var on a REAL-hardware host can never make
+# get_cursor_position() report a phantom location — which would make an
+# absolute hid.click compute its delta off a fake cursor and click the wrong
+# spot. The hook is a TEST/MOCK seam only: it is switched ON by the test
+# suite (conftest autouse) and by `--mock` startup (MockBridge needs it to
+# seed the converge loop's first cursor query). Production real-bridge runs
+# leave it OFF and go straight to the OS cursor query.
+_FAKE_CURSOR_ALLOWED = False
+_warned_stray_fake_cursor = False
+
+
+def _set_fake_cursor_allowed(enabled: bool) -> None:
+    """Enable/disable the CLAWTOUCH_FAKE_CURSOR env hook. Called by the test
+    suite (conftest) and by `--mock` startup; never by the real-hardware
+    path, which must always consult the OS cursor."""
+    global _FAKE_CURSOR_ALLOWED
+    _FAKE_CURSOR_ALLOWED = bool(enabled)
+
+
+def _warn_stray_fake_cursor_once() -> None:
+    global _warned_stray_fake_cursor
+    if _warned_stray_fake_cursor:
+        return
+    _warned_stray_fake_cursor = True
+    logging.getLogger("clawtouch_mcp.cursor").warning(
+        "%s is set but the fake-cursor hook is disabled (real-hardware "
+        "mode) — IGNORING it and using the OS cursor query. This env var is "
+        "a test/mock-only seam; unset it to silence this warning.",
+        _FAKE_CURSOR_ENV,
+    )
 
 # Mock-bridge cursor state. ``MockBridge.mouse_move`` seeds + mutates
 # this list so that the closed-loop converge path in the server sees
@@ -94,6 +127,12 @@ def get_cursor_position() -> tuple[int, int] | None:
     real OS query path so a malformed value never silently breaks
     the production code path.
 
+    The hook is honored ONLY when explicitly enabled (test suite /
+    ``--mock`` startup, via ``_set_fake_cursor_allowed``). On a real-
+    hardware run the env var is IGNORED (and warned about once) so a
+    stray/leaked value can't make an absolute click compute its delta
+    off a phantom cursor and land on the wrong spot.
+
     Never raises — broad exception catches return ``None``.
     """
     # Mock-bridge dynamic state wins — seeded by MockBridge.__init__
@@ -101,13 +140,19 @@ def get_cursor_position() -> tuple[int, int] | None:
     if _FAKE_DYNAMIC_STATE is not None:
         return (_FAKE_DYNAMIC_STATE[0], _FAKE_DYNAMIC_STATE[1])
 
-    fake = os.environ.get(_FAKE_CURSOR_ENV)
-    if fake:
-        try:
-            sx, sy = fake.split(",", 1)
-            return (int(sx.strip()), int(sy.strip()))
-        except (ValueError, AttributeError):
-            pass  # malformed → fall through to real OS query
+    if _FAKE_CURSOR_ALLOWED:
+        fake = os.environ.get(_FAKE_CURSOR_ENV)
+        if fake:
+            try:
+                sx, sy = fake.split(",", 1)
+                return (int(sx.strip()), int(sy.strip()))
+            except (ValueError, AttributeError):
+                pass  # malformed → fall through to real OS query
+    elif os.environ.get(_FAKE_CURSOR_ENV):
+        # Hook disabled (real-hardware path) but the env var is set — stray
+        # pollution (leaked from CI / a stale shell export). Warn once and
+        # ignore it; fall through to the real OS query below.
+        _warn_stray_fake_cursor_once()
 
     system = platform.system()
     if system == "Windows":

@@ -19,7 +19,13 @@ def main() -> int:
     )
     parser.add_argument("--port", help="Serial port, e.g. COM7 or /dev/ttyACM0. Auto-detect if omitted.")
     parser.add_argument("--baudrate", type=int, default=115200)
-    parser.add_argument("--screen", metavar="WxH", help="Clamp coordinates, e.g. 1920x1080")
+    parser.add_argument("--screen", metavar="WxH",
+                        help="Clamp coordinates, e.g. 1920x1080. Use the "
+                             "display's LOGICAL size; on macOS Retina that "
+                             "means points, NOT physical pixels (e.g. "
+                             "1440x900, not 2880x1800) — the OS cursor query "
+                             "is point-space, so a pixel-space value makes "
+                             "absolute clicks fail to converge.")
     parser.add_argument("--ops-per-sec", type=float, default=20.0)
     parser.add_argument("--mock", action="store_true", help="Do not touch hardware; log calls only.")
     parser.add_argument("--allow-screenshot", action="store_true",

@@ -130,6 +130,16 @@ def build_ping(seq_id: int = 0) -> HidCommand:
 
 
 def build_mouse_move(x: int, y: int, *, relative: bool, seq_id: int = 0) -> HidCommand:
+    """Encode a MOUSE_MOVE frame. ``x``/``y`` are signed int16 deltas
+    (±32767); a value outside that range raises ``struct.error`` here,
+    before anything reaches the wire.
+
+    The firmware delivers the delta as USB HID Boot Mouse reports, which
+    carry only int8 per axis (−127..127): Adafruit HID's ``Mouse.move()``
+    splits any ``|delta| > 127`` into successive reports, so a large delta
+    arrives in full over multiple reports. Neither side clamps — emitting
+    deltas > 127 (e.g. a cross-monitor hop) is normal and supported. See
+    ``protocol-v1.md`` (MOUSE_MOVE magnitude) for the wire contract."""
     flags = 0x01 if relative else 0x00
     payload = struct.pack("<hhB", int(x), int(y), flags)
     return HidCommand(CommandType.MOUSE_MOVE, payload, seq_id)

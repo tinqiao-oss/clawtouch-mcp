@@ -109,6 +109,20 @@ _SETTLE_OP_TYPES = frozenset({"click", "button_down", "button_up"})
 MOVE_TOLERANCE = 5
 MOVE_MAX_ITERS = 10
 MOVE_SETTLE_MS = 20
+# Death-spiral guard for the move loops (_converge_to_target /
+# _stepped_move_to_absolute / _stepped_relative_move). A dead or unplugged
+# device never ACKs a mouse report, and each un-ACKed report blocks the
+# bridge for the full per-ACK timeout (SerialHidBridge default 1.0 s). With
+# no guard, a glide can fire up to 100 such reports plus 10 converge passes
+# → ~110 s of dead-air for ONE move, and a continue-on-error hid.batch
+# multiplies that by the op count (~19 min for 10 ops) — all while stdio is
+# strictly serial, so not even hid.release_all can get in. We bail after
+# this many CONSECUTIVE un-ACKed reports. The counter resets on any ACK, so
+# a transient single drop on a live device still rides through; only a
+# sustained run (= the device is gone) trips it, collapsing the dead-device
+# case to ~N × timeout. MAX_MOVE_MS bounds the intended glide *sleeps*; this
+# bounds the *ACK-wait* dead-air the move_ms cap never covered.
+MAX_CONSECUTIVE_MOVE_TIMEOUTS = 3
 # Upper bound on the Content-Length header of an incoming framed
 # JSON-RPC message. The MCP spec allows arbitrary message sizes but in
 # practice every reasonable tool call fits in well under 1 MB; capping
@@ -621,6 +635,9 @@ class ClawTouchMcpServer:
                     "could not auto-detect screen size; coordinates will "
                     "not be clamped. Pass --screen WxH explicitly to enable."
                 )
+        # macOS Retina footgun: warn if an explicit --screen looks like
+        # physical pixels rather than points (see method docstring).
+        self._warn_if_retina_pixel_screen()
         self.bridge: Any = None
         self.rate = RateLimiter(config.ops_per_sec)
         self.tools: dict[str, Tool] = {}
@@ -647,10 +664,62 @@ class ClawTouchMcpServer:
         self._stop_event: asyncio.Event = asyncio.Event()
         self._register_tools()
 
+    def _warn_if_retina_pixel_screen(self) -> None:
+        """Heuristic guard for the macOS point-vs-pixel ``--screen`` footgun.
+
+        On macOS the OS cursor query (``cursor.get_cursor_position``) returns
+        CoreGraphics *points*, not pixels — Retina displays scale points:pixels
+        2:1. ``--screen`` / ``_clamp`` / the converge loop are pixel-agnostic:
+        they trust whatever WxH you pass. If a user supplies a *physical-pixel*
+        ``--screen`` on a Retina mac (e.g. ``2880x1800`` for a ``1440x900``-point
+        display), every absolute click targets a coordinate the point-space
+        cursor can never reach: ``_converge_to_target`` can't shrink the
+        residual, exhausts ``MOVE_MAX_ITERS`` (=10), and returns ``ok=False``.
+        A loud, graceful failure — but a baffling one without this hint.
+
+        We detect the tell-tale ~2x-in-*both*-axes signature (Retina physical
+        pixels) and warn. We deliberately do NOT warn on a rectangle that grows
+        in only one axis — that's the legitimate multi-monitor bounding-box case
+        (e.g. ``--screen 7680x1440`` to reach a side-by-side second monitor). And
+        we warn rather than reject: an external display or unusual scale factor
+        is the operator's call to make. No-op off macOS / when --screen wasn't
+        given / when the logical size can't be detected (e.g. headless)."""
+        if sys.platform != "darwin":
+            return
+        if self._screen_source != "explicit":
+            return  # auto-detected size is already point-space-consistent
+        w, h = self.config.screen_w, self.config.screen_h
+        if not (w and h):
+            return
+        detected = _detect_screen()  # tkinter → LOGICAL points on macOS
+        if not detected:
+            return
+        dw, dh = detected
+        if dw <= 0 or dh <= 0:
+            return
+        sx, sy = w / dw, h / dh
+        # ~2x (or 3x) in BOTH axes by the same factor ⇒ physical Retina pixels,
+        # not a multi-monitor bounding box (which scales predominantly one axis).
+        if sx >= 1.5 and sy >= 1.5 and abs(sx - sy) < 0.3:
+            logger.warning(
+                "--screen %dx%d looks like PHYSICAL Retina pixels, but this "
+                "display reports %dx%d POINTS (~%.1fx scale). On macOS the OS "
+                "cursor query returns points, so absolute clicks against a "
+                "pixel-space --screen never converge (they return ok=false "
+                "after exhausting the converge loop). Pass --screen in POINTS "
+                "instead, e.g. --screen %dx%d.",
+                w, h, dw, dh, sx, dw, dh,
+            )
+
     # ── Lifecycle ──
 
     async def start(self) -> None:
         if self.config.mock:
+            # Mock mode is a test/dev seam: honor the CLAWTOUCH_FAKE_CURSOR
+            # env hook so the converge loop's first cursor query (before
+            # MockBridge seeds its dynamic state) is deterministic. The hook
+            # is OFF by default on real-hardware runs (stray-env safety).
+            _cursor_mod._set_fake_cursor_allowed(True)
             self.bridge = MockBridge()
             logger.info("starting in MOCK mode — hardware is not touched")
             return
@@ -829,8 +898,12 @@ class ClawTouchMcpServer:
                 "10-90 px). The returned `x`/`y` are the actual "
                 "landing coordinates; `target_x`/`target_y` echo the "
                 "request; `converged: true` means residual ≤5 px. "
-                "Click fires regardless of convergence — inspect "
-                "`converged` if you need to retry on missed targets.\n\n"
+                "The click only fires after the move succeeds — i.e. the "
+                "cursor is confirmed within ≤5 px of target. If convergence "
+                "fails (or the OS cursor query is unavailable), NO click is "
+                "sent and the move result is returned unchanged (`ok: false` "
+                "plus `converged`/`residual_x`/`residual_y`/`hint`); inspect "
+                "those and retry.\n\n"
                 "Optional `move_ms` switches to glide mode: the move "
                 "is broken into ~10 ms HID reports over N ms (linear "
                 "interpolation, then a closed-loop converge pass to "
@@ -1340,6 +1413,24 @@ class ClawTouchMcpServer:
         """
         return "error" in result or result.get("ok") is False
 
+    @staticmethod
+    def _looks_device_nonresponsive(result: dict) -> bool:
+        """True when a per-op result indicates the HID device has stopped
+        responding (unplugged / firmware hung) rather than a recoverable
+        per-op error. The move helpers set ``device_nonresponsive`` after a
+        run of consecutive un-ACKed reports; single bridge calls (scroll /
+        key / type / button) surface the same condition via the bridge's
+        ACK-timeout / not-connected diagnostic. hid.batch uses this to stop a
+        continue-on-error run the instant the device dies, instead of
+        grinding every remaining op through its full ACK timeout — a dead
+        device can't recover mid-batch. A recoverable error (bad arg,
+        firmware ERROR, seq mismatch, no convergence) returns False so
+        ``stop_on_error`` semantics are unchanged for those."""
+        if result.get("device_nonresponsive"):
+            return True
+        diag = str(result.get("bridge_diagnostic") or "").lower()
+        return "ack timeout" in diag or "not connected" in diag
+
     async def _converge_to_target(
         self, target_x: int, target_y: int, *, max_iters: int,
     ) -> dict[str, Any]:
@@ -1359,6 +1450,9 @@ class ClawTouchMcpServer:
         """
         landed: tuple[int, int] | None = None
         all_acked = True
+        moves_made = 0
+        consecutive_timeouts = 0
+        nonresponsive = False
         for i in range(max_iters):
             cur = get_cursor_position()
             if cur is None:
@@ -1382,24 +1476,37 @@ class ClawTouchMcpServer:
                 }
             move_acked = await self.bridge.mouse_move(dx, dy, relative=True)
             all_acked = all_acked and bool(move_acked)
+            moves_made += 1
             landed = (cur[0] + dx, cur[1] + dy)
+            # Death-spiral guard: a dead/unplugged device never ACKs and the
+            # cursor never moves, so the residual can't shrink — without this
+            # the loop would spend max_iters × per-ACK timeout (~10 s) before
+            # giving up. Bail after a short run of consecutive non-ACKs (a
+            # single transient drop resets the counter and rides through).
+            if move_acked:
+                consecutive_timeouts = 0
+            else:
+                consecutive_timeouts += 1
+                if consecutive_timeouts >= MAX_CONSECUTIVE_MOVE_TIMEOUTS:
+                    nonresponsive = True
+                    break
             if i < max_iters - 1:
                 await asyncio.sleep(MOVE_SETTLE_MS / 1000.0)
         actual = get_cursor_position() or landed or (target_x, target_y)
-        return {
+        result: dict[str, Any] = {
             "ok": False,
             "x": actual[0], "y": actual[1],
             "target_x": target_x, "target_y": target_y,
             "residual_x": target_x - actual[0],
             "residual_y": target_y - actual[1],
-            "iters": max_iters,
+            "iters": moves_made,
             "converged": False,
             # False ⇒ at least one in-loop mouse_move was not ACKed by the
             # firmware; distinguishes "bridge dropped commands" from
             # "commands landed but the cursor drifted" for the agent.
             "move_acked": all_acked,
             "hint": (
-                f"cursor did not converge within tolerance after {max_iters} "
+                f"cursor did not converge within tolerance after {moves_made} "
                 "iterations. The actual (x, y) is usually only a few px from "
                 "target and may be close enough to act on — inspect the "
                 "residual. If the residual is large, a competing input device "
@@ -1408,6 +1515,18 @@ class ClawTouchMcpServer:
                 "the likely cause; decide whether to retry."
             ),
         }
+        if nonresponsive:
+            # Distinguish "device gone" from "cursor drifted": the former is
+            # not worth retrying without a reconnect, and hid.batch uses this
+            # flag to stop a continue-on-error run instead of grinding on.
+            result["device_nonresponsive"] = True
+            result["hint"] = (
+                f"aborted after {consecutive_timeouts} consecutive un-ACKed "
+                "mouse reports — the device is not responding (unplugged / "
+                "firmware hung). The cursor was not moved onto target; "
+                "reconnect and retry."
+            )
+        return result
 
     async def _move_to_absolute(self, target_x: int, target_y: int) -> dict[str, Any]:
         """Snap-to absolute move (default, ``move_ms=0``). Clamps to
@@ -1467,6 +1586,8 @@ class ClawTouchMcpServer:
         accumulated_dx = 0
         accumulated_dy = 0
         slide_acked = True
+        consecutive_timeouts = 0
+        slide_aborted = False
         for i in range(1, steps + 1):
             t = i / steps
             target_dx = round(total_dx * t)
@@ -1476,10 +1597,41 @@ class ClawTouchMcpServer:
             if step_dx or step_dy:
                 step_acked = await self.bridge.mouse_move(step_dx, step_dy, relative=True)
                 slide_acked = slide_acked and bool(step_acked)
+                # Death-spiral guard: bail out of the glide once the device
+                # stops ACKing — otherwise a dead device drags the slide
+                # through all `steps` reports at the full per-ACK timeout each.
+                if step_acked:
+                    consecutive_timeouts = 0
+                else:
+                    consecutive_timeouts += 1
+                    if consecutive_timeouts >= MAX_CONSECUTIVE_MOVE_TIMEOUTS:
+                        slide_aborted = True
+                        break
             accumulated_dx = target_dx
             accumulated_dy = target_dy
             if i < steps:
                 await asyncio.sleep(step_ms / 1000)
+        if slide_aborted:
+            # Device stopped responding mid-glide. Skip the converge stage
+            # (it would only re-spend the same ACK-timeout dead-air) and fail
+            # fast with ok:False so the caller's dependent action (click) does
+            # not fire at a location we never reached. _move_failed() keys off
+            # ``ok is False``; device_nonresponsive lets hid.batch stop.
+            return {
+                "ok": False,
+                "stepped": True,
+                "steps": steps,
+                "move_ms": move_ms,
+                "slide_acked": False,
+                "converged": False,
+                "device_nonresponsive": True,
+                "target_x": target_x, "target_y": target_y,
+                "hint": (
+                    "aborted glide: the device stopped ACKing mouse reports "
+                    "(unplugged / firmware hung). No dependent action fired; "
+                    "reconnect and retry."
+                ),
+            }
         # Slide done — closed-loop converge with the SAME budget as snap
         # mode (full MOVE_MAX_ITERS, not one fewer). The slide's final
         # micro-step is itself ballistics-amplified, so it lands the
@@ -1518,6 +1670,8 @@ class ClawTouchMcpServer:
         accumulated_dx = 0
         accumulated_dy = 0
         all_acked = True
+        consecutive_timeouts = 0
+        nonresponsive = False
         for i in range(1, steps + 1):
             t = i / steps
             target_dx = round(dx * t)
@@ -1527,16 +1681,29 @@ class ClawTouchMcpServer:
             if step_dx or step_dy:
                 step_acked = await self.bridge.mouse_move(step_dx, step_dy, relative=True)
                 all_acked = all_acked and bool(step_acked)
+                # Death-spiral guard (see _stepped_move_to_absolute): stop
+                # chunking once the device stops ACKing rather than firing all
+                # `steps` reports at the full per-ACK timeout.
+                if step_acked:
+                    consecutive_timeouts = 0
+                else:
+                    consecutive_timeouts += 1
+                    if consecutive_timeouts >= MAX_CONSECUTIVE_MOVE_TIMEOUTS:
+                        nonresponsive = True
+                        break
             accumulated_dx = target_dx
             accumulated_dy = target_dy
             if i < steps:
                 await asyncio.sleep(step_ms / 1000)
-        return {
+        result: dict[str, Any] = {
             "ok": all_acked,
             "dx": dx, "dy": dy,
             "stepped": True, "steps": steps, "move_ms": move_ms,
             "relative": True,
         }
+        if nonresponsive:
+            result["device_nonresponsive"] = True
+        return result
 
     async def _tool_click(self, **kw) -> dict:
         self.rate.check()
@@ -2048,7 +2215,16 @@ class ClawTouchMcpServer:
                 if not r.get("ok", False):
                     if failed_index is None:
                         failed_index = i
-                    if stop_on_error:
+                    # Stop when the caller asked to (stop_on_error) OR when the
+                    # device itself has gone non-responsive: a dead/unplugged
+                    # device can't recover mid-batch, so continuing would only
+                    # grind each remaining op through its full ACK timeout
+                    # (~1 s each — a 10-op batch is ~minutes of dead-air, all
+                    # while stdio is serial-blocked). Stopping also lets the
+                    # finally below release any held button. A *recoverable*
+                    # per-op error (bad arg / firmware ERROR / seq mismatch /
+                    # no convergence) still honors stop_on_error as before.
+                    if stop_on_error or self._looks_device_nonresponsive(r):
                         stopped_early = True
                         break
                 # Inter-op settle. Click/button ops get a small DEFAULT gap so
@@ -2067,10 +2243,17 @@ class ClawTouchMcpServer:
                 if settle and (explicit or i < len(ops) - 1):
                     await asyncio.sleep(settle / 1000.0)
         finally:
-            # ③ Clean up held state ONLY on abnormal termination. A batch
-            # that ran to the end (all ok, or stop_on_error=false) may have
-            # intentionally left a button/key down for a follow-up call.
-            if stopped_early and pressed_something:
+            # ③ Clean up held state on ANY abnormal end after a button_down:
+            # either a stop_on_error halt (stopped_early) OR a
+            # continue-on-error run that nonetheless had a failure
+            # (failed_index set — e.g. a button_up that the firmware didn't
+            # ACK, leaving the button physically held). A fully clean run
+            # (failed_index is None) leaves the button down on purpose for a
+            # follow-up call and is NOT auto-released. Without the
+            # failed_index arm, a continue-on-error batch whose button_up
+            # failed returned ok:False yet left the button stuck with no
+            # cleanup and no signal.
+            if pressed_something and (stopped_early or failed_index is not None):
                 cleanup_attempted = True
                 try:
                     await self.bridge.release_all()     # rate-exempt panic stop

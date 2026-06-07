@@ -26,6 +26,7 @@ import pytest
 
 from clawtouch_mcp import cursor as _cursor_mod
 from clawtouch_mcp.server import (
+    MAX_CONSECUTIVE_MOVE_TIMEOUTS,
     MOVE_MAX_ITERS,
     MOVE_TOLERANCE,
     ClawTouchMcpServer,
@@ -169,6 +170,77 @@ def test_stepped_mode_converge_uses_full_iter_budget(server):
     result = _run(server._stepped_move_to_absolute(500, 400, move_ms=100))
     assert result["converged"] is False
     assert result["iters"] == MOVE_MAX_ITERS
+
+
+# ── 5. dead-device death-spiral guard (no full-budget grind) ──────
+
+def test_dead_device_bails_early_on_consecutive_ack_timeouts(server):
+    """A device that never ACKs (unplugged / firmware hung) must NOT grind
+    through the full MOVE_MAX_ITERS at the per-ACK timeout each. converge
+    bails after MAX_CONSECUTIVE_MOVE_TIMEOUTS un-ACKed reports, flags
+    device_nonresponsive, and reports the (unmoved) actual position. This is
+    the fix for the ~110 s single-move hang on a dead device."""
+    # Sanity: the guard must actually be tighter than the full budget, else
+    # this test would pass trivially.
+    assert MAX_CONSECUTIVE_MOVE_TIMEOUTS < MOVE_MAX_ITERS
+    _cursor_mod._seed_fake_cursor(100, 100)
+
+    async def dead_move(x, y, *, relative=False):
+        server.bridge._calls.append(("move", {"x": x, "y": y, "relative": relative}))
+        return False  # firmware never ACKs
+
+    server.bridge.mouse_move = dead_move
+    result = _run(server._move_to_absolute(800, 600))
+    assert result["ok"] is False
+    assert result["converged"] is False
+    assert result["device_nonresponsive"] is True
+    assert result["iters"] == MAX_CONSECUTIVE_MOVE_TIMEOUTS
+    assert result["x"] == 100 and result["y"] == 100   # never moved
+    moves = [c for c in server.bridge._calls if c[0] == "move"]
+    assert len(moves) == MAX_CONSECUTIVE_MOVE_TIMEOUTS  # not MOVE_MAX_ITERS
+
+
+def test_dead_device_aborts_glide_without_running_converge(server):
+    """Glide mode on a dead device aborts the slide after the consecutive-
+    timeout threshold and does NOT run the post-slide converge stage (which
+    would only re-spend the same ACK-timeout dead-air). ok:False so a
+    dependent click won't fire."""
+    _cursor_mod._seed_fake_cursor(0, 0)
+
+    async def dead_move(x, y, *, relative=False):
+        server.bridge._calls.append(("move", {"x": x, "y": y, "relative": relative}))
+        return False
+
+    server.bridge.mouse_move = dead_move
+    result = _run(server._stepped_move_to_absolute(500, 400, move_ms=100))
+    assert result["ok"] is False
+    assert result["converged"] is False
+    assert result["device_nonresponsive"] is True
+    assert result["slide_acked"] is False
+    moves = [c for c in server.bridge._calls if c[0] == "move"]
+    # Bailed during the slide; far fewer than the steps + MOVE_MAX_ITERS the
+    # old death-spiral would have emitted.
+    assert len(moves) == MAX_CONSECUTIVE_MOVE_TIMEOUTS
+
+
+def test_single_transient_drop_does_not_trip_the_guard(server):
+    """A lone non-ACK on an otherwise-live device must NOT abort the move —
+    the counter resets on the next ACK, so the closed loop still converges."""
+    _cursor_mod._seed_fake_cursor(100, 100)
+    state = {"first": True}
+
+    async def flaky_move(x, y, *, relative=False):
+        server.bridge._calls.append(("move", {"x": x, "y": y, "relative": relative}))
+        if state["first"]:
+            state["first"] = False
+            return False  # one transient drop, but cursor still moves
+        _cursor_mod._update_fake_cursor(x, y, relative=relative)
+        return True
+
+    server.bridge.mouse_move = flaky_move
+    result = _run(server._move_to_absolute(500, 400))
+    assert result["converged"] is True       # rode through the single drop
+    assert "device_nonresponsive" not in result
 
 
 def test_stepped_mode_converges_under_strong_amplification(server):
