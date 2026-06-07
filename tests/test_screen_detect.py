@@ -36,8 +36,14 @@ def _info(srv):
 
 class TestScreenSource:
     def test_explicit_screen_wins_over_detection(self):
-        """If --screen WxH was passed, source=explicit and detection is skipped."""
-        with patch("clawtouch_mcp.server._detect_screen",
+        """If --screen WxH was passed, source=explicit and the resolution-
+        detection path is skipped (config not overridden). Pinned to a
+        non-darwin platform so the macOS Retina --screen guard - which
+        legitimately consults _detect_screen for a point/pixel check - does
+        not fire here; that guard's detection call is covered by
+        TestRetinaPixelScreenGuard."""
+        with patch("clawtouch_mcp.server.sys.platform", "win32"), \
+             patch("clawtouch_mcp.server._detect_screen",
                    return_value=(9999, 9999)) as m:
             cfg = ServerConfig(screen_w=1920, screen_h=1080, mock=True)
             srv = ClawTouchMcpServer(cfg)

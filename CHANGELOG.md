@@ -7,6 +7,19 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.6] — 2026-06-07 — test-only: macOS CI fix for the 0.4.5 Retina guard
+
+### Fixed — test
+
+- `test_explicit_screen_wins_over_detection` over-asserted that
+  `_detect_screen` is never called for an explicit `--screen`. The 0.4.5
+  Retina guard legitimately consults it (read-only, for a point/pixel
+  comparison) on macOS, so the test failed on macOS runners only
+  (Windows/Linux skip the darwin-only guard). The test now pins a
+  non-darwin platform to isolate the resolution-skip invariant; the
+  guard's detection call is covered by `TestRetinaPixelScreenGuard`.
+  No runtime change from 0.4.5.
+
 ## [0.4.5] — 2026-06-07 — Retina --screen guard · mouse_move magnitude docs · move/batch dead-device hardening
 
 ### Added — macOS Retina `--screen` pixel/point guard
@@ -1517,7 +1530,8 @@ under the working name `openclaw-mcp` but were never published. The
   for this OSS release.
 - No multi-touch HID profile yet — only mouse and keyboard.
 
-[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.5...HEAD
+[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.6...HEAD
+[0.4.6]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.3...v0.4.5
 [0.3.3]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.1...v0.3.2
