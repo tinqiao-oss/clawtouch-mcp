@@ -148,8 +148,8 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`
 ```
 
 Restart Claude Desktop. You should see `clawtouch` show up in the MCP server
-list with 16 tools available (14 HID + 2 device; +1 if you pass
-`--allow-screenshot`). Try:
+list with 16 tools available (14 HID + 2 device; +2 if you pass
+`--allow-screenshot`, which enables `hid.screenshot` and `screen.windows`). Try:
 
 > Take a screenshot of my screen, find the search box, click it, and type
 > "hello world".
@@ -283,7 +283,8 @@ Seventeen tools register: **fourteen always-on `hid.*` input tools**, plus
 | `hid.key_release` | v1.1 | Release a held key (no args = release everything) |
 | `hid.hold_key` | v1.1 | Press, wait, then release |
 | `hid.batch` | v0.4.0 | Run a pre-planned sequence of ≤10 HID actions in one call (strict order) |
-| `hid.screenshot` | v1.0 | Screenshot the primary monitor — JPEG q80 default, `format='png'` for lossless (opt-in, requires `--allow-screenshot`) |
+| `hid.screenshot` | v1.0 | Screenshot a monitor or a `region` — JPEG q80 default, `format='png'` for lossless. `max_width` bounds the returned width; `markers` stamps two calibration markers for vision-model coordinate work (opt-in, requires `--allow-screenshot`) |
+| `screen.windows` | v0.5.0 | List visible top-level windows with titles and screen rectangles, so a capture can be cropped to one window. On Windows each entry also carries `visible_fraction` — how much of it is actually on top, because a capture of a covered window's rectangle is a capture of whatever covers it — plus `enabled` and a `raise_point`. Those three are **absent** where they could not be measured (macOS, or a rectangle too small to sample): absent means not measured, never measured-and-fine (opt-in, requires `--allow-screenshot`; Windows + macOS) |
 | `device.list` | v1.0 | List candidate HID board ports |
 | `device.info` | v1.0 | Active connection info |
 

@@ -1,0 +1,27 @@
+# The patch layer this bundle exports.
+#
+# dsh loads a plugin ONLY through the patch its package.json's
+# `dsh.bundle.patch` points at. A package that declares `dsh.client` but no
+# bundle patch installs cleanly, mounts nothing, and reports no error — so
+# this file is not optional boilerplate, it is the thing that makes the
+# plugin exist at runtime.
+#
+# `config` is replaced wholesale by a profile's own patch layer, not deep
+# merged: a user overriding one key must restate the others they want.
+- insert:
+    - id: clawtouch
+      name: dsh-clawtouch
+      config:
+        # Path to the clawtouch-mcp executable (pip install clawtouch-mcp).
+        command: clawtouch-mcp
+        # Widest image handed to the vision model. Bigger is not better:
+        # the model rescales to its own budget anyway, and a wide desktop
+        # loses the small text a click depends on.
+        maxWidth: 1600
+        # Locate and report, but never actually press anything. Useful for
+        # the first run on a new machine.
+        dryRun: false
+        vision:
+          model: qwen-vl-max
+          # Leave apiKey unset and export DASHSCOPE_API_KEY instead, so a
+          # key never lands in a profile file.

@@ -249,10 +249,127 @@ def test_stepped_mode_converges_under_strong_amplification(server):
     than the old 3-pass budget to settle. With the full MOVE_MAX_ITERS
     budget (and the looser MOVE_TOLERANCE) the move now converges and the
     click gate is no longer tripped on a 4-7 px near-miss. The same
-    scenario at the old (3-iter / 3-px) calibration left converged=False."""
+    scenario at the old (3-iter / 3-px) calibration left converged=False.
+
+    The original assertion here was ``iters > 3`` — a proxy for "the glide
+    got the full budget" that only held while every pass shed a fixed ~30%
+    of the residual. The loop now divides each command by a gain measured
+    from the previous pass, so this converges in a couple of passes
+    instead of five; pinning the old pass count would be pinning the old
+    inefficiency. What must stay true is the budget, so that is asserted
+    directly."""
+    from clawtouch_mcp.server import MOVE_MAX_ITERS as _BUDGET
     _install_overshoot_bridge(server, accel=1.3, start=(0, 0))
     result = _run(server._stepped_move_to_absolute(1200, 800, move_ms=130))
     assert result["converged"] is True, result
-    assert result["iters"] > 3, result  # needed more than the old glide budget
+    assert 0 < result["iters"] <= _BUDGET, result
     assert abs(result["x"] - 1200) <= MOVE_TOLERANCE
     assert abs(result["y"] - 800) <= MOVE_TOLERANCE
+
+
+def test_strong_windows_style_amplification_converges(server):
+    """Windows with "Enhanced pointer precision" (the shipped default)
+    amplifies a large HID delta ~2.5x — measured on real hardware, not
+    assumed: commanding 127 px moved the cursor 319, commanding -1000
+    moved -2516.
+
+    A loop that commands the raw residual cannot converge at that gain: it
+    overshoots by 150% every pass and oscillates until the budget runs
+    out, which is exactly what a long click across a wide desktop did.
+    Dividing by a gain learned from the previous pass fixes it without any
+    per-platform ballistics table."""
+    _install_overshoot_bridge(server, accel=2.5, start=(0, 0))
+    result = _run(server._move_to_absolute(1800, 1000))
+    assert result["converged"] is True, result
+    assert abs(result["x"] - 1800) <= MOVE_TOLERANCE, result
+    assert abs(result["y"] - 1000) <= MOVE_TOLERANCE, result
+
+
+def test_a_damping_host_also_converges(server):
+    """The estimator must work in both directions — a host that moves the
+    cursor LESS than commanded (pointer speed turned down) would stall a
+    loop that only ever divided by a number bigger than one."""
+    _install_overshoot_bridge(server, accel=0.4, start=(0, 0))
+    result = _run(server._move_to_absolute(1500, 800))
+    assert result["converged"] is True, result
+    assert abs(result["x"] - 1500) <= MOVE_TOLERANCE, result
+
+
+def test_gain_estimate_ignores_an_edge_clipped_pass(server):
+    """A move clipped by the screen edge travelled less than the OS would
+    have moved it. Folding that into the estimate would teach the loop the
+    host damps input and make it overshoot harder on the next pass — the
+    opposite of the truth."""
+    server.config.screen_w = 1920
+    server.config.screen_h = 1080
+    gain, residual = server._update_gain(
+        2.5,
+        # commanded +400 in x, but the cursor stopped dead on the right edge
+        (400, 0, (1600, 500)),
+        (1919, 500), 1000, 500, None,
+    )
+    assert gain == 2.5, "an edge-clipped axis must not move the estimate"
+    assert residual == 919
+
+
+def test_pointer_gain_survives_between_moves(server):
+    """The gain describes the HOST's mouse settings, not one move. Relearning
+    it from scratch every time costs a wasted overshoot per click — visible
+    as the cursor flying past the target and coming back."""
+    _install_overshoot_bridge(server, accel=2.5, start=(0, 0))
+    first = _run(server._move_to_absolute(1500, 900))
+    assert first["converged"] is True, first
+    learned = server._pointer_gain
+    assert 2.0 < learned < 3.0, learned
+
+    _cursor_mod._seed_fake_cursor(0, 0)
+    second = _run(server._move_to_absolute(1500, 900))
+    assert second["converged"] is True, second
+    assert second["iters"] <= first["iters"], (first, second)
+
+
+def test_a_stale_gain_does_not_strand_a_short_move(server):
+    """The counter-example that carrying the gain across moves creates.
+
+    Learn a gain of 2.5, then have the host change under us (the user
+    turns pointer speed down, an RDP session takes over, the mouse is
+    swapped) so the real gain is 0.25. A short move now commands
+    `24 / 2.5 = 10` px, which is under the sampling floor: the estimate
+    can never be re-measured, and each pass creeps 2 px. Ten passes later
+    it has gone nowhere — strictly worse than never having persisted the
+    gain at all.
+
+    The escape is that a pass which teaches nothing AND barely moves walks
+    the estimate back toward 1.0, which makes the next command big enough
+    to measure.
+    """
+    _install_overshoot_bridge(server, accel=2.5, start=(0, 0))
+    first = _run(server._move_to_absolute(1500, 900))
+    assert first["converged"] is True, first
+    assert server._pointer_gain > 2.0, server._pointer_gain
+
+    # Same server, different world: 10x less pointer movement per delta.
+    _install_overshoot_bridge(server, accel=0.25, start=(1000, 600))
+    result = _run(server._move_to_absolute(1024, 624))
+    assert result["converged"] is True, (result, server._pointer_gain)
+    assert abs(result["x"] - 1024) <= MOVE_TOLERANCE, result
+
+
+def test_a_position_beyond_the_bounds_is_not_read_as_an_edge_clip(server):
+    """The boundary test is equality, not a range.
+
+    A cursor pinned AT the edge really was clipped, and its ratio
+    understates the gain. A cursor reported BEYOND the edge was not
+    clipped by anything — a real OS never puts it there — so discarding
+    that sample threw away the only measurement available and left the
+    loop unable to learn at all.
+    """
+    server.config.screen_w = 1920
+    server.config.screen_h = 1080
+    gain, _ = server._update_gain(
+        1.0, (1000, 0, (0, 500)), (2500, 500), 4000, 500, None)
+    assert abs(gain - 2.5) < 1e-6, gain
+
+    pinned, _ = server._update_gain(
+        1.0, (1000, 0, (1500, 500)), (1919, 500), 4000, 500, None)
+    assert pinned == 1.0, "a pass pinned at the edge must not move the estimate"

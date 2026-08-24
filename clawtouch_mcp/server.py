@@ -36,6 +36,7 @@ from typing import Any, Awaitable, Callable, Optional
 from . import __version__
 from .bridge import SerialHidBridge, auto_detect_ports, list_pico_ports
 from . import cursor as _cursor_mod
+from . import screen as _screen
 from .cursor import (
     _seed_fake_cursor,
     _update_fake_cursor,
@@ -107,6 +108,33 @@ _SETTLE_OP_TYPES = frozenset({"click", "button_down", "button_up"})
 #     the click gate then refused (real-hardware mac dogfood 2026-06-04).
 #   - MOVE_SETTLE_MS=20: ~2× macOS HID report cycle (8-10 ms).
 MOVE_TOLERANCE = 5
+# Online estimate of the OS pointer-ballistics gain: how many screen
+# pixels the cursor actually travels per pixel of HID delta we command.
+#
+# The converge loop was tuned against a gain near 1 (macOS amplifies a
+# single delta ~1.1x, and the residual decays ~30% a pass). Windows with
+# "Enhanced pointer precision" on — the shipped default — amplifies a
+# large delta by ~2.5x, measured on a 5120x1440 host: commanding 127 px
+# moved 319, commanding -1000 moved -2516. At that gain the loop does not
+# decay at all, it OSCILLATES: every pass overshoots, and ten passes later
+# the residual is still hundreds of pixels. Short hops converged fine,
+# which is why this stayed invisible — the ballistic curve is near 1x at
+# small deltas, so only long travel (any click across a wide desktop)
+# diverges.
+#
+# The fix stays deliberately thin — no per-magnitude ballistics table and
+# no 300-iteration budget (that belongs to the closed-source product, not
+# to this layer): divide the commanded delta by a gain measured from the
+# previous pass. It self-tunes to whatever the host does, needs no
+# platform knowledge, and costs two floats of state.
+GAIN_MIN = 0.25
+GAIN_MAX = 8.0
+# Below this, a commanded delta is too small to measure a ratio from
+# (integer cursor quantisation dominates) — those passes teach nothing.
+GAIN_MIN_SAMPLE_PX = 12
+# Fraction of the residual a healthy pass is expected to remove. Used only
+# to decide whether an UNMEASURABLE pass is going fine or is stuck.
+GAIN_HEALTHY_PROGRESS = 0.3
 MOVE_MAX_ITERS = 10
 MOVE_SETTLE_MS = 20
 # Death-spiral guard for the move loops (_converge_to_target /
@@ -521,6 +549,37 @@ class UnavailableBridge:
         }
 
 
+def _clip_int16(value: float) -> int:
+    """MOUSE_MOVE carries signed int16 deltas; anything larger raises at
+    pack time. Clipping is safe because the converge loop runs again."""
+    return max(-32767, min(32767, int(value)))
+
+
+def _clamp_float(value: float, low: float, high: float) -> float:
+    return max(low, min(high, float(value)))
+
+
+def _monitor_containing(sct, x1: int, y1: int, x2: int, y2: int,
+                        fallback: dict) -> dict:
+    """The monitor holding the requested region's centre.
+
+    ``sct.monitors[0]`` is the virtual union of every display and is
+    deliberately skipped: capturing it is the "whole desktop" case the
+    per-monitor clamp exists to prevent. Falls back to the primary
+    monitor when the centre lands in the gap between two displays with
+    different heights.
+    """
+    mid_x = (x1 + x2) // 2
+    mid_y = (y1 + y2) // 2
+    for mon in sct.monitors[1:]:
+        left = mon.get("left", 0)
+        top = mon.get("top", 0)
+        if (left <= mid_x < left + mon["width"]
+                and top <= mid_y < top + mon["height"]):
+            return mon
+    return fallback
+
+
 def _decimate_rgb(rgb: bytes, raw_w: int, raw_h: int,
                   target_w: int, target_h: int):
     """Nearest-neighbour integer-stride downsample of an RGB byte buffer,
@@ -639,6 +698,13 @@ class ClawTouchMcpServer:
         # physical pixels rather than points (see method docstring).
         self._warn_if_retina_pixel_screen()
         self.bridge: Any = None
+        # Pointer-ballistics gain, carried ACROSS moves. It is a property of
+        # the host's mouse settings, not of any one move, so re-learning it
+        # from 1.0 every time costs one wasted overshoot per click — and the
+        # overshoot is visible: the cursor flies past the target and comes
+        # back. Every pass still re-measures and the value is clamped, so a
+        # stale estimate costs at most one pass to correct.
+        self._pointer_gain: float = 1.0
         self.rate = RateLimiter(config.ops_per_sec)
         self.tools: dict[str, Tool] = {}
         self._initialized = False
@@ -864,10 +930,43 @@ class ClawTouchMcpServer:
     # ── Safety helpers ──
 
     def _clamp(self, x: int, y: int) -> tuple[int, int]:
-        if self.config.screen_w and self.config.screen_h:
-            x = max(0, min(int(x), self.config.screen_w - 1))
-            y = max(0, min(int(y), self.config.screen_h - 1))
-        return int(x), int(y)
+        cx, cy = self._clamp_checked(x, y)[:2]
+        return cx, cy
+
+    def _clamp_checked(self, x: int, y: int) -> tuple[int, int, bool]:
+        """Clamp, and say whether it changed anything.
+
+        A silently clamped coordinate is the worst possible outcome: the
+        move succeeds, converges, and reports ok — at a point the caller
+        never asked for. On a multi-monitor desktop that is every click
+        on the second screen, because --screen defaults to the primary
+        monitor only. Callers surface the flag so the failure names
+        itself instead of looking like a mis-aimed click.
+        """
+        if not (self.config.screen_w and self.config.screen_h):
+            return int(x), int(y), False
+        cx = max(0, min(int(x), self.config.screen_w - 1))
+        cy = max(0, min(int(y), self.config.screen_h - 1))
+        return cx, cy, (cx != int(x) or cy != int(y))
+
+    def _clamp_note(self, x: int, y: int) -> dict[str, Any]:
+        """`{}` when nothing was clamped, else the flag plus the fix."""
+        cx, cy, clamped = self._clamp_checked(x, y)
+        if not clamped:
+            return {}
+        return {
+            "clamped": True,
+            "requested_x": int(x),
+            "requested_y": int(y),
+            "hint": (
+                f"({int(x)}, {int(y)}) is outside the configured screen "
+                f"{self.config.screen_w}x{self.config.screen_h} and was "
+                f"clamped to ({cx}, {cy}) — the pointer went somewhere "
+                "you did not ask for. --screen defaults to the PRIMARY "
+                "monitor; pass --screen WxH covering the whole virtual "
+                "desktop to reach a second display."
+            ),
+        }
 
     # ── Tool registry ──
 
@@ -1362,9 +1461,78 @@ class ClawTouchMcpServer:
                                 "smaller payload). 'png' for lossless."
                             ),
                         },
+                        "max_width": {
+                            "type": "integer",
+                            "minimum": 64,
+                            "description": (
+                                "Downscale so the returned image is at "
+                                "most this many pixels wide (aspect "
+                                "preserved). Applied after every other "
+                                "resize policy. Use it when a vision "
+                                "model is the consumer: an ultrawide "
+                                "desktop sent whole loses exactly the "
+                                "small-text detail a click depends on."
+                            ),
+                        },
+                        "markers": {
+                            "type": "boolean",
+                            "description": (
+                                "Stamp two calibration markers (red "
+                                "square, yellow ring, white centre dot) "
+                                "near the top-left and bottom-right "
+                                "corners AFTER resizing, and report "
+                                "their exact centres in `markers`. Ask "
+                                "a vision model for both marker centres "
+                                "alongside your target, then fit "
+                                "reported = scale x actual + offset per "
+                                "axis to undo the model's own "
+                                "unreported internal resize. Works on "
+                                "surfaces with no accessibility tree at "
+                                "all. Note the markers cover the pixels "
+                                "underneath them."
+                            ),
+                        },
                     },
                 },
                 handler=self._tool_screenshot,
+            ))
+            self._register(Tool(
+                name="screen.windows",
+                description=(
+                    "List visible top-level windows with their titles and "
+                    "screen rectangles (requires --allow-screenshot; "
+                    "Windows and macOS only). Use it to pick a `region` "
+                    "for hid.screenshot instead of capturing the whole "
+                    "desktop — cropping to the target window is what "
+                    "keeps a vision model's coordinates usable on large "
+                    "or multi-monitor setups. Rects are in the same "
+                    "coordinate space as hid.click and hid.screenshot's "
+                    "`region`. Gated by the same flag as screenshots: "
+                    "window titles are the same order of disclosure as "
+                    "the pixels showing them."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "title": {
+                            "type": "string",
+                            "description": (
+                                "Case-insensitive substring; returns only "
+                                "the best match (exact title first, then "
+                                "front-most containing it)."
+                            ),
+                        },
+                        "include_offscreen": {
+                            "type": "boolean",
+                            "description": (
+                                "Include minimized / off-screen windows. "
+                                "They answer 'is this app running' but "
+                                "are not usable as a capture region."
+                            ),
+                        },
+                    },
+                },
+                handler=self._tool_windows,
             ))
 
     # ── Tool handlers ──
@@ -1431,6 +1599,85 @@ class ClawTouchMcpServer:
         diag = str(result.get("bridge_diagnostic") or "").lower()
         return "ack timeout" in diag or "not connected" in diag
 
+    def _update_gain(
+        self,
+        gain: float,
+        prev: "tuple[int, int, tuple[int, int]] | None",
+        cur: tuple[int, int],
+        target_x: int,
+        target_y: int,
+        prev_residual: "int | None",
+    ) -> "tuple[float, int]":
+        """Re-estimate the OS pointer gain from the pass we just made.
+
+        Called once per iteration, BEFORE computing the next delta, so it
+        sees where the previous command actually landed the cursor.
+
+        An axis is only a usable sample when the command was big enough to
+        measure against integer cursor coordinates and the cursor did not
+        saturate against a screen edge — a move clipped by the edge
+        travelled less than the OS would have moved it, and folding that
+        into the estimate teaches the loop to overshoot even harder.
+
+        A pass that teaches nothing AND barely moves the cursor is the
+        dangerous case, and it is created by carrying the estimate across
+        moves: with a stale gain of 2.5 and a target 24 px away, the
+        commanded delta is 10 px — under the sampling floor, so the
+        estimate never updates, while the real gain (say the user turned
+        pointer speed down to 0.25) moves the cursor 2 px a pass. Ten
+        passes later it has gone nowhere, which is strictly worse than
+        starting from 1.0 would have been.
+
+        So an unmeasurable pass is corrected by what it DID: a residual
+        that grew means the host moves the cursor further than the
+        estimate says (raise it); a residual that barely shrank means the
+        estimate is too high, which is also what holds the command under
+        the sampling floor (walk it back toward 1.0). A pass that is
+        unmeasurable but making good progress leaves the estimate alone —
+        the command is small precisely because the estimate is right.
+        """
+        residual = max(abs(target_x - cur[0]), abs(target_y - cur[1]))
+        if prev is None:
+            return gain, residual
+        send_dx, send_dy, before = prev
+        samples: list[float] = []
+        axes = (
+            (send_dx, cur[0] - before[0], cur[0], self.config.screen_w),
+            (send_dy, cur[1] - before[1], cur[1], self.config.screen_h),
+        )
+        for sent, achieved, pos, limit in axes:
+            if abs(sent) < GAIN_MIN_SAMPLE_PX:
+                continue
+            if limit and pos in (0, limit - 1):
+                # PINNED at the boundary: the move was clipped, so it
+                # travelled less than the OS would have moved it and the
+                # ratio understates the gain. Note the test is equality,
+                # not `<= 0 or >= limit - 1`: a position *beyond* the
+                # boundary cannot be a clip (a real OS never puts the
+                # cursor there), and treating it as one made every pass
+                # unmeasurable on hosts that don't clamp.
+                continue
+            ratio = achieved / sent
+            if ratio <= 0:
+                continue  # moved the wrong way — a competing input device
+            samples.append(ratio)
+        if samples:
+            measured = sum(samples) / len(samples)
+            return _clamp_float(measured, GAIN_MIN, GAIN_MAX), residual
+        if prev_residual:
+            if residual > prev_residual:
+                # Overshooting: the cursor sailed past the target, so the
+                # host moves it FURTHER than the estimate says. Raise it.
+                return _clamp_float(gain * 1.5, GAIN_MIN, GAIN_MAX), residual
+            progress = (prev_residual - residual) / prev_residual
+            if progress < GAIN_HEALTHY_PROGRESS:
+                # Crawling: barely moving, and unable to measure why.
+                # The estimate is too high, which is also what puts the
+                # command under the sampling floor and keeps it there.
+                return _clamp_float(
+                    (gain + 1.0) / 2.0, GAIN_MIN, GAIN_MAX), residual
+        return gain, residual
+
     async def _converge_to_target(
         self, target_x: int, target_y: int, *, max_iters: int,
     ) -> dict[str, Any]:
@@ -1453,10 +1700,16 @@ class ClawTouchMcpServer:
         moves_made = 0
         consecutive_timeouts = 0
         nonresponsive = False
+        gain = self._pointer_gain
+        prev: tuple[int, int, tuple[int, int]] | None = None
+        prev_residual: int | None = None
         for i in range(max_iters):
             cur = get_cursor_position()
             if cur is None:
                 return self._cursor_unavailable_error(target_x, target_y)
+            gain, prev_residual = self._update_gain(
+                gain, prev, cur, target_x, target_y, prev_residual)
+            self._pointer_gain = gain
             dx = target_x - cur[0]
             dy = target_y - cur[1]
             if abs(dx) <= MOVE_TOLERANCE and abs(dy) <= MOVE_TOLERANCE:
@@ -1474,9 +1727,14 @@ class ClawTouchMcpServer:
                     # rather than omitted on success.
                     "move_acked": all_acked,
                 }
-            move_acked = await self.bridge.mouse_move(dx, dy, relative=True)
+            # Command the delta the OS will TURN INTO `dx`, not `dx` itself.
+            send_dx = _clip_int16(round(dx / gain))
+            send_dy = _clip_int16(round(dy / gain))
+            move_acked = await self.bridge.mouse_move(
+                send_dx, send_dy, relative=True)
             all_acked = all_acked and bool(move_acked)
             moves_made += 1
+            prev = (send_dx, send_dy, cur)
             landed = (cur[0] + dx, cur[1] + dy)
             # Death-spiral guard: a dead/unplugged device never ACKs and the
             # cursor never moves, so the residual can't shrink — without this
@@ -1534,10 +1792,22 @@ class ClawTouchMcpServer:
 
         If ``"error"`` is in the returned dict the caller should
         propagate it as the tool error without continuing."""
+        note = self._clamp_note(target_x, target_y)
         target_x, target_y = self._clamp(target_x, target_y)
-        return await self._converge_to_target(
+        result = await self._converge_to_target(
             target_x, target_y, max_iters=MOVE_MAX_ITERS,
         )
+        if note:
+            # Reported, not failed. `ok` stays whatever the converge
+            # decided: the cursor really did reach the clamped point, and
+            # flipping ok here would ALSO suppress the click (the click
+            # gate keys off `ok is False`), turning a slightly-off click
+            # into no click at all for callers who have always relied on
+            # clamping to absorb an off-by-one at the screen edge. Policy
+            # about whether a clamped target is acceptable belongs to the
+            # caller; this layer's job is to stop it being invisible.
+            result = {**result, **note}
+        return result
 
     # ── Path stepping (for visible cursor motion in demos) ────────
     #
@@ -1569,6 +1839,7 @@ class ClawTouchMcpServer:
         Caller signals intent via the ``move_ms`` tool argument;
         ``move_ms == 0`` (default) goes through ``_move_to_absolute``
         instead (snap mode)."""
+        clamp_note = self._clamp_note(target_x, target_y)
         target_x, target_y = self._clamp(target_x, target_y)
         cur = get_cursor_position()
         if cur is None:
@@ -1652,6 +1923,8 @@ class ClawTouchMcpServer:
         result["steps"] = steps
         result["move_ms"] = move_ms
         result["slide_acked"] = slide_acked
+        if clamp_note:
+            result.update(clamp_note)
         return result
 
     async def _stepped_relative_move(
@@ -2335,6 +2608,30 @@ class ClawTouchMcpServer:
             logger.warning(self._ss_note)
         return self._ss_backend
 
+    async def _tool_windows(self, **kw) -> dict[str, Any]:
+        if not _screen.windows_supported():
+            return {"error": _screen.unsupported_hint(),
+                    "platform": sys.platform}
+        try:
+            wins = _screen.list_windows(
+                include_offscreen=bool(kw.get("include_offscreen")))
+        except _screen.WindowInfoUnavailable as exc:
+            return {"error": str(exc), "platform": sys.platform}
+        title = kw.get("title")
+        if title:
+            match = _screen.find_window(str(title), wins)
+            if match is None:
+                return {
+                    "error": f"no visible window matching {title!r}",
+                    # The titles are the actionable part of the failure:
+                    # "WeChat" vs "微信" is the usual cause, and an agent
+                    # that can see the list retries correctly instead of
+                    # guessing again.
+                    "available": [w["title"] for w in wins][:40],
+                }
+            return {"window": match}
+        return {"windows": wins, "count": len(wins)}
+
     async def _tool_screenshot(self, **kw) -> "ImageResult":
         try:
             import mss  # type: ignore  # pure-Python; loads under lib validation
@@ -2383,16 +2680,20 @@ class ClawTouchMcpServer:
                         f"invalid region {kw['region']}: "
                         "need x2 > x1 and y2 > y1"
                     )
-                # Clamp the region to the primary monitor's bounds —
-                # previously an agent-supplied region with negative
-                # offsets or huge sizes captured *across* monitors the
-                # user might not have intended to expose. Restricting
-                # to primary matches the same "primary only" semantics
-                # used by --screen WxH auto-detect.
-                left = primary.get("left", 0)
-                top = primary.get("top", 0)
-                right = left + primary["width"]
-                bottom = top + primary["height"]
+                # Clamp the region to ONE monitor — an agent-supplied
+                # region with negative offsets or huge sizes would
+                # otherwise capture *across* monitors the user might not
+                # have intended to expose. The monitor is the one holding
+                # the region's centre, not always the primary: a window
+                # on a second display is a legitimate target (that is the
+                # whole point of `screen.windows` handing back its rect),
+                # and clamping it to primary silently returned pixels
+                # from the wrong screen.
+                host = _monitor_containing(sct, x1, y1, x2, y2, primary)
+                left = host.get("left", 0)
+                top = host.get("top", 0)
+                right = left + host["width"]
+                bottom = top + host["height"]
                 cx1 = max(left, min(x1, right))
                 cy1 = max(top, min(y1, bottom))
                 cx2 = max(left, min(x2, right))
@@ -2400,7 +2701,7 @@ class ClawTouchMcpServer:
                 if cx2 - cx1 < 1 or cy2 - cy1 < 1:
                     raise ValueError(
                         f"region {kw['region']} falls entirely outside "
-                        f"the primary monitor ({left},{top})-({right},{bottom}) "
+                        f"its monitor ({left},{top})-({right},{bottom}) "
                         "after clamping"
                     )
                 monitor = {"left": cx1, "top": cy1,
@@ -2429,11 +2730,40 @@ class ClawTouchMcpServer:
                 target_w = max(1, int(target_w * ratio))
                 target_h = max(1, int(target_h * ratio))
 
+            # Explicit width budget, applied last so it wins over both
+            # policies above. Vision models resize their input to an
+            # internal budget anyway; sending 5120px of ultrawide desktop
+            # only means the model throws away the detail *it* chose to
+            # discard, and small UI text is the first thing to go. Callers
+            # that know the model's comfortable width say so here.
+            max_width = kw.get("max_width")
+            if max_width:
+                max_width = int(max_width)
+                if max_width < 64:
+                    raise ValueError(
+                        f"max_width must be >= 64, got {max_width}")
+                if target_w > max_width:
+                    ratio = max_width / target_w
+                    target_w = max_width
+                    target_h = max(1, int(round(target_h * ratio)))
+
+            want_markers = bool(kw.get("markers"))
+            markers: list = []
+
             if backend == "pillow":
                 Image = self._ss_image
                 img = Image.frombytes("RGB", (raw_w, raw_h), shot.rgb)
                 if (target_w, target_h) != (raw_w, raw_h):
                     img = img.resize((target_w, target_h), Image.LANCZOS)
+                if want_markers:
+                    # After every resize: a marker drawn before one gets
+                    # resampled, and its "exactly known" centre stops being
+                    # exactly known — which is the one property the whole
+                    # calibration rests on.
+                    stamped, markers = _screen.draw_markers(
+                        img.tobytes(), target_w, target_h)
+                    img = Image.frombytes(
+                        "RGB", (target_w, target_h), stamped)
                 buf = io.BytesIO()
                 if fmt == "jpeg":
                     img.save(buf, format="JPEG", quality=80, optimize=True)
@@ -2449,6 +2779,8 @@ class ClawTouchMcpServer:
                 # or JPEG, but loads where Pillow's _imaging is blocked.
                 out_w, out_h, rgb = _decimate_rgb(
                     shot.rgb, raw_w, raw_h, target_w, target_h)
+                if want_markers:
+                    rgb, markers = _screen.draw_markers(rgb, out_w, out_h)
                 image_bytes = mss.tools.to_png(rgb, (out_w, out_h))
                 mime = "image/png"
 
@@ -2465,11 +2797,29 @@ class ClawTouchMcpServer:
                 scale_x = out_w / self.config.screen_w
                 scale_y = out_h / self.config.screen_h
 
+            # What the captured rectangle was, in the SAME coordinate
+            # space hid.click takes — so a caller holding a point in this
+            # image can get back to a clickable screen point with
+            #     screen = capture_rect[:2] + image_point / image_scale
+            # regardless of region cropping, Retina, or `max_width`.
+            # `scale_x`/`scale_y` above stay as they were (full-screen
+            # only, relative to --screen) so existing callers don't move.
+            cap_left = monitor.get("left", 0)
+            cap_top = monitor.get("top", 0)
+            cap_w = monitor["width"]
+            cap_h = monitor["height"]
+            capture_rect = [cap_left, cap_top, cap_left + cap_w,
+                            cap_top + cap_h]
+            image_scale = [round(out_w / cap_w, 6),
+                           round(out_h / cap_h, 6)]
+
         metadata = {
             "width": out_w,
             "height": out_h,
             "scale_x": round(scale_x, 4),
             "scale_y": round(scale_y, 4),
+            "capture_rect": capture_rect,
+            "image_scale": image_scale,
             "format": fmt,
             "mime_type": mime,
             "size_bytes": len(image_bytes),
@@ -2480,6 +2830,9 @@ class ClawTouchMcpServer:
             # fallback (e.g. a hardened-runtime library-validation host).
             "backend": backend,
         }
+        if want_markers:
+            metadata["markers"] = markers
+            metadata["marker_hint"] = _screen.MARKER_PROMPT_HINT
         if notes:
             metadata["note"] = " ".join(notes)
         return ImageResult(
@@ -2838,9 +3191,10 @@ async def run_stdio(server: ClawTouchMcpServer) -> None:
     """
     n_hid = sum(1 for n in server.tools if n.startswith("hid."))
     n_device = sum(1 for n in server.tools if n.startswith("device."))
+    n_screen = sum(1 for n in server.tools if n.startswith("screen."))
     logger.info(
-        "%d HID tools + %d device tools registered; listening on stdio",
-        n_hid, n_device,
+        "%d HID tools + %d device tools + %d screen tools registered; "
+        "listening on stdio", n_hid, n_device, n_screen,
     )
     # Decide framing on first message
     framed: Optional[bool] = None

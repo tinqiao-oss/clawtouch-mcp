@@ -12,7 +12,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "clawtouch-mcp"
-version = "0.4.6"
+version = "0.5.0"
 description = "MCP stdio server exposing HID mouse/keyboard tools backed by ClawTouch Pico hardware."
 readme = "README.md"
 # PEP 639 SPDX expression form (modern packaging). Avoid the deprecated
@@ -44,6 +44,12 @@ classifiers = [
 #   screenshot     : mss + Pillow — JPEG + LANCZOS resize when _imaging loads.
 screenshot-min = ["mss>=10.2"]
 screenshot = ["mss>=10.2", "Pillow>=10.0"]
+# `screen.windows` needs nothing extra on Windows (ctypes/user32 is stdlib).
+# macOS reads the window list through Quartz, which is pyobjc — an optional
+# install rather than a base dependency, because the tool is opt-in behind
+# --allow-screenshot and every other platform gets a clear "unsupported"
+# answer instead of an ImportError.
+window = ["pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'"]
 # Test deps. pytest-asyncio is REQUIRED — the suite has async tests that
 # silently skip (false-green) without it. CI and CONTRIBUTING use this extra.
 test = ["pytest>=7", "pytest-asyncio>=0.23"]
@@ -85,6 +91,22 @@ include = [
     "TRADEMARKS.md",
     "pyproject.toml",
 ]
+
+[tool.ruff.lint]
+# Stated explicitly rather than inherited from ruff's default set, because
+# that default changes between ruff releases: 0.16 switched on rule
+# families (UP, BLE, S, I, SIM, RUF, TRY) that flagged 101 pre-existing
+# lines and turned a green release red with no change on our side. CI
+# installs ruff unpinned on purpose so it keeps getting fixes; what it
+# checks should be this project's choice, not whatever the current default
+# happens to be.
+#
+# Some of those families would also be wrong here. The broad
+# `except Exception` around each individual probe is deliberate — one
+# unreadable sample must not lose a whole measurement, and one
+# unanswerable window must not abort the enumeration — which is exactly
+# what BLE001 / S110 / S112 exist to discourage.
+select = ["E4", "E7", "E9", "F"]
 
 [tool.pytest.ini_options]
 # Async tests use pytest-asyncio. "auto" runs every `async def test_` (the

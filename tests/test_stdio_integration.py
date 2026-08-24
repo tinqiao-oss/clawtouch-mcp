@@ -143,8 +143,10 @@ class TestStdioScreenshotOptIn:
         tools_resp = next(r for r in responses if r.get("id") == 2)
         names = {t["name"] for t in tools_resp["result"]["tools"]}
         assert "hid.screenshot" in names, f"missing screenshot in {names}"
-        # 16 baseline (9 v1.0 + 6 v1.1 + hid.batch) + 1 opt-in screenshot
-        assert len(names) == 17
+        assert "screen.windows" in names, f"missing windows in {names}"
+        # 16 baseline (9 v1.0 + 6 v1.1 + hid.batch) + 2 opt-in screen tools
+        # (hid.screenshot + screen.windows, both behind --allow-screenshot)
+        assert len(names) == 18
 
 
 class TestStdioStability:

@@ -84,6 +84,40 @@ jobs:
           echo "$out"
           echo "$out" | grep -qE "passed|failed" || (echo "::error::cross-repo suite fully skipped despite sister repo installed"; exit 1)
 
+  # The dsh plugin under adapters/ is a Node package, so pytest never sees
+  # it. Its unit tests cover the coordinate maths and the model-reply
+  # parsing — the two places where a bug produces a plausible-looking
+  # coordinate instead of an error, which is the failure mode this whole
+  # feature is built to avoid.
+  dsh-plugin:
+    name: dsh plugin (node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Unit tests (no host, no hardware, no API key)
+        working-directory: adapters/dsh/plugin
+        run: node test.js
+      - name: Manifest declares the bundle patch
+        working-directory: adapters/dsh/plugin
+        # A dsh plugin missing `dsh.bundle.patch` installs cleanly, mounts
+        # nothing, and reports no error — the single most common way to
+        # ship a plugin that does nothing at all.
+        run: |
+          node -e "
+            const fs = require('node:fs')
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'))
+            const patch = pkg.dsh?.bundle?.patch
+            if (!patch) { console.error('package.json declares no dsh.bundle.patch'); process.exit(1) }
+            if (!fs.existsSync(patch)) { console.error('bundle patch missing: ' + patch); process.exit(1) }
+            for (const f of pkg.files ?? []) {
+              if (!fs.existsSync(f.replace(/\/$/, ''))) { console.error('files[] lists a missing path: ' + f); process.exit(1) }
+            }
+            console.log('manifest ok: ' + patch)
+          "
+
   lint:
     name: ruff
     runs-on: ubuntu-latest

@@ -193,6 +193,27 @@ class TestToolClickAbsolutePath:
         assert payload["target_x"] == 1919
         assert payload["target_y"] == 0
         assert payload["converged"] is True
+        # The clamp must announce itself. Silently landing somewhere the
+        # caller did not ask for is indistinguishable from a mis-aimed
+        # click — and on a multi-monitor desktop it is EVERY click on the
+        # second screen, because --screen defaults to the primary only.
+        assert payload["clamped"] is True
+        assert payload["requested_x"] == 99999
+        assert payload["requested_y"] == -50
+        assert "--screen" in payload["hint"]
+
+    def test_in_range_click_carries_no_clamp_flag(self, server):
+        """The flag must be absent, not False — callers key off presence
+        and a permanently-present `clamped: false` is noise on every
+        single click."""
+        result = _run(server.dispatch({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "hid.click",
+                       "arguments": {"x": 500, "y": 300}},
+        }))
+        payload = json.loads(result["result"]["content"][0]["text"])
+        assert "clamped" not in payload
+        assert "requested_x" not in payload
 
 
 class TestToolClickRelativePath:

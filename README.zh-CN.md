@@ -224,10 +224,11 @@ MIT 协议,不构成任何担保或注意义务,亦不将责任转移给亭桥;M
 
 ## 工具清单
 
-共注册 17 个工具:**14 个常驻 `hid.*` 输入工具**,外加 **`hid.screenshot`**
-(opt-in —— 不传 `--allow-screenshot` 时默认关闭),再加 **2 个只读 `device.*`
-诊断工具**。这与启动日志那行 `14 HID tools + 2 device tools registered` 一致
-(`--allow-screenshot` 会在此之上再加上 `hid.screenshot`,凑满 17 个)。
+共注册 18 个工具:**14 个常驻 `hid.*` 输入工具**,外加 **2 个只读 `device.*`
+诊断工具**,再加 **2 个 opt-in 的屏幕工具** (`hid.screenshot` 与
+`screen.windows`,不传 `--allow-screenshot` 时默认关闭)。这与启动日志那行
+`14 HID tools + 2 device tools + 0 screen tools registered` 一致
+(`--allow-screenshot` 会在此之上再加那 2 个,凑满 18 个)。
 
 | 工具 | 起始版本 | 用途 |
 |------|----------|------|
@@ -245,7 +246,8 @@ MIT 协议,不构成任何担保或注意义务,亦不将责任转移给亭桥;M
 | `hid.key_release` | v1.1 | 松开按住的键(无参 = 全部释放) |
 | `hid.hold_key` | v1.1 | 按下 → 等待 → 松开 |
 | `hid.batch` | v0.4.0 | 一次调用按严格顺序跑 ≤10 个 HID 动作(预先排好的序列) |
-| `hid.screenshot` | v1.0 | 主显示器截屏 —— 默认 JPEG q80,传 `format='png'` 取无损(默认关闭,需 `--allow-screenshot` 启用) |
+| `hid.screenshot` | v1.0 | 截某块屏或某个 `region` —— 默认 JPEG q80,传 `format='png'` 取无损。`max_width` 限制返回宽度;`markers` 叠加两枚标定标记,供视觉模型坐标换算(默认关闭,需 `--allow-screenshot`) |
+| `screen.windows` | v0.5.0 | 列出可见顶层窗口的标题与屏幕矩形,好把截图裁到单个窗口。**Windows 上**每个还带 `visible_fraction` —— 它有多少比例真的在最上层, 因为按被遮挡窗口的矩形截图, 截到的是遮挡它的那个窗口 —— 另有 `enabled` 与 `raise_point`。这三个字段在**测不到时直接不出现** (macOS, 或矩形小到无法采样): 字段缺失表示「没测」, 绝不表示「测了没问题」(默认关闭,需 `--allow-screenshot`;Windows + macOS) |
 | `device.list` | v1.0 | 列出候选 HID 板串口 |
 | `device.info` | v1.0 | 当前连接信息 |
 

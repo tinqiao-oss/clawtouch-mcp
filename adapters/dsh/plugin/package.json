@@ -1,0 +1,49 @@
+{
+  "name": "dsh-clawtouch",
+  "version": "0.1.0",
+  "description": "Real mouse and keyboard for a DeepSeek Harness agent: describe what to click in words, a vision model finds it, a USB HID device clicks it.",
+  "type": "module",
+  "main": "index.js",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "lib/",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node test.js"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "computer-use",
+    "gui-automation",
+    "hid",
+    "clawtouch",
+    "mcp"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tinqiao-oss/clawtouch-mcp.git",
+    "directory": "adapters/dsh/plugin"
+  },
+  "homepage": "https://github.com/tinqiao-oss/clawtouch-mcp/tree/master/adapters/dsh/plugin",
+  "bugs": {
+    "url": "https://github.com/tinqiao-oss/clawtouch-mcp/issues"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}

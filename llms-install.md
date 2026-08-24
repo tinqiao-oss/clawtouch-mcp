@@ -85,9 +85,9 @@ optionally clamp coordinates to one monitor:
 
 After Cline reloads its MCP servers, the `clawtouch` server should connect and
 expose **16 tools**: 14 always-on `hid.*` input tools + 2 read-only `device.*`
-tools (`hid.screenshot` adds a 17th only when you pass `--allow-screenshot`).
-On startup the server logs `14 HID tools + 2 device tools registered` to
-stderr. Call `device.info` to see the active connection — in `--mock` it reports
+tools. Passing `--allow-screenshot` adds two more — `hid.screenshot` and
+`screen.windows` — for 18. On startup the server logs
+`14 HID tools + 2 device tools + 0 screen tools registered` to stderr. Call `device.info` to see the active connection — in `--mock` it reports
 the mock backend.
 
 ## Safety

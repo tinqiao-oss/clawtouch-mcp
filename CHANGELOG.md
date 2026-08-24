@@ -7,6 +7,379 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-24 — window geometry · calibration markers · pointer-gain convergence · the dsh plugin
+
+### Added — windows are brought forward by clicking them, not by an API
+
+A window that is not in front cannot be worked with: a capture of its
+rectangle is a capture of whatever covers it, and some applications
+swallow the first click as an activation. Until now the plugin refused and
+told the agent to deal with it.
+
+It now raises the window itself, **by clicking its title bar with the real
+mouse** — the same thing a person does, and consistent with a project
+whose whole point is that input is physical rather than injected.
+`SetForegroundWindow` would have been one line, and is exactly the kind of
+software-injected control this package exists to avoid; it is also
+unreliable, as Windows' foreground lock refused it several times while
+this was being tested.
+
+`screen.windows` supplies the point as `raise_point`, and choosing it is
+the whole trick. "The top strip is the title bar" is not safe — in a
+browser that strip is the tabs, and a raise would open one. The point is
+one the application itself reports as a drag area (`WM_NCHITTEST`
+answering `HTCAPTION`) **and** that `WindowFromPoint` confirms is actually
+on top.
+
+That drag-area answer turned out to be necessary but not sufficient, and
+it took a real browser to find out: Chrome reports its "new tab" button as
+a drag area too, so picking the leftmost qualifying point opened a tab
+instead of raising the window. The caption is therefore scanned from the
+**right**, where the space just inside the window controls is drag area
+and nothing else; the controls are excluded by their own hit-test answers
+rather than by guessing how wide they are. Measured on one window: the old
+rule chose x=7460, the "new tab" button; the new one chooses x=7528, the
+empty strip, and the title is unchanged after the click. No
+qualifying point means no raise: a full-screen app with no caption, or a
+window buried completely, is reported rather than guessed at.
+
+A modal-disabled window is still refused rather than raised — raising it
+changes nothing, it discards clicks either way — and the result is
+re-read after the click rather than assumed, because the click may have
+raised something else.
+
+Measured end to end, calculator starting in the background, agent told
+only "it may not be in front": **17 seconds** for `7 + 8 =`, raise
+included. The same shape of task took 37s before this and 58s before
+`computer_click_sequence`.
+
+
+### Added — `computer_click_sequence`: several clicks from one look
+
+Locating is the slow part, and so is the agent's own turn between calls.
+Clicking four calculator keys used to mean four screenshots, four vision
+calls and four agent round trips for a screen that never changed in
+between. This does it with one of each.
+
+Measured on the same task (press `5 × 6 =`), same machine, same model:
+
+| | model round trips | model time | wall clock |
+|---|---|---|---|
+| one `computer_click` per key | 23 | 31.1s | ~60s |
+| one `computer_click_sequence` | **11** | **19.8s** | **~37s** |
+
+Accuracy is unchanged: four targets in one vision call landed 2.3-5.6px
+from truth, the same four asked separately landed 3.0-5.3px. Asking for
+more does not make the answers worse; it just makes fewer of them.
+
+The constraint is real and the tool description says so plainly: every
+target must be visible **at the same time** and clicking one must not move
+the others. Calculator keys qualify; opening a conversation does not.
+Nothing is clicked unless every target was found — a half-finished
+sequence is harder to recover from than one that never started — and the
+clicks go out as a single `hid.batch`, which already paces discrete clicks
+apart so the OS cannot coalesce them.
+
+Everything here exists to make one thing work: a vision model pointing at a
+UI element, and the cursor actually landing on it.
+
+### Added — `screen.windows`
+
+- Lists visible top-level windows with their titles and screen rectangles,
+  so a capture can be cropped to **one window** instead of the whole
+  desktop. Windows (ctypes/`user32` + DWM extended frame bounds, which
+  excludes the invisible ~7px resize border `GetWindowRect` includes) and
+  macOS (`Quartz.CGWindowListCopyWindowInfo`, needs pyobjc); a clear
+  "unsupported" answer elsewhere. Shell-owned windows (`Progman`,
+  `WorkerW`, the taskbar) and cloaked UWP ghost windows are filtered out —
+  the desktop itself is a visible, titled, full-virtual-screen window and
+  would otherwise be the widest entry in the list.
+- Gated by the existing `--allow-screenshot`: window titles are the same
+  order of disclosure as the pixels showing them, and a second flag would
+  only be a second thing to forget.
+- No new dependency. Rectangles are in the same coordinate space as
+  `hid.click` and `hid.screenshot`'s `region`.
+
+### Added — `hid.screenshot`: `max_width` and `markers`
+
+- `max_width` bounds the returned image width (aspect preserved), applied
+  after every other resize policy. Vision models rescale their input to an
+  internal budget anyway; sending an ultrawide desktop whole only means the
+  model discards the small-text detail a click depends on. Measured on a
+  5120×1440 host: the full desktop located **0 of 6** targets, the same
+  targets in a window cropped to ≤1920 located **6 of 6**.
+- `markers: true` stamps two markers (red square, yellow ring, white centre
+  dot) near the top-left and bottom-right corners **after** every resize,
+  and reports their exact centres in the metadata. Asking a vision model
+  for both marker centres alongside the target measures the model's own
+  unreported internal rescale in the same call — two points per axis, so
+  the fit absorbs a constant offset that a single-point ratio folds into
+  the scale. Unlike using a known UI element as the anchor, this works on
+  surfaces with no accessibility tree at all, which are exactly the
+  surfaces that need visual clicking.
+- Metadata gains `capture_rect` and `image_scale`, which together map an
+  image point back to a clickable screen point across region crops,
+  `max_width` and Retina captures without the caller knowing which applied.
+
+### Fixed — absolute moves now converge on hosts with strong pointer acceleration
+
+- The converge loop commanded the raw residual delta, which assumes the OS
+  moves the cursor about as far as it is told (macOS amplifies ~1.1×). On
+  Windows with **"Enhanced pointer precision" — the shipped default** — a
+  large delta is amplified ~2.5×: measured on real hardware, commanding
+  127px moved the cursor 319, commanding −1000 moved −2516. At that gain
+  the loop does not decay, it oscillates; ten passes later a long move was
+  still hundreds of pixels off and returned `ok: false`. Short hops
+  converged fine (the ballistic curve is near 1× for small deltas), which
+  is why this stayed invisible until a click had to cross a wide desktop.
+- The loop now divides each commanded delta by a gain measured from the
+  previous pass. No per-magnitude ballistics table and no larger iteration
+  budget — it self-tunes to whatever the host does, in both directions
+  (a host that damps input converges too), and costs two floats of state.
+  Edge-clipped passes are excluded from the estimate: a move stopped by
+  the screen edge travelled less than the OS would have moved it, and
+  folding that in teaches the loop to overshoot harder.
+- Verified on real hardware across a 7680×1440 two-monitor desktop:
+  worst residual **328px → 5px**.
+
+### Fixed — a clamped coordinate no longer passes silently
+
+- `hid.click` / `hid.move` clamp to `--screen`, which defaults to the
+  **primary** monitor. A clamped move still converged and still reported
+  success — at a point the caller never asked for, which on a
+  multi-monitor desktop is every click on the second screen.
+- Results now carry `clamped: true`, `requested_x` / `requested_y` and a
+  hint naming the fix. Deliberately **not** a failure: `ok` stays whatever
+  the converge decided, because flipping it would also suppress the click
+  (the click gate keys off `ok is False`) and turn a long-standing
+  off-by-one at the screen edge into no click at all. Policy about whether
+  a clamped target is acceptable belongs to the caller; this layer's job
+  is to stop it being invisible.
+
+### Changed
+
+- `hid.screenshot`'s `region` is clamped to the monitor holding the
+  region's centre rather than always to the primary monitor. A window on a
+  second display is a legitimate target — that is what `screen.windows`
+  hands back — and clamping it to primary silently returned pixels from
+  the wrong screen. Still one monitor, never the union: capturing the
+  whole virtual desktop is what the clamp exists to prevent.
+
+### Added — `screen.windows` reports how much of a window is on top
+
+Capturing a window's rectangle captures whatever is **in front of** that
+rectangle, which is not the same thing as the window. Found the hard way:
+a calculator sitting behind an editor was captured by its own rect, and a
+vision model asked to find its "8" key answered *"there is no 8 key here,
+this is a file explorer listing .env.deploy, feishu.json, ClawTouch"* —
+completely correct, completely useless, and indistinguishable downstream
+from a genuine miss. Four rounds of prompt tuning and an
+upscale-the-image experiment were spent before anyone looked at the
+picture.
+
+Each window now carries `visible_fraction`: the share of a sampled grid
+inside its rectangle that the OS says belongs to *it*. 1.0 is unobstructed;
+0.0 means a capture of that area would be a capture of something else.
+Windows-only for now (`WindowFromPoint` + `GetAncestor`, no new
+dependency), absent elsewhere — and absent means "not measured", never
+"fine".
+
+### Fixed — the plugin kept the host process alive after it had finished
+
+A one-shot `dsh` run that used a `computer_*` tool produced its answer in
+about six seconds and then sat there, done, until something killed it two
+minutes later. It reads as "this thing is unusably slow" and is nothing of
+the kind: a timestamping proxy in front of the model showed every request
+completed by t=6.3s and no further work of any sort.
+
+The cause was here. A piped child process and each of its three stdio
+streams hold a libuv handle that keeps Node's event loop alive, so the
+`clawtouch-mcp` subprocess this plugin owns kept the whole host running
+for as long as the device stayed connected. Handles are now released while
+the client is idle and re-taken while a request is in flight, so the loop
+can never exit mid-call.
+
+Measured on the same task, same machine: **≥120s → 5.2s**. A four-click
+multi-step task ("press 5 × 6 = on the calculator") went from minutes to
+**58 seconds**, of which the plugin's own share is about 10 seconds — the
+rest is the agent model deciding what to click next.
+
+For the record, since it was the first suspect and was wrong: at
+`reasoningEffort: low` the agent answers a no-tool question in 4.3s versus
+40s at `high`, but with this bug fixed both settings finish the
+tool-calling task in 5.2s. The reasoning effort was never the problem.
+
+### Added — `screen.windows` reports whether a window accepts input at all
+
+Visible and reachable are different facts, and only one of them is about
+pixels. A window can be entirely unobstructed, foreground, screenshotting
+perfectly — and discard every click, because a modal dialog somewhere
+else has disabled it. A physical mouse cannot click it either.
+
+Found by spending half an hour on a WeChat window that would not respond:
+the coordinates were verified correct, the timing variants all failed, a
+known-good control target failed too, the same click worked on another
+application, and the device reported every move landed and every click
+ACKed. All true, all useless. `IsWindowEnabled` would have said so in one
+call — there was a hidden dialog waiting for input.
+
+Each window now carries `enabled`. The plugin checks it **before** the
+occlusion check, because a disabled window is usually unobstructed and
+would otherwise sail straight through.
+
+### Fixed — an adversarial review of the above, before any of it shipped
+
+A second model was pointed at the diff with the project's invariants and
+told to refute the reasoning rather than agree with it. Everything it
+found was in one category: **a wrong answer that reported success.** That
+is the only failure this design cannot absorb, because the agent has no
+independent way to notice.
+
+- **A cross-move gain that could strand a short move.** Carrying the
+  estimate between moves saves an overshoot, but with a stale gain of 2.5
+  and a target 24px away the commanded delta is 10px — under the sampling
+  floor, so the estimate can never be re-measured while each pass creeps
+  2px. Ten passes later it has gone nowhere: strictly worse than never
+  persisting the gain. An unmeasurable pass is now corrected by what it
+  did — a residual that grew raises the estimate, a residual that barely
+  shrank walks it back toward 1.0, which makes the next command large
+  enough to measure.
+- **The boundary test read "beyond the edge" as "clipped by the edge".**
+  A cursor pinned *at* the edge really was clipped and its ratio
+  understates the gain; a position *past* it was clipped by nothing. The
+  test is now equality, not a range — as a range it discarded every
+  sample on hosts that don't clamp, leaving the loop unable to learn at
+  all.
+- Deliberately **not** fixed: a cursor stopped by a gap between monitors
+  or by an application's `ClipCursor` is not recognised as clipped.
+  Reading those would mean per-monitor bounds and a Windows-only API in a
+  layer that is meant to stay thin; the loop already degrades correctly
+  (it cannot reach the target, and says so) rather than reporting a
+  success.
+
+The plugin's own fixes — mirrored clicks from swapped markers, `"false"`
+parsed as found, a click reported without confirmation, a scroll argument
+that never worked — are listed with the plugin below.
+
+### Fixed — a second adversarial review, of the raise-by-clicking work
+
+The same treatment applied again once auto-raise worked: a second model,
+the project's invariants, and an instruction to refute rather than agree.
+Everything that survived was one category again — **a guard that never
+ran, reported as a guard that passed.**
+
+- **The re-read after a raise failed open.** The click's effect is meant
+  to be read back rather than assumed, and it was — but a re-read that
+  came back as a tool error, or without the window in it, fell through to
+  the pre-click window and carried on. That is exactly the assumption the
+  re-read exists to replace, and the screenshot after it would have been
+  of a rectangle nobody confirmed. It now refuses, saying that whether
+  the window came forward is unknown.
+- **Where occlusion could not be measured, the plugin filled in "fine".**
+  `computer_windows` turned a missing `visible_fraction` into
+  `visible_percent: 100`, and a missing `enabled` into
+  `accepts_input: true`. On macOS, which measures neither, that meant
+  every window was reported as fully visible and accepting input whether
+  or not it was — the support table in this file said the guards do not
+  run there, while the tool itself said they had passed. Both fields are
+  now absent where nothing measured them, the listing says so in words,
+  and every answer about such a window carries the fact.
+- **Hit-testing for a caption point had no ceiling.** Each probe asks the
+  target application to answer on its own UI thread, and
+  `SMTO_ABORTIFHUNG` only cuts short a thread Windows already considers
+  hung; a merely slow handler spends the whole timeout, up to sixteen
+  times per window. Enough of those and the caller times the listing out
+  and falls back to a full-screen capture — the one region this feature
+  exists to avoid. The enumeration now shares a three-second probing
+  budget, and a window past it simply reports no raise point.
+- **A drag-area answer was being trusted as "a click here does nothing".**
+  Found by the tightened re-read above, on the first real run after it
+  landed: raising Chrome moved its title from the page it was on to
+  "New Tab" — the raise point was its "new tab" button, which reports
+  itself as drag area like the rest of the strip. Before the re-read was
+  tightened this would have passed silently, and every screenshot and
+  click after it would have been aimed at the wrong page. The scan now
+  runs right to left, and the claim that such a click "does nothing else"
+  is gone from the docs because it is not true: what makes this safe is
+  the re-read, not the hit-test answer.
+- **The probing budget was shared but not rationed.** A three-second
+  allowance for the whole enumeration still let one unresponsive
+  application first in Z-order absorb all of it, leaving every window
+  behind it with no raise point — protecting the caller's timeout while
+  quietly disabling the feature for everything else. Each window now takes
+  at most 0.6s of the three.
+- Deliberately **not** changed: a window that is visible enough to work
+  with but merely unfocused is still allowed through instead of refused.
+  Refusing over that distinction would reject ordinary working
+  arrangements, and the occlusion measurement — which is the one that
+  decides whether a screenshot is of the right application — has
+  already passed by then.
+
+### Added — `adapters/dsh/plugin` (`dsh-clawtouch`, not yet published)
+
+- A DeepSeek Harness plugin that composes the above into
+  `computer_click({ target: "the blue Send button" })`: it crops to the
+  window, stamps the markers, asks a vision model for the markers and the
+  target in one call, solves the rescale, and clicks — returning a
+  sentence, never an image. Lives here rather than in a separate repo so
+  the plugin and the tools it depends on version together.
+- Ships a runtime skill and a synchronous guard that blocks Cmd+Q / Alt+F4
+  / Cmd+W: a real HID keystroke lands on whatever window has focus, and on
+  a shared machine that is the agent's own session.
+- `probe.js --move-test` exercises the device and the coordinate maths
+  with **no API key**, which is how the convergence bug above was found.
+
+Fixed in the same review, all of them silent-wrong-click paths:
+
+- **Swapped markers produced a mirrored click, not an error.** If the
+  model labelled the bottom-right marker `tl` and vice versa, both axes
+  fit with scale −1, the two agreed with each other perfectly, and every
+  target came back mirrored through the centre of the image — a fit that
+  passes every isotropy check. A negative scale is now refused, and the
+  markers are read by name rather than by position in the reply.
+- **An anisotropy check that would have rejected working models.** The
+  original rule demanded the two axes agree within 25%, but several vision
+  models normalise each axis independently onto a fixed square, so a
+  1600x900 image legitimately returns scales 44% apart. The check now
+  accepts a fit matching *either* a proportional resize or a per-axis
+  normalisation, and refuses only what matches neither.
+- **`"false"` is not `false`.** Models emit the string as readily as the
+  boolean, and `found !== false` turned an explicit "it is not on screen"
+  into a click. Coordinate parsing was equally lenient: `Number(null)` is
+  0, so a `[null, null]` answer became a confident click on the image's
+  top-left corner.
+- **A click was reported on the absence of an error rather than the
+  presence of a confirmation.** `hid.click` answers with `ok` and
+  `clicked`; a reply carrying neither now fails instead of reporting a
+  click nobody can vouch for. The same applies to type / key / scroll.
+- **An out-of-range click was detected only after it happened.**
+  clawtouch-mcp clamps and then genuinely clicks, by design. The plugin
+  now checks the addressable screen bounds *before* sending, so a window
+  on a monitor the server was not told about is refused instead of
+  producing one wrong click and then an error.
+- **A point two pixels past the capture edge was passed through.** The
+  tolerance exists for sub-pixel rounding, so it is now applied as a
+  clamp: an accepted point always lands inside the rectangle that was
+  actually looked at.
+- **`computer_scroll` never worked.** It passed `amount` where the wire
+  argument is `delta`, so every call failed. Found while verifying the
+  review's claims against the real tool schemas rather than by the review
+  itself.
+- **A window behind another window is now refused** rather than described.
+  The refusal names the remedy the agent can already carry out: click the
+  window's taskbar button, which raises it through the same physical mouse
+  — no focus-stealing API involved.
+
+Verified end to end against the real vision model (`qwen-vl-max`), not
+just against a stub: five consecutive clicks located from plain-language
+descriptions — *"the C button that clears the entry"*, *"the 7 key"*,
+*"the plus key"*, *"the 9 key"*, *"the equals button"* — drove a real
+calculator to display **16**. On a six-target accuracy pass every target
+landed inside the correct button (cells are 79x53 px; the largest error
+was 13 px, the median about 7). Calibration is what buys that: the model's
+raw answer for the "8" key was 5 px off in both axes before the marker fit
+corrected it.
+
 ## [0.4.6] — 2026-06-07 — test-only: macOS CI fix for the 0.4.5 Retina guard
 
 ### Fixed — test
@@ -1530,9 +1903,12 @@ under the working name `openclaw-mcp` but were never published. The
   for this OSS release.
 - No multi-touch HID profile yet — only mouse and keyboard.
 
-[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.6...HEAD
+[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.6...v0.5.0
 [0.4.6]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.3...v0.4.5
-[0.3.3]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.2...v0.3.3
+[0.4.3]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.2...v0.4.1
 [0.3.2]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/tinqiao-oss/clawtouch-mcp/releases/tag/v0.3.1

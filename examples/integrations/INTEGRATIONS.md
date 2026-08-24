@@ -24,8 +24,8 @@ Every client config boils down to the same four facts:
    on every launch.
 
 After reloading or restarting, ask: *"List the MCP tools you have available."*
-You should see 16 tools by default (14 HID + 2 device), or 17 with
-`--allow-screenshot`:
+You should see 16 tools by default (14 HID + 2 device), or 18 with
+`--allow-screenshot` (which adds `hid.screenshot` and `screen.windows`):
 
 - **v1.0 baseline (frozen)**: `hid.click`, `hid.move`, `hid.hover`,
   `hid.type`, `hid.scroll`, `hid.key`, `hid.release_all`, `device.list`,
@@ -198,7 +198,7 @@ the MCP server on save — open Settings → MCP and you'll see `clawtouch`
 appear within a second or two.
 
 **Verify:** Cursor's Settings → MCP page shows a green dot next to
-`clawtouch` and lists 16 tools (17 with `--allow-screenshot`).
+`clawtouch` and lists 16 tools (18 with `--allow-screenshot`).
 
 **Note:** Cursor's agent mode will happily call `hid.click` on whatever
 coordinate it thinks is right — including outside the Cursor window.
