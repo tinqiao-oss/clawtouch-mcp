@@ -47,8 +47,13 @@ in a browser that strip is the tabs.
 Even that answer is necessary rather than sufficient: Chrome reports its
 "new tab" button as a drag area, and clicking it opens a tab. So the
 caption is scanned from the right, where the space just inside the window
-controls is least likely to be anything but drag area. It stays best effort — the window is
-re-read after the click, and you are told when it cannot be confirmed.
+controls is least likely to be anything but drag area. It stays best
+effort, and the re-read after the click is what makes that safe: you are
+told if it cannot be read back, if what came back is a different window
+(same title, and a same-application sibling counts — the rectangle has to
+match too, since raising does not move a window), and if it came back
+still saying it is not in front, which means the raise did not take and
+the next click may be swallowed as activation.
 
 It gives up and says so when it cannot: a window with no caption to grab,
 or one a modal dialog has disabled. Set `autoRaise: false` where the agent
@@ -142,10 +147,17 @@ Three things therefore cannot live in it:
 ## Install
 
 ```bash
-pip install 'clawtouch-mcp[screenshot]>=0.5.0'   # the HID + capture layer
+pip install 'clawtouch-mcp[screenshot,window]>=0.5.0'   # HID, capture, window list
 dsh plugin --profile <your-profile> add dsh-clawtouch
 export DASHSCOPE_API_KEY=sk-...               # the vision model's key
 ```
+
+Both extras, not just `[screenshot]`: this plugin crops to a window
+before it looks at anything, and on macOS the window list is pyobjc,
+which lives in `[window]`. Without it a call that names a window is
+refused outright, and one that does not widens to the whole desktop —
+the case the cropping exists to avoid. On Windows `[window]` installs
+nothing; asking for it costs nothing either.
 
 `@deepseek-ai/dsh-tools` comes from the host and is not declared as a
 peer dependency on purpose: while dsh ships release candidates, no semver
@@ -218,6 +230,17 @@ you declare the whole virtual desktop:
 ```yaml
 args: ['--screen', '7680x1440']
 ```
+
+That works for a display placed to the **right of or below** the primary
+one. It cannot work for one placed to the **left or above**: `--screen`
+carries a size and no origin, so the addressable area always starts at
+`(0, 0)`, and such a display sits behind negative coordinates that no
+`WxH` describes. Measured on macOS with a second display at origin
+`(-1920, 0)`: `--screen 3432x1200` — the size of the whole virtual
+desktop — still addresses only `[0,3432)x[0,1200)`, and every point on
+that display clamps to `x=0`. Captures of it are fine; only the clicking
+is out of range. Move it right of or below the primary in the OS display
+settings, then widen `--screen` to include where it lands.
 
 A clamped click is reported as such and this plugin turns it into an
 error — a click that lands hundreds of pixels away is not a rounding

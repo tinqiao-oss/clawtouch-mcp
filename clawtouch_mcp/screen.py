@@ -95,7 +95,15 @@ RAISE_PROBE_PER_WINDOW_S = 0.6
 
 
 class WindowInfoUnavailable(RuntimeError):
-    """Raised when this platform has no window-geometry implementation."""
+    """No window list — either because this platform has no
+    implementation, or because the one it has could not answer right now
+    (pyobjc missing, the window server unreachable).
+
+    The distinction the type does NOT make is the one that matters: an
+    empty list is an answer and this is not one, so anything that cannot
+    read the window list raises rather than returning ``[]``. The message
+    carries which of the causes it was.
+    """
 
 
 def windows_supported() -> bool:
@@ -130,19 +138,42 @@ def unsupported_hint() -> str:
 def list_windows(include_offscreen: bool = False) -> list[dict[str, Any]]:
     """Visible top-level windows, front-most first where the OS tells us.
 
-    Each entry: ``{"title", "pid", "rect": [x1, y1, x2, y2], "app",
-    "foreground"}`` with ``rect`` in the same screen-pixel space that
-    ``hid.click`` and ``hid.screenshot``'s ``region`` use.
+    Each entry: ``{"title", "pid", "rect": [x1, y1, x2, y2], "app"}``
+    with ``rect`` in the same screen-pixel space that ``hid.click`` and
+    ``hid.screenshot``'s ``region`` use, plus ``foreground`` — a bool
+    where the OS could be asked, and **absent** where it could not, the
+    same shape ``visible_fraction`` and ``enabled`` use. Read it with
+    ``.get()``: a caller that indexes it will raise the day the query
+    fails, which is precisely the day it most needs an answer.
 
     ``include_offscreen`` keeps minimized / fully off-screen windows,
     which are useless as screenshot regions but useful for answering
-    "is this app even running".
+    "is this app even running". Windows labels them ``minimized``; macOS
+    is not asked, so the key is absent there rather than guessed. (macOS
+    *can* answer it — ``kAXMinimizedAttribute`` — but that is
+    Accessibility, a different API behind a different permission prompt,
+    and this collector is Quartz. Absent is the honest report of a
+    question this code does not ask.) Off-screen on macOS also covers "on
+    another Space", so it is not a stand-in for the answer either.
     """
     if sys.platform == "win32":
         return _list_windows_win32(include_offscreen)
     if sys.platform == "darwin":
         return _list_windows_darwin(include_offscreen)
     raise WindowInfoUnavailable(unsupported_hint())
+
+
+def _minimized_win32(x1: int, y1: int) -> bool:
+    """Windows parks a minimized window at (-32000, -32000).
+
+    A module-level predicate rather than an inline comparison so the
+    MEANING of the field can be pinned on any machine — the same reason
+    the darwin foreground pick is a pure function. Asserting on a live
+    enumeration only pins it when the runner's desktop happens to have a
+    minimized window, and forcing every entry to ``False`` passed that
+    kind of test.
+    """
+    return x1 <= -30000 or y1 <= -30000
 
 
 def _list_windows_win32(include_offscreen: bool) -> list[dict[str, Any]]:
@@ -242,7 +273,7 @@ def _list_windows_win32(include_offscreen: bool) -> list[dict[str, Any]]:
                 return True
             # Minimized windows report (-32000, -32000); they are not a
             # usable screenshot region.
-            minimized = x1 <= -30000 or y1 <= -30000
+            minimized = _minimized_win32(x1, y1)
             if minimized and not include_offscreen:
                 return True
             pid = wintypes.DWORD(0)
@@ -465,6 +496,139 @@ def _raise_point_win32(user32, hwnd, x1: int, y1: int,
     return lone
 
 
+def _frontmost_pid_darwin() -> Optional[int]:
+    """PID of the frontmost application, 0 when there is none, or ``None``
+    when the question could not be asked at all.
+
+    The three answers are not interchangeable and the caller keys off the
+    difference: a pid — or a real 0 — means the OS answered, so
+    ``foreground`` is a measurement and ``False`` on the others is a true
+    statement. ``None`` means nobody was asked, and then the field has to
+    disappear rather than default to ``False``, the same shape
+    ``visible_fraction`` and ``enabled`` already use. A guard that could
+    not run must never be readable as a guard that ran and passed.
+
+    Measured on macOS 26 for the cases that actually occur, because which
+    side of that line they fall on is not guessable: with the screen
+    LOCKED the answer is loginwindow's pid, not nil; a frontmost
+    application whose windows are all minimised, or all on another Space,
+    still answers with its own pid. Every one of those is a real answer —
+    "no window is frontmost" is then true, not missing. Which leaves
+    ``None`` for the case it should be: the query itself failing.
+
+    ``NSWorkspace`` lives in pyobjc-framework-Cocoa, which
+    pyobjc-framework-Quartz *requires* (verified against the installed
+    distribution's metadata), so the import cannot realistically fail on
+    a host where the window list works at all. Nothing here touches
+    ``NSApplication``: it is a read, and ``NSWorkspace.shared`` is
+    documented as reachable from any thread — which is not a promise that
+    every caller is safe, since PyObjC wants an autorelease pool on a
+    thread it was not first imported on. Hence a failure answers ``None``
+    instead of raising.
+    """
+    try:
+        from AppKit import NSWorkspace  # noqa: PLC0415 - lazy, allowed to fail
+        app = NSWorkspace.sharedWorkspace().frontmostApplication()
+    except Exception:
+        return None
+    if app is None:
+        return 0
+    try:
+        pid = int(app.processIdentifier())
+    except Exception:
+        return None
+    # Documented fourth state: -1 means the application has no pid to
+    # give. It is truthy, so letting it through would look like a real
+    # answer, match no window, and leave `foreground: False` standing on
+    # every entry — an assertion built on a correlation that could not be
+    # made. Which is the exact substitution this whole change removes.
+    return pid if pid >= 0 else None
+
+
+def _onscreen_candidates_darwin(infos) -> list[tuple[int, bool, int]]:
+    """``[(owner_pid, had_a_real_title, window_number), ...]`` for the
+    layer-0 windows that are actually on screen, in the order given."""
+    out: list[tuple[int, bool, int]] = []
+    for info in infos:
+        if int(info.get("kCGWindowLayer", 0) or 0) != 0:
+            continue
+        # The key is only present on windows that are on screen; it is
+        # simply absent on the rest, so `.get` is the whole test.
+        if not info.get("kCGWindowIsOnscreen"):
+            continue
+        out.append((
+            int(info.get("kCGWindowOwnerPID", 0) or 0),
+            bool(info.get("kCGWindowName")),
+            int(info.get("kCGWindowNumber", 0) or 0),
+        ))
+    return out
+
+
+def _foreground_wids_darwin(
+    candidates: list[tuple[int, bool, int]], front_pid: int,
+) -> list[int]:
+    """The frontmost application's windows, best candidate first.
+
+    A LIST rather than one answer, because the ordering listing and the
+    listing being returned are filtered differently — a window can be
+    eligible to order by and not eligible to report (zero-sized, no name
+    and no owner). Handing back a single id let such a window win and
+    then match nothing, so nothing was flagged while a perfectly good
+    window sat further down. The caller walks this in order and takes the
+    first one it actually has.
+
+    ``candidates`` is ``[(owner_pid, had_a_real_title, window_number), ...]``
+    in CGWindowList's front-to-back order, from an **on-screen** listing —
+    the only one whose order carries front-most meaning. Answering from an
+    ``include_offscreen`` listing instead would be guessing again: dropping
+    the off-screen entries from it does not restore the z-order of the ones
+    that remain, which is why that mode now re-asks rather than reusing the
+    list it already has.
+
+    **Why not simply index 0.** That is what this used to do, and
+    CGWindowList's order does answer a real question — which window is
+    topmost — just not the one the field claims. Every layer-0 window an
+    application owns is in that list, service and overlay windows
+    included, and they sort ahead of the window the user is looking at:
+    measured on macOS 26, VS Code's first entry is a 1512x32 strip and
+    the editor window it belongs to sorts second. Anything that trusts
+    the flag then works on the strip, which on macOS is worse than
+    anywhere else — occlusion and input state are deliberately absent
+    here, so ``foreground`` is the only window fact left that a caller
+    can act on, and it has to be one that was actually measured.
+
+    So the frontmost *application* is asked for by name — that part is a
+    real query — and its front window is taken from the order. Which
+    window of that application is a heuristic and is not pretending
+    otherwise: ``kCGWindowName`` is documented as optional, so preferring
+    an entry that has one is a tiebreak that happens to separate the
+    service strips from the window a person is looking at on every case
+    measured, not a classification anyone can rely on. What the query
+    does buy is a hard scope — the answer can no longer be some other
+    application's window, which is what index 0 gave.
+
+    Only on-screen entries are eligible. ``include_offscreen=True``
+    switches CGWindowList to a listing whose order carries no front-most
+    meaning and which includes other Spaces, so without this an
+    off-Space window could take the flag from the one in front of you.
+
+    When the frontmost application has no eligible window, or the query
+    fails, NO window is flagged. An absent answer is the honest one, and
+    callers degrade gracefully — though see the dsh plugin's region
+    resolver, which falls back to the first window and must not describe
+    that fallback as the foreground one.
+    """
+    if not front_pid:
+        return []
+    owned = [c for c in candidates if c[0] == front_pid]
+    # Titled first, then the rest, each keeping the listing's front-to-back
+    # order: the untitled entries are the service windows, which is a
+    # tiebreak and not a classification (kCGWindowName is documented
+    # optional), so they stay in the running rather than being discarded.
+    return ([wid for _, titled, wid in owned if titled]
+            + [wid for _, titled, wid in owned if not titled])
+
+
 def _list_windows_darwin(include_offscreen: bool) -> list[dict[str, Any]]:
     try:
         import Quartz  # type: ignore
@@ -474,9 +638,28 @@ def _list_windows_darwin(include_offscreen: bool) -> list[dict[str, Any]]:
     opts = Quartz.kCGWindowListExcludeDesktopElements
     if not include_offscreen:
         opts |= Quartz.kCGWindowListOptionOnScreenOnly
-    infos = Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID) or []
+    infos = Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID)
+    if infos is None:
+        # NULL and an empty array are different answers, and Apple says so:
+        # no matching windows gives an empty array, while NULL means the
+        # window server could not be reached. Collapsing them with `or []`
+        # turned "could not look" into "looked, and the desktop is empty" —
+        # the same substitution this module refuses everywhere else, and
+        # the one the caller can least afford, because an empty list reads
+        # as an answer. The second listing further down already treated
+        # NULL as failure; this is the same rule at the front door.
+        raise WindowInfoUnavailable(
+            "macOS returned no window list at all "
+            "(CGWindowListCopyWindowInfo gave NULL). That is not an empty "
+            "desktop. Apple documents exactly two causes, and they need "
+            "different things from you: the caller is not running within a "
+            "Quartz GUI session — started over SSH, or from a launchd "
+            "daemon rather than a login session, in which case run it from "
+            "the logged-in desktop session — or the window server is "
+            "disabled, which re-launching will not fix.")
 
     results: list[dict[str, Any]] = []
+    wids: list[int] = []
     for info in infos:
         # Layer 0 is the normal application layer; menu bar, dock and
         # overlays live above it and are never click targets we want to
@@ -494,17 +677,77 @@ def _list_windows_darwin(include_offscreen: bool) -> list[dict[str, Any]]:
         app = info.get("kCGWindowOwnerName") or ""
         if not title and not app:
             continue
+        wids.append(int(info.get("kCGWindowNumber", 0) or 0))
         results.append({
             "title": title or app,
             "app": app,
             "pid": int(info.get("kCGWindowOwnerPID", 0) or 0),
             "rect": [x, y, x + w, y + h],
             "foreground": False,
-            "minimized": False,
+            # No `minimized`: this collector never asks. Windows
+            # measures it (see the win32 branch), and the whole point of
+            # `include_offscreen` is to admit minimized windows — so
+            # hard-coding False here had every entry deny the very thing
+            # the caller switched the flag on to find.
+            #
+            # macOS is not incapable of answering — kAXMinimizedAttribute
+            # does — but that is Accessibility, another API behind another
+            # permission prompt, and this is the Quartz path. Absent is
+            # the honest report of a question not asked.
+            #
+            # And NOT inferred from kCGWindowIsOnscreen: off-screen covers
+            # "on another Space" too, so reading it as "minimized" would
+            # just be the guess again in a new place.
         })
-    if results:
-        # CGWindowList returns front-to-back order.
-        results[0]["foreground"] = True
+    if not results:
+        return results
+
+    front_pid = _frontmost_pid_darwin()
+    if front_pid is None:
+        # Nobody could be asked. Leaving `foreground: False` behind would
+        # state that none of these windows is frontmost, which is not what
+        # was found out — it is what was not. Drop the key, exactly as the
+        # unmeasurable guards do, so "absent" keeps meaning "not measured".
+        for r in results:
+            r.pop("foreground", None)
+        return results
+    if not front_pid:
+        return results
+
+    # Order has to come from an ON-SCREEN listing; `include_offscreen`
+    # produces one whose order says nothing about what is in front, so
+    # that mode pays for a second, small query rather than guessing.
+    ordering = infos
+    if include_offscreen:
+        ordering = Quartz.CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListExcludeDesktopElements
+            | Quartz.kCGWindowListOptionOnScreenOnly,
+            Quartz.kCGNullWindowID)
+        if ordering is None:
+            # NULL is the documented failure return, and it is not the
+            # same as a successful empty listing: one means the order
+            # could not be read, the other means nothing is on screen.
+            # `or []` collapsed them, and the collapse left every entry
+            # asserting `foreground: False` off the back of a query that
+            # never answered.
+            for r in results:
+                r.pop("foreground", None)
+            return results
+    # Two snapshots, so they can disagree: if the frontmost application
+    # opened a window between them, the new id is not in `by_wid` and the
+    # walk continues to the next candidate — which flags a window that is
+    # no longer the front one. A narrow race, and window-level was already
+    # declared best-effort, but "can only fail to flag" would be the wrong
+    # thing for the next reader to believe.
+    by_wid = {own_wid: result for own_wid, result in zip(wids, results)}
+    for wid in _foreground_wids_darwin(
+            _onscreen_candidates_darwin(ordering), front_pid):
+        # First candidate that survived this listing's own filters. A
+        # window can be worth ordering by and not worth reporting.
+        result = by_wid.get(wid)
+        if result is not None:
+            result["foreground"] = True
+            break
     return results
 
 
@@ -516,20 +759,52 @@ def find_window(query: str,
     Case-insensitive substring match, front-most window wins ties — the
     agent says "the WeChat window", not an HWND, and two chat windows
     with the same title are not an error worth failing the call over.
+
+    "Front-most wins ties" is now actually implemented, rather than left
+    to the order the platform happened to return. Windows sorted its list
+    foreground-first, so it held there by accident; macOS returns
+    CGWindowList order, where it did not — and the tie that matters is
+    the one this module exists to get right. An application's untitled
+    service windows are listed under the application's *name*, so
+    ``find_window("Code")`` matched a 1512x32 strip exactly, ignoring the
+    fact that the editor window right behind it had already been measured
+    as the foreground one. That is the same 32-pixel crop this module
+    stopped producing on the other path.
+
+    ``foreground`` may be ABSENT (the query could not be made), and
+    ``is True`` is deliberate: an absent answer must not be read as a
+    preference either way, and the platform's own order remains the
+    fallback.
     """
     if windows is None:
         windows = list_windows()
     needle = query.strip().lower()
     if not needle:
         return None
+
     exact = [w for w in windows
              if needle == str(w.get("title", "")).strip().lower()]
-    if exact:
-        return exact[0]
-    for w in windows:
-        hay = f"{w.get('title', '')} {w.get('app', '')}".lower()
-        if needle in hay:
-            return w
+    loose = [w for w in windows
+             if needle in f"{w.get('title', '')} {w.get('app', '')}".lower()]
+    # Front-most first, exactness second — and that order is the whole
+    # point. An untitled window is listed under its application's NAME, so
+    # a service strip matches "Code" EXACTLY while the editor window the
+    # user means matches only loosely ("proj - Code"). Ranking exactness
+    # above front-most hands back the strip, which is the failure this
+    # module exists to stop, arrived at by a different road.
+    #
+    # The trade it accepts: asked for "Calc" while a foreground window
+    # matches loosely and a background one matches exactly, the
+    # foreground one wins. That is the same answer a person would give to
+    # "the Calc window", and the alternative reintroduces the strip.
+    for group in (
+        [w for w in exact if w.get("foreground") is True],
+        [w for w in loose if w.get("foreground") is True],
+        exact,
+        loose,
+    ):
+        if group:
+            return group[0]
     return None
 
 

@@ -96,6 +96,18 @@ _SETTLE_OP_TYPES = frozenset({"click", "button_down", "button_up"})
 # headroom only costs wall-clock on a genuinely struggling move (stuck
 # cursor / competing input). This makes accuracy independent of move
 # distance and screen size with no per-distance calibration.
+#
+# One observation that does not fit that sentence cleanly, recorded
+# because it will be measured again: on a two-display mac (2026-08-27),
+# the same window and the same targets settled 1 px out under
+# --screen 1512x982 and 4 px out under --screen 3432x1200, 6 interleaved
+# runs of 6, on the marker nearest the display seam. Both are inside
+# MOVE_TOLERANCE and both are legitimate early exits, so this is not
+# evidence that the declared size CAUSED it — starting cursor position
+# and the carried-over gain estimate were not controlled. The only
+# screen-size-dependent step in that path is the boundary-pinned sample
+# test in _update_gain below, which is worth reading first if anyone
+# does chase it.
 #   - MOVE_TOLERANCE=5 px: comfortably above macOS's ±2 px report
 #     quantization, so the loop reliably TERMINATES as converged at the
 #     floor instead of oscillating on intrinsic jitter (tol=3 sat right
@@ -950,10 +962,64 @@ class ClawTouchMcpServer:
         return cx, cy, (cx != int(x) or cy != int(y))
 
     def _clamp_note(self, x: int, y: int) -> dict[str, Any]:
-        """`{}` when nothing was clamped, else the flag plus the fix."""
+        """`{}` when nothing was clamped, else the flag plus the fix.
+
+        A point can be out of range in two independent ways, and only
+        one of them is fixed by widening ``--screen``. Past the right or
+        bottom edge, that is the whole answer. Below zero it is no answer
+        at all: the flag carries a size and no origin, so the addressable
+        area always starts at (0, 0) and no ``WxH`` admits a negative
+        coordinate. Measured on macOS with the second display moved to
+        origin (-1920, 0): ``--screen 3432x1200`` — the size of the whole
+        virtual desktop — still addresses only [0,3432)x[0,1200), and
+        every point on that display clamps to x=0. Telling that caller to
+        widen ``--screen`` sends them to redo what they already did, and
+        the second identical failure looks like a broken tool rather than
+        an unreachable point.
+
+        A point can be BOTH (negative x, past the bottom edge), so the
+        halves are emitted independently rather than as an either/or —
+        and the negative half has to mention widening too, because moving
+        the display right of the primary puts it past the old bounds
+        instead.
+
+        Deliberately not offered as a remedy: ``relative: true`` on
+        ``hid.click``/``hid.move`` skips clamping entirely and could
+        physically reach such a display. It is not a fix for this caller
+        — a relative delta cannot be aimed at a point computed in
+        absolute space.
+        """
         cx, cy, clamped = self._clamp_checked(x, y)
         if not clamped:
             return {}
+        parts: list[str] = []
+        if int(x) < 0 or int(y) < 0:
+            parts.append(
+                "A negative coordinate is out of range whatever --screen "
+                "says: the flag carries a size and no origin, so the "
+                "addressable area always starts at (0, 0). If this is a "
+                "display placed left of or above the primary one, move it "
+                "right of or below in the OS display settings — and give "
+                "--screen a size that includes where it lands.")
+        if int(x) >= self.config.screen_w or int(y) >= self.config.screen_h:
+            # Name the actual reason. "--screen defaults to the PRIMARY
+            # monitor" is false once the operator passed one, and being
+            # told your own explicit value is a default is how a hint
+            # stops being read at all.
+            if self._screen_source == "explicit":
+                why = "Those bounds were given on the command line"
+            else:
+                # Not "the PRIMARY monitor": that is what the Windows path
+                # asks for, while mac/Linux ask tkinter for the screen the
+                # widget landed on. What both share — and all the caller
+                # needs — is that detection finds ONE display.
+                why = ("--screen was not given, so the size was "
+                       "auto-detected, which finds one display and not "
+                       "the whole virtual desktop")
+            parts.append(
+                f"{why}; pass --screen WxH covering the whole virtual "
+                "desktop to reach a second display.")
+        fix = " ".join(parts)
         return {
             "clamped": True,
             "requested_x": int(x),
@@ -962,9 +1028,7 @@ class ClawTouchMcpServer:
                 f"({int(x)}, {int(y)}) is outside the configured screen "
                 f"{self.config.screen_w}x{self.config.screen_h} and was "
                 f"clamped to ({cx}, {cy}) — the pointer went somewhere "
-                "you did not ask for. --screen defaults to the PRIMARY "
-                "monitor; pass --screen WxH covering the whole virtual "
-                "desktop to reach a second display."
+                f"you did not ask for. {fix}"
             ),
         }
 
@@ -1518,8 +1582,17 @@ class ClawTouchMcpServer:
                             "type": "string",
                             "description": (
                                 "Case-insensitive substring; returns only "
-                                "the best match (exact title first, then "
-                                "front-most containing it)."
+                                "the best match — front-most first, then "
+                                "exact title. That order matters: an "
+                                "untitled window is listed under its "
+                                "application's NAME, so a service strip "
+                                "can match exactly while the window you "
+                                "mean matches only loosely. Where "
+                                "front-most could not be measured, or "
+                                "under include_offscreen (whose order "
+                                "carries no front-most meaning beyond the "
+                                "flagged window), it falls back to the "
+                                "platform's own order."
                             ),
                         },
                         "include_offscreen": {
@@ -1527,7 +1600,13 @@ class ClawTouchMcpServer:
                             "description": (
                                 "Include minimized / off-screen windows. "
                                 "They answer 'is this app running' but "
-                                "are not usable as a capture region."
+                                "are not usable as a capture region. "
+                                "Entries carry `minimized` only where it "
+                                "is measured (Windows); on macOS this "
+                                "collector does not ask, so the key is "
+                                "absent rather than guessed, and "
+                                "off-screen there also means 'on another "
+                                "Space'."
                             ),
                         },
                     },

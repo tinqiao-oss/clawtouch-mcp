@@ -98,6 +98,8 @@ pip install clawtouch-mcp                     # minimal (serial only)
 pip install 'clawtouch-mcp[screenshot]'       # + mss + Pillow (JPEG, Retina resize)
 pip install 'clawtouch-mcp[screenshot-min]'   # mss only — no native deps, works
                                               # under hardened-runtime hosts
+pip install 'clawtouch-mcp[window]'          # pyobjc — macOS needs it for
+                                              # screen.windows; no-op elsewhere
 ```
 
 **Platform-specific setup guides** (recommended on first install):
@@ -284,7 +286,7 @@ Seventeen tools register: **fourteen always-on `hid.*` input tools**, plus
 | `hid.hold_key` | v1.1 | Press, wait, then release |
 | `hid.batch` | v0.4.0 | Run a pre-planned sequence of ≤10 HID actions in one call (strict order) |
 | `hid.screenshot` | v1.0 | Screenshot a monitor or a `region` — JPEG q80 default, `format='png'` for lossless. `max_width` bounds the returned width; `markers` stamps two calibration markers for vision-model coordinate work (opt-in, requires `--allow-screenshot`) |
-| `screen.windows` | v0.5.0 | List visible top-level windows with titles and screen rectangles, so a capture can be cropped to one window. On Windows each entry also carries `visible_fraction` — how much of it is actually on top, because a capture of a covered window's rectangle is a capture of whatever covers it — plus `enabled` and a `raise_point`. Those three are **absent** where they could not be measured (macOS, or a rectangle too small to sample): absent means not measured, never measured-and-fine (opt-in, requires `--allow-screenshot`; Windows + macOS) |
+| `screen.windows` | v0.5.0 | List visible top-level windows with titles and screen rectangles, so a capture can be cropped to one window. On Windows each entry also carries `visible_fraction` — how much of it is actually on top, because a capture of a covered window's rectangle is a capture of whatever covers it — plus `enabled` and a `raise_point`. Those three are **absent** where they could not be measured (macOS, or a rectangle too small to sample). `foreground` is measured on both platforms but follows the same rule — absent on the rare occasion the OS could not be asked at all — and `minimized` is measured on Windows only. Absent means not measured, never measured-and-fine (opt-in, requires `--allow-screenshot`; Windows + macOS) |
 | `device.list` | v1.0 | List candidate HID board ports |
 | `device.info` | v1.0 | Active connection info |
 

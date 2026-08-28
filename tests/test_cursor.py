@@ -22,6 +22,7 @@ import json
 import pytest
 
 from clawtouch_mcp import cursor
+from clawtouch_mcp import server as server_mod
 from clawtouch_mcp.cursor import (
     _FAKE_CURSOR_ENV,
     availability_hint,
@@ -200,7 +201,11 @@ class TestToolClickAbsolutePath:
         assert payload["clamped"] is True
         assert payload["requested_x"] == 99999
         assert payload["requested_y"] == -50
-        assert "--screen" in payload["hint"]
+        # (99999, -50) is BOTH past the right edge and negative, so the
+        # hint has to carry both remedies — asserting only "--screen"
+        # passed no matter which half was emitted.
+        assert "covering the whole virtual desktop" in payload["hint"]
+        assert "negative coordinate is out of range" in payload["hint"]
 
     def test_in_range_click_carries_no_clamp_flag(self, server):
         """The flag must be absent, not False — callers key off presence
@@ -214,6 +219,85 @@ class TestToolClickAbsolutePath:
         payload = json.loads(result["result"]["content"][0]["text"])
         assert "clamped" not in payload
         assert "requested_x" not in payload
+
+    def test_a_point_past_the_right_edge_is_told_to_widen_screen(self):
+        """The ordinary second-monitor case, and the advice that fixes
+        it."""
+        srv = ClawTouchMcpServer(
+            ServerConfig(mock=True, screen_w=1512, screen_h=982))
+        hint = srv._clamp_note(1954, 814)["hint"]
+        assert "--screen WxH covering the whole virtual desktop" in hint
+        assert "negative coordinate" not in hint
+
+    def test_a_negative_point_is_not_told_to_widen_screen(self):
+        """`--screen` carries a size with no origin, so the addressable
+        area always starts at (0, 0) and no WxH admits a negative
+        coordinate. Measured on macOS with the second display moved to
+        origin (-1920, 0): `--screen 3432x1200` — the size of the whole
+        virtual desktop — still addresses only [0,3432)x[0,1200), and
+        every point on that display clamps to x=0. Repeating the generic
+        advice there sends the caller to redo what they already did, and
+        the second identical failure reads as a broken tool.
+        """
+        srv = ClawTouchMcpServer(
+            ServerConfig(mock=True, screen_w=3432, screen_h=1200))
+        hint = srv._clamp_note(-980, 420)["hint"]
+        assert "negative coordinate is out of range" in hint
+        assert "covering the whole virtual desktop" not in hint
+
+    def test_the_negative_advice_still_says_to_widen_afterwards(self):
+        """Rearranging alone is not the whole fix: moving the display
+        right of the primary makes the coordinate positive and lands it
+        PAST bounds that were only ever the primary monitor."""
+        srv = ClawTouchMcpServer(
+            ServerConfig(mock=True, screen_w=1512, screen_h=982))
+        hint = srv._clamp_note(-980, 420)["hint"]
+        assert "a size that includes where it lands" in hint
+
+    def test_a_negative_y_takes_the_same_branch(self):
+        srv = ClawTouchMcpServer(
+            ServerConfig(mock=True, screen_w=1512, screen_h=982))
+        hint = srv._clamp_note(400, -12)["hint"]
+        assert "negative coordinate is out of range" in hint
+
+    def test_the_hint_names_the_real_source_of_the_bounds(self):
+        """Telling an operator who passed `--screen 100x100` that it
+        "defaults to the PRIMARY monitor" is false, and a hint that is
+        wrong about the cause is a hint that stops being read."""
+        explicit = ClawTouchMcpServer(
+            ServerConfig(mock=True, screen_w=100, screen_h=100))
+        assert explicit._screen_source == "explicit"
+        hint = explicit._clamp_note(99999, 50)["hint"]
+        assert "given on the command line" in hint
+        assert "defaults to the PRIMARY" not in hint
+
+    def test_the_detected_branch_does_not_claim_primary_only(self,
+                                                              monkeypatch):
+        """Forced rather than conditional: the previous version skipped
+        itself wherever detection failed, which is exactly the CI runner.
+
+        The wording matters because it is only true on Windows — that path
+        asks for SM_CXSCREEN, while mac/Linux ask tkinter for whichever
+        screen the widget landed on. "One display, not the virtual
+        desktop" is what both actually guarantee.
+        """
+        monkeypatch.setattr(server_mod, "_detect_screen",
+                            lambda: (1512, 982))
+        detected = ClawTouchMcpServer(ServerConfig(mock=True))
+        assert detected._screen_source == "detected"
+        hint = detected._clamp_note(999999, 50)["hint"]
+        assert "auto-detected" in hint
+        assert "PRIMARY monitor" not in hint
+        assert "one display and not the whole virtual desktop" in hint
+
+    def test_both_faults_at_once_get_both_halves(self):
+        """Negative x AND past the bottom edge are independent problems;
+        answering only one leaves the caller stuck on the other."""
+        srv = ClawTouchMcpServer(
+            ServerConfig(mock=True, screen_w=1512, screen_h=982))
+        hint = srv._clamp_note(-10, 1400)["hint"]
+        assert "negative coordinate is out of range" in hint
+        assert "covering the whole virtual desktop" in hint
 
 
 class TestToolClickRelativePath:

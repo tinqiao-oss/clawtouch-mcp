@@ -111,8 +111,17 @@ const SAMPLES = {
   },
   computer_windows: {
     args: {},
-    value: { windows: [{ title: 'A', foreground: true, width: 800,
-      height: 600, visible_percent: 100, accepts_input: true }] },
+    // Both platform shapes in one value, because the schema has to admit
+    // both and only the real validator can say so: Windows measures every
+    // field, macOS measures none of the guards, and `foreground` can also
+    // go missing on either when the frontmost query itself fails. A
+    // required `foreground` would have rejected the third window here.
+    value: { windows: [
+      { title: 'A', foreground: true, width: 800, height: 600,
+        visible_percent: 100, accepts_input: true },
+      { title: 'B', foreground: false, width: 400, height: 300 },
+      { title: 'C', width: 200, height: 100 },
+    ] },
   },
   computer_type: {
     args: { text: 'hello', target: 'the message box' },

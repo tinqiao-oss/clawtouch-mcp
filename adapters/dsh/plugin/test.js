@@ -10,12 +10,16 @@
  * Run: node test.js
  */
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
 import {
   calibrate, toImagePoint, toScreenPoint, resolvePoint, CalibrationError,
 } from './lib/calibrate.js'
 import { parseAnswer, VisionError } from './lib/vision.js'
-import { assertOnTop, unmeasuredNote, LocateError } from './lib/locator.js'
+import {
+  assertOnTop, unmeasuredNote, outOfBoundsFix, renderWindowLine, sameWindow,
+  LocateError,
+} from './lib/locator.js'
 import { McpStdioClient } from './lib/mcp-client.js'
 import { Locator } from './lib/locator.js'
 
@@ -528,17 +532,52 @@ await asyncTest('an unconfirmed raise click fails loudly', async () => {
     (err) => err instanceof LocateError && /not confirmed/.test(err.message))
 })
 
-await asyncTest('a raise that did not take is caught by re-reading', async () => {
-  // The click may raise something else entirely; the state afterwards is
-  // read back rather than assumed.
+await asyncTest('a raise that left it covered is caught by re-reading',
+  async () => {
+    // The click may raise something else entirely; the state afterwards is
+    // read back rather than assumed. Foreground is TRUE here so that the
+    // occlusion guard is the only thing that can fail this — binding the
+    // two conditions into one fixture is how the raise-did-not-take check
+    // below went untested.
+    const { locator } = locatorWith({
+      'device.info': { json: { screen: { width: 1920, height: 1080, source: 'explicit' } } },
+      'hid.click': { json: { ok: true, clicked: true } },
+      'screen.windows': { json: { window: { ...ONTOP, foreground: true, visible_fraction: 0 } } },
+    })
+    await assert.rejects(
+      () => locator.ensureReachable({ ...ONTOP, foreground: false, visible_fraction: 0 }),
+      (err) => err instanceof LocateError && /in front of it/.test(err.message))
+  })
+
+await asyncTest('a raise the re-read says did not happen is a failure',
+  async () => {
+    // We clicked it ON PURPOSE to bring it forward. A re-read that says it
+    // is still not in front is a failed action, not a detail: the next
+    // click may be swallowed as activation instead of doing what it was
+    // aimed at. Unoccluded, so only this check can fail it.
+    const { locator } = locatorWith({
+      'device.info': { json: { screen: { width: 1920, height: 1080, source: 'explicit' } } },
+      'hid.click': { json: { ok: true, clicked: true } },
+      'screen.windows': { json: { window: { ...ONTOP, foreground: false, visible_fraction: 1 } } },
+    })
+    await assert.rejects(
+      () => locator.ensureReachable({ ...ONTOP, foreground: false, visible_fraction: 1 }),
+      (err) => err instanceof LocateError && /the raise did not take/.test(err.message))
+  })
+
+await asyncTest('an UNMEASURED foreground does not fail the raise', async () => {
+  // Absent is not false. Refusing where the platform cannot answer would
+  // ground the plugin exactly where the question is unanswerable — the
+  // same reason the occlusion guard lets an unmeasured window through.
+  const fresh = { ...ONTOP, visible_fraction: 1 }
+  delete fresh.foreground
   const { locator } = locatorWith({
     'device.info': { json: { screen: { width: 1920, height: 1080, source: 'explicit' } } },
     'hid.click': { json: { ok: true, clicked: true } },
-    'screen.windows': { json: { window: { ...ONTOP, foreground: false, visible_fraction: 0 } } },
+    'screen.windows': { json: { window: fresh } },
   })
-  await assert.rejects(
-    () => locator.ensureReachable({ ...ONTOP, foreground: false, visible_fraction: 0 }),
-    (err) => err instanceof LocateError && /in front of it/.test(err.message))
+  const out = await locator.ensureReachable({ ...ONTOP, foreground: false, visible_fraction: 1 })
+  assert.equal(out.title, 'Calc')
 })
 
 await asyncTest('a re-read that errors is not a raise that worked',
@@ -577,19 +616,30 @@ test('an unmeasured window says exactly which guard did not run', () => {
   // unusable wherever these cannot be measured — so the answer itself
   // has to carry which guard never ran. Naming only one of them would
   // leave the other silently unmeasured.
-  assert.equal(unmeasuredNote({ visible_fraction: 1, enabled: true }), '')
-  assert.equal(unmeasuredNote({ visible_fraction: 0.4, enabled: false }), '')
-  // macOS measures neither.
-  assert.match(unmeasuredNote({ title: 'Safari' }),
+  const MEASURED = { visible_fraction: 1, enabled: true, foreground: true }
+  assert.equal(unmeasuredNote(MEASURED), '')
+  assert.equal(unmeasuredNote(
+    { visible_fraction: 0.4, enabled: false, foreground: false }), '')
+  // macOS measures neither of those two, but DOES answer foreground.
+  assert.match(unmeasuredNote({ title: 'Safari', foreground: false }),
     /input state and occlusion unmeasured/)
+  assert.doesNotMatch(unmeasuredNote({ title: 'Safari', foreground: false }),
+    /frontmost/)
   // Minimised on Windows, or a rectangle too small to sample: the input
   // state is known, the occlusion figure is not.
-  assert.match(unmeasuredNote({ enabled: true }), /occlusion unmeasured/)
-  assert.doesNotMatch(unmeasuredNote({ enabled: true }), /input state/)
+  assert.match(unmeasuredNote({ enabled: true, foreground: true }),
+    /occlusion unmeasured/)
+  assert.doesNotMatch(unmeasuredNote({ enabled: true, foreground: true }),
+    /input state/)
   // ...and the reverse, so neither branch can quietly disappear.
-  assert.match(unmeasuredNote({ visible_fraction: 1 }),
+  assert.match(unmeasuredNote({ visible_fraction: 1, foreground: true }),
     /input state unmeasured/)
-  assert.doesNotMatch(unmeasuredNote({ visible_fraction: 1 }), /occlusion/)
+  assert.doesNotMatch(unmeasuredNote({ visible_fraction: 1, foreground: true }),
+    /occlusion/)
+  // The frontmost query itself can fail. Normally it IS measured, so its
+  // absence is the notable case — and `false` must never stand in for it.
+  assert.match(unmeasuredNote({ visible_fraction: 1, enabled: true }),
+    /which is frontmost unmeasured/)
 })
 
 await asyncTest('a raise point outside the declared screen says why', async () => {
@@ -622,6 +672,42 @@ await asyncTest('a raise point outside the declared screen says why', async () =
     'an off-screen point must not be clicked')
   assert.ok(logs.some((l) => /outside the declared screen/.test(l)),
     `expected a warning, got ${JSON.stringify(logs)}`)
+  // ...and the remedy, not just the diagnosis. 7460 is past the right
+  // edge, so widening --screen really is the answer here.
+  assert.ok(logs.some((l) => /covering the whole virtual desktop/.test(l)),
+    `expected the widen advice, got ${JSON.stringify(logs)}`)
+})
+
+await asyncTest('a NEGATIVE raise point gets the other advice', async () => {
+  // The third call site of outOfBoundsFix, pinned the same way as the two
+  // refusals: a Windows secondary monitor placed left of the primary has
+  // negative coordinates too, and widening --screen cannot reach it.
+  const logs = []
+  const calls = []
+  const mcp = {
+    async callTool(name) {
+      calls.push({ name })
+      if (name === 'device.info') {
+        return {
+          json: { screen: { width: 1920, height: 1080, source: 'explicit' } },
+          text: '', images: [], isError: false,
+        }
+      }
+      return { json: {}, text: '', images: [], isError: false }
+    },
+  }
+  const locator = new Locator({
+    mcp, config: {}, log: (level, m) => logs.push(`${level}:${m}`),
+  })
+  await locator.ensureReachable({
+    ...ONTOP, foreground: false, raise_point: [-940, 8],
+  })
+  assert.ok(!calls.some((c) => c.name === 'hid.click'),
+    'an off-screen point must not be clicked')
+  assert.ok(logs.some((l) => /negative coordinate is out of range/.test(l)),
+    `expected the negative advice, got ${JSON.stringify(logs)}`)
+  assert.ok(!logs.some((l) => /covering the whole virtual desktop/.test(l)),
+    'must not repeat the advice that cannot work')
 })
 
 await asyncTest('a re-read that answers with a different window is refused',
@@ -639,8 +725,393 @@ await asyncTest('a re-read that answers with a different window is refused',
     await assert.rejects(
       () => locator.ensureReachable({ ...ONTOP, pid: 10, foreground: false }),
       (err) => err instanceof LocateError
-        && /returned a different window \(pid 999, not 10\)/.test(err.message))
+        && /returned a different window/.test(err.message)
+        && /pid 999/.test(err.message))
   })
+
+await asyncTest('a SIBLING window of the same app is refused too', async () => {
+  // pid alone was the first answer to "is this the same window", and two
+  // windows of one application share it — so a sibling passed, and the
+  // screenshot and every click after it went somewhere else. Raising does
+  // not move a window, so a changed rect is the tell.
+  const { locator } = locatorWith({
+    'device.info': { json: { screen: { width: 1920, height: 1080, source: 'explicit' } } },
+    'hid.click': { json: { ok: true, clicked: true } },
+    'screen.windows': {
+      json: { window: { ...ONTOP, pid: 10, rect: [600, 0, 900, 500] } },
+      text: '', isError: false,
+    },
+  })
+  await assert.rejects(
+    () => locator.ensureReachable({
+      ...ONTOP, pid: 10, rect: [0, 0, 300, 500], foreground: false }),
+    (err) => err instanceof LocateError
+      && /returned a different window/.test(err.message))
+})
+
+test('sameWindow compares only what both sides carry', () => {
+  // An absent field is not evidence either way — the rule this whole
+  // change is built on, applied to identity as well.
+  assert.equal(sameWindow({ pid: 1, rect: [0, 0, 1, 1] },
+    { pid: 1, rect: [0, 0, 1, 1] }), true)
+  assert.equal(sameWindow({ pid: 1 }, { pid: 2 }), false)
+  assert.equal(sameWindow({ pid: 1, rect: [0, 0, 1, 1] },
+    { pid: 1, rect: [5, 0, 6, 1] }), false)
+  assert.equal(sameWindow({ pid: 1 }, { pid: 1 }), true)
+  assert.equal(sameWindow({ rect: [0, 0, 1, 1] }, { pid: 1 }), true)
+})
+
+// ── advice for a point outside the addressable screen ──────────────────
+//
+// Measured on macOS with the second display at origin (-1920, 0): the
+// generic "widen --screen to the whole virtual desktop" is not merely
+// unhelpful there, it is impossible — the flag takes a size and no
+// origin — and a caller who follows it gets the identical failure a
+// second time and concludes the tool is broken.
+
+const BOUNDS = { width: 1512, height: 982 }
+
+test('a point past the right edge gets the --screen advice', () => {
+  const fix = outOfBoundsFix(1954, 814, BOUNDS)
+  assert.match(fix, /--screen WxH covering the whole virtual desktop/)
+  assert.doesNotMatch(fix, /negative coordinate/)
+})
+
+test('a negative x is NOT told to widen --screen', () => {
+  const fix = outOfBoundsFix(-980, 420, BOUNDS)
+  assert.match(fix, /negative coordinate is out of range/)
+  // The whole point: it must not repeat the advice that cannot work.
+  assert.doesNotMatch(fix, /covering the whole virtual desktop/)
+})
+
+test('a negative y is treated the same as a negative x', () => {
+  assert.match(outOfBoundsFix(400, -12, BOUNDS),
+    /negative coordinate is out of range/)
+})
+
+test('the negative half still says to widen --screen afterwards', () => {
+  // Moving the display right of the primary makes the coordinate
+  // positive and puts it PAST the old primary-only bounds, so
+  // rearranging alone is not the whole fix.
+  assert.match(outOfBoundsFix(-980, 420, BOUNDS),
+    /give --screen a size that includes where it lands/)
+})
+
+test('a point that is BOTH negative and past an edge gets both halves',
+  () => {
+    // Negative x AND past the bottom edge: the two faults are
+    // independent and suppressing either leaves the caller stuck.
+    const fix = outOfBoundsFix(-10, 1400, BOUNDS)
+    assert.match(fix, /negative coordinate is out of range/)
+    assert.match(fix, /--screen WxH covering the whole virtual desktop/)
+  })
+
+test('zero is not negative — it takes the widen branch, not the other', () => {
+  // Pins the branch boundary itself: a regression from `< 0` to `<= 0`
+  // would start calling an addressable edge pixel unreachable.
+  const fix = outOfBoundsFix(0, 0, { width: 0, height: 0 })
+  assert.doesNotMatch(fix, /negative coordinate/)
+  assert.match(fix, /--screen WxH/)
+})
+
+test('with no bounds at all the generic advice is a fallback, not an add-on',
+  () => {
+    assert.doesNotMatch(outOfBoundsFix(-980, 420, undefined),
+      /covering the whole virtual desktop/)
+    assert.match(outOfBoundsFix(9999, 9999, undefined),
+      /covering the whole virtual desktop/)
+  })
+
+await asyncTest('the click refusal carries the negative advice and sends nothing',
+  async () => {
+    // A window on a display left of the primary: the point is refused
+    // before anything is sent, and the message has to name the real fix.
+    const { locator, calls } = locatorWith({
+      'device.info': {
+        json: { screen: { width: 1512, height: 982, source: 'detected' } },
+      },
+    })
+    locator.point = async () => ({ screen: [-980, 420] })
+    await assert.rejects(
+      () => locator.click({ target: 'the 7 key' }),
+      (err) => err instanceof LocateError
+        && /negative coordinate is out of range/.test(err.message)
+        && !/covering the whole virtual desktop/.test(err.message))
+    // The refusal is only worth anything if the click really did not go
+    // out — asserting on the message alone would pass a broken guard.
+    assert.equal(calls.filter((c) => c.name === 'hid.click').length, 0)
+  })
+
+await asyncTest('the multi-target refusal carries the same split', async () => {
+  const { locator, calls } = locatorWith({
+    'device.info': {
+      json: { screen: { width: 1512, height: 982, source: 'explicit' } },
+    },
+  })
+  locator.pointMany = async () => ({
+    results: [{ target: 'the 7 key', screen: [-980, 420] }],
+  })
+  await assert.rejects(
+    () => locator.clickSequence({ targets: ['the 7 key'] }),
+    (err) => err instanceof LocateError
+      && /negative coordinate is out of range/.test(err.message))
+  assert.equal(calls.filter((c) => c.name === 'hid.batch').length, 0)
+})
+
+// ── the region resolver when nothing reported itself as foreground ─────
+//
+// macOS answers `foreground` from a real query now, and a query that
+// could not be made flags nothing rather than guessing. Falling back to
+// the first window is still the most useful thing to do — but calling it
+// the foreground window would re-tell, one layer up, exactly the guess
+// the server stopped making, in a string the agent cannot check.
+
+await asyncTest('a list with no foreground window is not called foreground',
+  async () => {
+    const { locator } = locatorWith({
+      'screen.windows': {
+        json: {
+          windows: [
+            { title: 'First', rect: [0, 0, 800, 600], foreground: false },
+            { title: 'Second', rect: [0, 0, 400, 300], foreground: false },
+          ],
+        },
+        text: '', images: [], isError: false,
+      },
+      'device.info': {
+        json: { screen: { width: 1920, height: 1080, source: 'explicit' } },
+      },
+    })
+    const picked = await locator.resolveRegion({})
+    assert.deepEqual(picked.region, [0, 0, 800, 600], 'still uses the first')
+    assert.match(picked.source, /first listed window "First"/)
+    assert.match(picked.source, /nothing reported itself as foreground/)
+    assert.doesNotMatch(picked.source, /^foreground window/)
+  })
+
+await asyncTest('a flagged window is still reported as the foreground one',
+  async () => {
+    const { locator } = locatorWith({
+      'screen.windows': {
+        json: {
+          windows: [
+            { title: 'First', rect: [0, 0, 800, 600], foreground: false },
+            { title: 'Real', rect: [0, 0, 400, 300], foreground: true },
+          ],
+        },
+        text: '', images: [], isError: false,
+      },
+      'device.info': {
+        json: { screen: { width: 1920, height: 1080, source: 'explicit' } },
+      },
+    })
+    const picked = await locator.resolveRegion({})
+    assert.deepEqual(picked.region, [0, 0, 400, 300])
+    assert.match(picked.source, /foreground window "Real"/)
+    assert.doesNotMatch(picked.source, /nothing reported itself/)
+  })
+
+await asyncTest('a window whose foreground field is missing says so',
+  async () => {
+    // The query failed on the server side, so the field is gone rather
+    // than false — the note has to name that alongside the other guards.
+    const { locator } = locatorWith({
+      'screen.windows': {
+        json: { windows: [{ title: 'Only', rect: [0, 0, 800, 600] }] },
+        text: '', images: [], isError: false,
+      },
+      'device.info': {
+        json: { screen: { width: 1920, height: 1080, source: 'explicit' } },
+      },
+    })
+    const picked = await locator.resolveRegion({})
+    assert.match(picked.source, /which is frontmost unmeasured here/)
+  })
+
+// ── computer_windows renders the three field shapes distinguishably ────
+//
+// The star can only ever say YES. A `foreground` that went missing used
+// to render exactly like one measured as false — same blank margin — so
+// the reader could not tell "not in front" from "nobody asked".
+
+test('a missing foreground renders differently from a measured false', () => {
+  const lines = [
+    { title: 'win-all', foreground: true, width: 800, height: 600,
+      visible_percent: 100, accepts_input: true },
+    { title: 'mac-false', foreground: false, width: 400, height: 300 },
+    { title: 'mac-unasked', width: 200, height: 100 },
+  ].map(renderWindowLine)
+
+  // Fully measured: a star and no note at all.
+  assert.match(lines[0], /^\* win-all/)
+  assert.doesNotMatch(lines[0], /NOT measured/)
+  // macOS, measured as not-frontmost: the two guards are named, and the
+  // frontmost answer is NOT among them — it was measured.
+  assert.match(lines[1], /input state and occlusion NOT measured here/)
+  assert.doesNotMatch(lines[1], /frontmost/)
+  // macOS, frontmost query failed: it has to be named too, or this line
+  // is indistinguishable from the one above it.
+  assert.match(lines[2], /which is frontmost NOT measured here/)
+  // ...and the three-item list reads as a list, not "a and b and c".
+  assert.match(lines[2], /input state, occlusion and which is frontmost/)
+})
+
+test('an unmeasured window can never carry the star', () => {
+  // The last gate on this change's whole point, in the layer the agent
+  // actually reads. Loosening the star to `w.foreground !== false` puts
+  // a `*` on a window whose own note says the answer was not measured —
+  // one line asserting and denying the same fact. The star may only ever
+  // mean a measured yes.
+  const line = renderWindowLine({ title: 'Safari', width: 800, height: 600 })
+  assert.doesNotMatch(line, /^\*/, 'no star without a measurement')
+  assert.match(line, /which is frontmost NOT measured here/)
+
+  // ...and the two adjacent states stay distinguishable from it.
+  assert.match(
+    renderWindowLine({ title: 'S', foreground: true, width: 1, height: 1,
+      visible_percent: 100, accepts_input: true }), /^\* S/)
+  assert.doesNotMatch(
+    renderWindowLine({ title: 'S', foreground: false, width: 1, height: 1,
+      visible_percent: 100, accepts_input: true }), /^\*/)
+})
+
+test('the other two measurements still speak for themselves', () => {
+  assert.match(
+    renderWindowLine({ title: 'blocked', foreground: true, width: 1, height: 1,
+      visible_percent: 100, accepts_input: false }),
+    /NOT accepting input, a modal dialog is over it/)
+  assert.match(
+    renderWindowLine({ title: 'covered', foreground: true, width: 1, height: 1,
+      visible_percent: 30, accepts_input: true }),
+    /only 30% visible/)
+})
+
+// ── a window lookup that FAILED is not an answer of "not there" ────────
+//
+// The server tells the two apart by sending `available` only on a genuine
+// miss. Without that check, an unreadable listing was reported as measured
+// absence — and, falling back to the FIRST listing's titles, produced
+//   no visible window matching "Calc". Visible windows: "Calc"
+// while discarding the server's own explanation.
+
+const LISTED = {
+  json: { windows: [{ title: 'Calc', pid: 42, rect: [0, 0, 400, 600] }] },
+  text: '', images: [], isError: false,
+}
+
+await asyncTest('a genuine miss still names what IS there', async () => {
+  const { locator } = locatorWith({
+    'screen.windows': (calls) => (calls.length === 1 ? LISTED : {
+      // Wire-accurate: a real miss comes back isError:true WITH
+      // `available` (measured against the running server). So `available`
+      // — not isError — is the discriminator, and a guard that rejected
+      // isError first would misclassify every real miss as an unreadable
+      // listing.
+      json: { error: "no visible window matching 'Nope'", available: ['Calc'] },
+      text: '', images: [], isError: true,
+    }),
+  })
+  await assert.rejects(
+    () => locator.resolveRegion({ window: 'Nope' }),
+    (err) => err instanceof LocateError
+      && /no visible window matching "Nope"/.test(err.message)
+      && /Visible windows: "Calc"/.test(err.message))
+})
+
+await asyncTest('a failed lookup is not reported as absence', async () => {
+  // What clawtouch-mcp returns when the second listing raises: an `error`
+  // and NO `available`.
+  const { locator } = locatorWith({
+    'screen.windows': (calls) => (calls.length === 1 ? LISTED : {
+      json: {
+        error: 'macOS returned no window list at all (...gave NULL)',
+        platform: 'darwin',
+      },
+      text: '', images: [], isError: true,
+    }),
+  })
+  await assert.rejects(
+    () => locator.resolveRegion({ window: 'Calc' }),
+    (err) => err instanceof LocateError
+      // never the absurdity of naming the window in the list it is
+      // supposedly missing from
+      && !/no visible window matching/.test(err.message)
+      && /whether it is there is unknown/.test(err.message)
+      // the server's explanation is the actionable part; keep it
+      && /gave NULL/.test(err.message))
+})
+
+await asyncTest('an unparseable reply is treated the same way', async () => {
+  const { locator } = locatorWith({
+    'screen.windows': (calls) => (calls.length === 1 ? LISTED : {
+      json: undefined, text: 'boom', images: [], isError: true,
+    }),
+  })
+  await assert.rejects(
+    () => locator.resolveRegion({ window: 'Calc' }),
+    (err) => err instanceof LocateError
+      && !/no visible window matching/.test(err.message)
+      && /whether it is there is unknown/.test(err.message))
+})
+
+// ── a NAMED window is never answered by widening to the whole desktop ──
+
+await asyncTest('an unreadable list refuses a named window', async () => {
+  // Before the server stopped reporting an unreadable listing as an empty
+  // desktop, this arrived as "no visible window matching X" and was
+  // refused here. It has to keep being refused: capturing everything
+  // answers a different question, and the model then locates in UI the
+  // caller never mentioned.
+  const { locator, calls } = locatorWith({
+    'screen.windows': { json: { error: 'window server unreachable' },
+      text: '', images: [], isError: true },
+  })
+  await assert.rejects(
+    () => locator.resolveRegion({ window: 'Calc' }),
+    (err) => err instanceof LocateError
+      && /the window list could not be read/.test(err.message)
+      && /window server unreachable/.test(err.message))
+  assert.ok(!calls.some((c) => c.name === 'hid.screenshot'),
+    'nothing may be captured')
+})
+
+await asyncTest('an unreadable list still widens when NO window was named',
+  async () => {
+    // The unnamed case keeps its fallback — there, the whole desktop is
+    // still an answer to the question that was asked.
+    const { locator } = locatorWith({
+      'screen.windows': { json: { error: 'window server unreachable' },
+        text: '', images: [], isError: true },
+    })
+    const picked = await locator.resolveRegion({})
+    assert.equal(picked.source, 'full screen')
+    assert.equal(picked.region, undefined)
+  })
+
+// ── the number TESTING-macos.md tells a tester to expect ───────────────
+//
+// It drifted three times in one change, and a stale one is worse than
+// none: a tester who gets a different count reasonably concludes their
+// checkout or environment is wrong.
+//
+// Deliberately NOT a test(): a test only sees the tests declared above
+// it, so appending one below would leave the doc stale and the suite
+// green. This runs last and does not count itself, so the number in the
+// doc is exactly the number this script prints.
+{
+  const doc = readFileSync(
+    new URL('./TESTING-macos.md', import.meta.url), 'utf8')
+  const quoted = /Expected: `(\d+) passed, 0 failed`/.exec(doc)
+  // Snapshot the total BEFORE recording a failure, or the number this
+  // reports is one more than the number the doc should carry.
+  const total = passed + failed
+  if (!quoted || Number(quoted[1]) !== total) {
+    failed += 1
+    console.error('FAIL  TESTING-macos.md is out of date with this suite\n'
+      + `      doc says ${quoted ? quoted[1] : '(no count found)'}, `
+      + `this run has ${total}`)
+  }
+}
 
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)

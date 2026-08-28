@@ -7,6 +7,331 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-08-28 — the frontmost window is measured, not guessed
+
+### Fixed — macOS reported a `foreground` window it had never measured
+
+`screen.windows` on macOS flagged whichever window CGWindowList returned
+first. That order answers a real question — topmost first — but not the
+one the field claims: the list contains every layer-0 window an
+application owns, and the service windows sort ahead of the one the user
+is looking at. Measured on macOS 26: VS Code's first entry is a 1512x32
+strip, and the editor window it belongs to sorts second, so the flag was
+on the strip.
+
+That is worse here than it would be anywhere else. Occlusion and input
+state are deliberately not reported on macOS, which leaves `foreground`
+as the only window fact a caller can still act on — so it has to be one
+that was actually measured. Half of it now is:
+`NSWorkspace.frontmostApplication()` supplies a pid, and that is a real
+query — the flag can no longer land on some other application's window,
+which is what index 0 allowed. Which of that application's windows gets
+it stays a heuristic and says so in the code: `kCGWindowName` is
+documented as optional, so preferring an entry that has one is a tiebreak
+that separated the strips from the real window in every case measured,
+not a classification to rely on. Only on-screen entries are eligible,
+because `include_offscreen=True` switches to a listing whose order
+carries no front-most meaning and which spans other Spaces.
+
+Those are two different outcomes and they are not reported the same way.
+When the frontmost application simply has no eligible window, nothing is
+flagged and the field stays `false` — the OS was asked, and "none of
+these" is what it said. When the question could not be answered at all,
+the field is **dropped**, because `false` there would assert something
+nobody checked. Getting that boundary right needed the measurements
+above; guessing it would have produced exactly the class of bug this
+change exists to remove.
+
+That new "nothing is flagged" state needed the plugin to stop overselling
+its own fallback: `resolveRegion` still captures the first listed window
+when no window reported itself as foreground, which is the useful thing
+to do, but it no longer *calls* it the foreground window in the string it
+hands the agent — that would have re-told the exact guess the server
+stopped making, one layer up and unverifiable.
+
+Downstream this was not cosmetic: the plugin picks its capture region
+from the flag whenever no window is named, so an untargeted
+`computer_click` cropped to a 32-pixel strip — and on a crop that short
+the two calibration markers sit 4 px apart vertically, which surfaces as
+a calibration failure and reads like a HiDPI bug.
+
+`AppKit` adds no new requirement: pyobjc-framework-Quartz, which the
+`[window]` extra already installs, depends on pyobjc-framework-Cocoa.
+Windows is untouched — it has always read `GetForegroundWindow()`.
+
+### Fixed — three places that already had the answer and threw it away
+
+The `foreground` work above produced a trustworthy answer, and three
+paths went on ignoring it. They are one shape, so they are described
+together.
+
+**`find_window` reselected the service strip.** An untitled window is
+listed under its application's *name*, so VS Code's 1512x32 strip matches
+`find_window("Code")` **exactly** while the editor window the caller
+means matches only loosely — and exactness was ranked first, so the strip
+won. That is the same 32-pixel crop this release stopped producing,
+reached by the by-title road instead of the by-foreground one. The
+function's own docstring had promised "front-most window wins ties" all
+along; Windows sorts its list foreground-first, so it was true there by
+accident, and macOS returns CGWindowList order, where it was not. It is
+now implemented: front-most first, exactness second. The trade that
+accepts: asked for "Calc" while a foreground window matches loosely and a
+background one matches exactly, the foreground one wins — the answer a
+person would give to "the Calc window", and the alternative puts the
+strip back.
+
+**A raise that the re-read said had not happened was treated as success.**
+`ensureReachable` clicks a window *on purpose* to bring it forward, then
+re-reads it — and checked only that something came back, that it was the
+same window, and that it was not covered. A reply of `foreground: false`
+went through. That is a failed action: some applications swallow the
+first click as activation, so the next click, aimed at a target, does
+nothing. Only an explicit `false` refuses; an absent answer does not,
+for the same reason the occlusion guard lets an unmeasured window
+through.
+
+**`pid` did not prove identity.** The re-read asks by title, which is
+mutable and not unique, so the reply is checked against what was asked
+for — but two windows of the *same application* share a pid, and a
+sibling passed. Every coordinate after that pointed at the wrong window.
+A rectangle completes it: raising does not move a window, so a changed
+rect is a different one. Both fields are compared only when both sides
+carry them.
+
+Identity and raise-success now each have one function answering them
+(`sameWindow`, `raiseTookEffect`), because the pattern here was three
+partial answers in three places.
+
+### Fixed — the plugin's own test suite had stopped running on CI
+
+`node test.js` is the one Node job the public CI runs, and it runs it on a
+clean checkout with no `npm install` — which works only because the suite
+imports nothing outside `lib/`. A test added earlier in this change
+imported `index.js` to reach the `computer_windows` renderer, and
+`index.js` imports `@deepseek-ai/dsh-tools`; from then on the job could
+only have passed on a machine that happened to have that package lying
+around. Locally it did. On a clean tree it is `ERR_MODULE_NOT_FOUND`.
+
+The renderer moved to `lib/locator.js`, next to `unmeasuredNote`, whose
+rule it applies to the tool's output shape. That is where it belonged
+anyway — the two had drifted into saying different things about the same
+window — and it puts it below the dependency line, so the suite is
+dependency-free again. Verified against a checkout with no
+`node_modules`.
+
+Two smaller things in the same suite: the genuine-miss fixture claimed
+`isError: false` where the real server sends `isError: true` alongside
+`available`, which would have hidden a guard that keyed off the wrong
+field; and the check that pins the count quoted in `TESTING-macos.md` was
+itself a test, so it only saw the tests declared above it and a test
+appended below would have left the doc stale and the suite green.
+
+### Fixed — the plugin turned two kinds of "could not look" into answers
+
+Making the server honest about an unreadable window list exposed two
+places where the plugin turned that failure back into a measurement.
+
+**A lookup that failed was reported as absence.** `resolveRegion`'s
+titled query checked only whether a window came back, so an errored reply
+became `no visible window matching "X"` — and because the titles were
+then taken from the *previous* listing, the message could name the very
+window it claimed was not there: `no visible window matching "Calc".
+Visible windows: "Calc"`. The server's own explanation was dropped on the
+floor, so the agent was told to retry a lookup that could not succeed.
+The two are distinguishable — the server sends `available` only on a
+genuine miss — and that is now the test. The same rule was already
+applied a hundred lines further down, to the post-raise re-read.
+
+**A named window was answered by widening to the whole desktop.** When
+the listing could not be read at all, `resolveRegion` fell back to a
+full-screen capture even when the caller had named a window. Capturing
+everything answers a different question, and the model then locates in UI
+nobody mentioned. The fallback is right when no window was named and
+wrong when one was, so it now refuses in that case. This is older than
+the change above — but it used to be unreachable on the macOS path,
+because an unreadable listing arrived as "no visible window matching X"
+and was refused. Making the server truthful routed a new failure into it,
+so it had to be closed in the same breath.
+
+### Fixed — an unreachable window server was reported as an empty desktop
+
+`CGWindowListCopyWindowInfo` has two different empty answers and Apple
+separates them: no matching windows returns an empty array, while NULL
+means it could not answer at all. Apple documents two causes for the
+NULL, and they need different things from the operator — the caller is
+not running within a Quartz GUI session (started over SSH, or from a
+launchd daemon rather than a login session), or the window server is
+disabled. `or []` collapsed that into the first case, so `screen.windows`
+answered `{"windows": [], "count": 0}`, and a titled query answered "no
+visible window matching X" about an application that was running the
+whole time.
+
+It now raises `WindowInfoUnavailable`, the same way a missing pyobjc does,
+with a message that separates it from both neighbours — this is not "your
+platform is unsupported" and not "nothing is open". The second listing
+added above already treated NULL as failure; this is the same rule at the
+front door, where it matters more, because an empty list reads as an
+answer and an exception does not.
+
+Not reproduced on hardware: forcing a session without window-server access
+needs the machine's SSH configuration changed. The contract is Apple's.
+
+### Fixed — macOS answered `minimized: false` without ever asking
+
+`include_offscreen` exists to admit minimized windows — that is what its
+own description promises — and every macOS entry came back asserting
+`minimized: false`. The flag's whole purpose, denied by its own results.
+Windows measures this properly; macOS is never asked, so the key is now
+absent there, like the other answers this platform does not have.
+
+Deliberately not inferred from `kCGWindowIsOnscreen` either: off-screen on
+macOS also covers "on another Space", so reading it as "minimized" would
+be the same guess wearing a different hat.
+
+### Fixed — `foreground: false` was itself an unmeasured claim
+
+Fixing "reported a window it never measured" left the other half in
+place: every entry was pre-written `foreground: false`, so when the
+frontmost query could not be made at all, callers were handed a plain
+assertion — *this window is not in front* — where the truth was that
+nobody had looked. That is the same substitution the missing guards
+refuse to make, and it was inconsistent with them: `visible_fraction` and
+`enabled` say "not measured" by being **absent**.
+
+They now all say it the same way. `_frontmost_pid_darwin` answers three
+things instead of two — a pid, a real 0, or `None` for "could not ask" —
+and only the last drops the key. Which cases fall on which side is not
+guessable, so it was measured on macOS 26 rather than assumed: with the
+screen **locked** the query answers loginwindow's pid, not nil; an
+application whose windows are all minimised, or all on another Space,
+still answers with its own pid. Every one of those is a real answer, so
+`false` there is a true statement and stays. `None` is left for the query
+itself failing — which, since pyobjc-framework-Quartz *requires*
+pyobjc-framework-Cocoa, is close to unreachable in practice.
+
+The plugin follows: `foreground` is optional in the `computer_windows`
+schema, the `Boolean(w.foreground)` coercion that turned missing into
+`false` is gone, and `unmeasuredNote` names it alongside the others, so
+an answer computed without it says `which is frontmost unmeasured here`.
+
+One Windows-visible consequence, since it is a shared path:
+`GetForegroundWindow()` may legitimately return NULL in the instant a
+window is losing activation. Every entry is then `false` — a correct
+answer there, since Windows really is saying "no foreground window", not
+"could not look" — and the plugin's region source reads `first listed
+window "…" (nothing reported itself as foreground)` instead of
+`foreground window "…"`. The region and every HID action are unchanged;
+only the sentence differs.
+
+### Fixed — `include_offscreen=True` was still guessing which window is in front
+
+Restricting the pick to on-screen entries was not enough. That mode asks
+CGWindowList for everything, and dropping the off-screen entries from
+such a listing does not restore the z-order of the ones that remain — the
+order simply does not carry front-most meaning there, as the module's own
+comment already said. With two or more on-screen windows owned by the
+frontmost application, the flag was a coin flip.
+
+The pick now always comes from an on-screen listing, and that mode pays
+for a second small query to get one rather than reusing the list it
+already has. Matching is by window number, which is not a race-free story and should
+not be told as one: if the frontmost application opened a window between
+the two snapshots, the new id is not in the map, the walk continues, and
+an OLDER window of that application gets flagged. A narrow window, and
+this level was already declared best effort — but "can only fail to flag"
+would be the wrong thing for the next reader to believe, so the code says
+so where it happens. If that second query returns NULL (its documented failure, which is
+not the same as a successful empty listing) the field is dropped instead
+of leaving `false` behind. The pick also walks the frontmost
+application's windows in order and takes the first one the reported list
+actually contains, because the two listings are filtered differently: a
+zero-sized window can be worth ordering by and not worth reporting, and
+picking one id and hoping meant nothing got flagged while a good window
+sat right behind it. The default path issues no extra query: its listing
+is already on-screen-only.
+
+### Fixed — the out-of-range hint gave advice that cannot work
+
+A coordinate outside the addressable screen announces itself rather than
+being clicked silently (0.5.0), and the note told the caller to widen
+`--screen` to cover the whole virtual desktop. That is the right answer
+for a display to the right of or below the primary one, and no answer at
+all for a display to the left or above: `--screen` carries a size and no
+origin, so the addressable area always starts at `(0, 0)` and no `WxH`
+admits a negative coordinate. Measured on macOS with the second display
+moved to origin `(-1920, 0)`: `--screen 3432x1200` is the *size* of the
+whole virtual desktop, yet it still addresses only `[0,3432)x[0,1200)`,
+and every point on that display clamps to `x=0`. A caller following the
+hint does exactly what they already did, and the second identical failure
+reads as a broken tool rather than an unreachable point.
+
+The two faults are now answered independently, because a point can be
+both — negative on one axis and past an edge on the other — and
+suppressing either half leaves the caller stuck on it. The negative half
+also says to widen `--screen` afterwards: moving the display right of the
+primary turns the coordinate positive and lands it past bounds that were
+only ever the primary monitor, so rearranging alone would just move the
+failure. And it stops short of asserting *why* the coordinate is
+negative — a display placed left or above is the usual cause, not
+something this layer measured.
+
+A message change, not a behaviour change: the clamping, the refusals and
+what is sent are all what they were, and the same split is applied at the
+four places that said it (`_clamp_note`, and the plugin's click refusal,
+multi-target refusal and raise-point warning). Not macOS-specific — a
+Windows secondary monitor placed left of the primary has the same
+negative coordinates. Also not the only physical route to such a display:
+`relative: true` skips clamping altogether. That is deliberately not
+offered as a remedy, since a relative delta cannot be aimed at a point
+this layer located in absolute space.
+
+### Fixed — `computer_find` expressed "not found" as a pair of integers
+
+`found: false` came back with `x: -1, y: -1`, because the schema made the
+coordinates required and something had to fill them. A specific pair of
+integers standing for "no answer" is the same substitution this plugin
+refuses everywhere else; the fields are optional now and simply absent.
+
+### Documentation
+
+- `adapters/dsh/plugin/TESTING-macos.md` rewritten against a real macOS
+  26.5.2 pass (Retina primary + second display, HID hardware, vision key).
+  Corrections that mattered: the install line asked for `[screenshot]`,
+  which does not contain pyobjc, so the very next step of the same
+  checklist could not pass — it needs `[screenshot,window]`; the commands
+  used `python`, which a stock Mac does not have; `clawtouch-mcp
+  --list-ports` was never a flag; and the document promised that a
+  covered window "says so and stops", which macOS cannot do — the
+  occlusion guard is gated on a number this platform never supplies, so
+  the window is captured and clicked as if it were on top, with only the
+  `(… unmeasured here)` suffix to say so.
+- Added what a mac tester actually trips over: Spaces (the window list
+  covers the active Space only, so a full-screen editor hides everything
+  else and the honest error reads like the app is closed), localised
+  window names (`--window Calculator` finds nothing on a Chinese-language
+  Mac), the hardware-without-a-key tier (`probe.js --move-test`), what a
+  30-second failure means, and the second-display refusal.
+- The out-of-range hint also blamed the wrong thing when `--screen` was
+  given explicitly: it said the value "defaults to the PRIMARY monitor",
+  which is false once an operator has passed one, and a hint that is
+  wrong about the cause is a hint that stops being read. It now names
+  whichever the bounds actually came from.
+- Both READMEs asked for `[screenshot]` where macOS also needs
+  `[window]`. The plugin's README is the one that matters most — it ships
+  to npm, `TESTING-macos.md` does not — and the plugin crops to a window
+  before it looks at anything, so without pyobjc a call that names a
+  window is refused and one that does not widens to the whole desktop.
+- `server.py`: the convergence comment claimed accuracy is independent of
+  screen size. Measured on a two-display Mac, the same window and targets
+  settle 1 px out under `--screen 1512x982` and 4 px out under
+  `--screen 3432x1200`, 6 interleaved runs of 6. Both are legitimate early
+  exits inside `MOVE_TOLERANCE`, so the algorithm is unchanged and the
+  note now records the observation without claiming the declared size
+  caused it — the starting cursor and the carried-over gain estimate were
+  not controlled. It does point at the one screen-size-dependent step in
+  that path, for whoever chases it.
+
+
 ## [0.5.0] — 2026-08-24 — window geometry · calibration markers · pointer-gain convergence · the dsh plugin
 
 ### Added — windows are brought forward by clicking them, not by an API
@@ -1903,7 +2228,8 @@ under the working name `openclaw-mcp` but were never published. The
   for this OSS release.
 - No multi-touch HID profile yet — only mouse and keyboard.
 
-[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.6...v0.5.0
 [0.4.6]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.3...v0.4.5

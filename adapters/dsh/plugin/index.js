@@ -48,6 +48,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { McpStdioClient } from './lib/mcp-client.js'
 import {
   Locator, describeResult, LocateError, TargetNotFound,
+  renderWindowLine,
 } from './lib/locator.js'
 
 export const name = 'clawtouch'
@@ -161,8 +162,10 @@ const WINDOW_PARAM = {
   type: 'string',
   description:
     'Case-insensitive part of the target window title. Omit to use the '
-    + 'window currently in front. Cropping to one window is what keeps '
-    + 'the location accurate on a large or multi-monitor desktop — call '
+    + 'window currently in front — or, where the OS could not be asked '
+    + 'which one that is, the first one listed, which the answer says so '
+    + 'in as many words. Cropping to one window is what keeps the '
+    + 'location accurate on a large or multi-monitor desktop — call '
     + 'computer_windows first if unsure of the title.',
 }
 
@@ -310,8 +313,14 @@ function registerTools(ctx, locator, config, log) {
         properties: {
           found: { type: 'boolean', required: true },
           summary: { type: 'string', required: true },
-          x: { type: 'integer', required: true },
-          y: { type: 'integer', required: true },
+          // Optional, because a coordinate is exactly what this
+          // tool does NOT have when it did not find anything.
+          // Required forced a stand-in, and the stand-in was
+          // (-1, -1) — a pair of specific integers standing for
+          // "no answer", which is the same substitution this
+          // plugin refuses everywhere else.
+          x: { type: 'integer' },
+          y: { type: 'integer' },
         },
       },
       render: (_args, value) => [{ type: 'text', text: value.summary }],
@@ -326,7 +335,8 @@ function registerTools(ctx, locator, config, log) {
         // "Not on screen" is this tool's whole purpose — an answer, not a
         // failure. Only a caller about to click has to treat it as one.
         if (err instanceof TargetNotFound) {
-          return { found: false, summary: err.message, x: -1, y: -1 }
+          // No x/y at all: absent is the answer, not (-1, -1).
+          return { found: false, summary: err.message }
         }
         throw err
       }
@@ -359,12 +369,17 @@ function registerTools(ctx, locator, config, log) {
               additionalProperties: false,
               properties: {
                 title: { type: 'string', required: true },
-                foreground: { type: 'boolean', required: true },
                 width: { type: 'integer', required: true },
                 height: { type: 'integer', required: true },
-                // Absent where the platform cannot measure it — see the
-                // support table in the README. Absent means "not
-                // measured", never "measured and fine".
+                // Every field below is reported ONLY where it was
+                // measured — see the support table in the README. Absent
+                // means "not measured", never "measured and fine".
+                //
+                // `foreground` joined them: it is a real query on both
+                // platforms, but a query can fail, and answering False
+                // for "nobody was asked" states that this window is not
+                // in front, which is not what was found out.
+                foreground: { type: 'boolean' },
                 visible_percent: { type: 'integer' },
                 accepts_input: { type: 'boolean' },
               },
@@ -374,33 +389,12 @@ function registerTools(ctx, locator, config, log) {
       },
       render: (_args, value) => [{
         type: 'text',
+        // One line per window, each naming the answers it does NOT
+        // carry — see renderWindowLine in lib/locator.js, which is where
+        // it lives so the tests can reach it without this file's
+        // `@deepseek-ai/dsh-tools` import.
         text: value.windows.length
-          ? value.windows.map((w) => {
-            // Each measurement is reported on its own. They do not always
-            // go missing together: a minimised window on Windows has its
-            // input state but no occlusion figure, and saying "both NOT
-            // measured" there would be its own small lie.
-            const unmeasured = []
-            if (typeof w.accepts_input !== 'boolean') {
-              unmeasured.push('input state')
-            }
-            if (typeof w.visible_percent !== 'number') {
-              unmeasured.push('occlusion')
-            }
-            return `${w.foreground ? '* ' : '  '}`
-              + `${w.title}  (${w.width}x${w.height})`
-              + (w.accepts_input === false
-                ? '  — NOT accepting input, a modal dialog is over it'
-                : '')
-              + (typeof w.visible_percent === 'number'
-                && w.visible_percent < 100
-                ? `  — only ${w.visible_percent}% visible, something is in `
-                  + 'front of it'
-                : '')
-              + (unmeasured.length
-                ? `  — ${unmeasured.join(' and ')} NOT measured here`
-                : '')
-          }).join('\n')
+          ? value.windows.map(renderWindowLine).join('\n')
           : 'no visible windows',
       }],
     },
@@ -410,10 +404,13 @@ function registerTools(ctx, locator, config, log) {
         windows: wins.map((w) => {
           const out = {
             title: String(w.title ?? ''),
-            foreground: Boolean(w.foreground),
             width: w.rect[2] - w.rect[0],
             height: w.rect[3] - w.rect[1],
           }
+          // NOT `Boolean(w.foreground)`: that turned a missing answer
+          // into `false`, which is the exact substitution this whole
+          // tool exists to avoid.
+          if (typeof w.foreground === 'boolean') out.foreground = w.foreground
           // Both fields below are reported ONLY where they were measured.
           // Where they were not, they are left out: filling in 100 / true
           // would hand the agent a guard result that nothing ever checked,

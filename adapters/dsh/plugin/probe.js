@@ -61,7 +61,10 @@ const config = {
 if (flag('mock')) config.args.push('--mock')
 // Multi-monitor: clawtouch-mcp clamps clicks to --screen, which defaults
 // to the PRIMARY display, so a window on a second screen is unreachable
-// until the whole virtual desktop is declared.
+// until the whole virtual desktop is declared. Only helps for a display
+// right of or below the primary — --screen has a size and no origin, so
+// one placed left or above sits behind negative coordinates no WxH can
+// reach, and the out-of-range hint says so rather than sending you here.
 if (opt('screen')) config.args.push('--screen', opt('screen'))
 
 const log = (level, msg) => {

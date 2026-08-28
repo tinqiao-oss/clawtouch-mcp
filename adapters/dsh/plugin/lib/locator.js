@@ -122,6 +122,22 @@ export class Locator {
     try {
       wins = await this.windows()
     } catch (err) {
+      // A NAMED window cannot be honoured by widening. Capturing the whole
+      // desktop answers a different question than the one asked, and the
+      // model then locates in UI the caller never mentioned — a confident
+      // click somewhere else. Only the unnamed case has a fallback that
+      // still means what the caller wanted.
+      //
+      // This became reachable in a new way when the server stopped
+      // reporting an unreadable window list as an empty desktop: before
+      // that, a macOS NULL listing arrived here as "no visible window
+      // matching X" and this path refused. It has to keep refusing.
+      if (window) {
+        throw new LocateError(
+          `"${window}" was asked for, but the window list could not be read `
+          + '— so there is no way to find it, and no way to know it is not '
+          + `there; nothing was captured: ${err.message}`)
+      }
       this.log('warn', `window list unavailable (${err.message}); `
         + 'falling back to a full-screen capture')
       return { region: undefined, source: 'full screen' }
@@ -130,8 +146,22 @@ export class Locator {
       const res = await this.mcp.callTool('screen.windows', { title: window })
       const match = res.json?.window
       if (!match) {
-        const titles = (res.json?.available ?? wins.map((w) => w.title))
-          .slice(0, 20)
+        // A lookup that FAILED is not an answer of "not there", and the
+        // two are told apart by `available`: the server sends that list
+        // only on a genuine miss. Without it this reported an unreadable
+        // listing as a measured absence — and, because it fell back to
+        // the FIRST listing's titles, produced answers of the form
+        //   no visible window matching "Calc". Visible windows: "Calc"
+        // while throwing away the server's actual explanation. The same
+        // rule is already applied to the post-raise re-read below.
+        const available = res.json?.available
+        if (!Array.isArray(available)) {
+          throw new LocateError(
+            `could not look for a window matching "${window}" — the window `
+            + 'listing failed, so whether it is there is unknown: '
+            + `${res.json?.error ?? res.text.slice(0, 200)}`)
+        }
+        const titles = available.slice(0, 20)
         throw new LocateError(
           `no visible window matching "${window}". Visible windows: `
           + `${titles.map((t) => JSON.stringify(t)).join(', ') || '(none)'}`)
@@ -142,12 +172,23 @@ export class Locator {
         source: `window "${ready.title}"${unmeasuredNote(ready)}`,
       }
     }
-    const front = wins.find((w) => w.foreground) ?? wins[0]
+    // `foreground` can be absent from every window: macOS answers it from
+    // a real query now, and a query that could not be made flags nothing
+    // rather than guessing. Falling back to the first window is still the
+    // most useful thing to do — but it must not be REPORTED as the
+    // foreground one, or the plugin re-tells exactly the guess the server
+    // stopped making, in a string the agent has no way to check.
+    const flagged = wins.find((w) => w.foreground)
+    const front = flagged ?? wins[0]
     if (!front) return { region: undefined, source: 'full screen' }
     const ready = await this.ensureReachable(front)
+    const what = flagged
+      ? `foreground window "${ready.title}"`
+      : `first listed window "${ready.title}" (nothing reported itself as `
+        + 'foreground)'
     return {
       region: ready.rect,
-      source: `foreground window "${ready.title}"${unmeasuredNote(ready)}`,
+      source: `${what}${unmeasuredNote(ready)}`,
     }
   }
 
@@ -197,9 +238,8 @@ export class Locator {
       // needed no raise, and the cause is not guessable from the outcome.
       this.log('warn',
         `"${win.title}" has a raise point at (${rx}, ${ry}), outside the `
-        + `declared screen (${bounds.width}x${bounds.height}) `
-        + '— start clawtouch-mcp with --screen covering the whole virtual '
-        + 'desktop to reach it. Carrying on without raising.')
+        + `declared screen (${bounds.width}x${bounds.height}). `
+        + `${outOfBoundsFix(rx, ry, bounds)} Carrying on without raising.`)
       assertOnTop(win)
       return win
     }
@@ -233,14 +273,26 @@ export class Locator {
     // changing file) another window can answer to the old title, and
     // everything after this would be aimed at that one instead. So the
     // identity is checked rather than assumed.
-    if (typeof win.pid === 'number' && typeof fresh.pid === 'number'
-        && fresh.pid !== win.pid) {
+    if (!sameWindow(win, fresh)) {
       throw new LocateError(
         `"${win.title}" was clicked to bring it forward, but reading it back `
-        + `returned a different window (pid ${fresh.pid}, not ${win.pid}) `
-        + '— that title now matches more than one window, so which one is '
-        + 'in front cannot be established. List the windows again and name '
-        + 'it more precisely.')
+        + `returned a different window (pid ${fresh.pid}, rect `
+        + `${JSON.stringify(fresh.rect)}, not pid ${win.pid} rect `
+        + `${JSON.stringify(win.rect)}) — that title now matches more than `
+        + 'one window, so which one is in front cannot be established. List '
+        + 'the windows again and name it more precisely.')
+    }
+    // A2: we clicked it ON PURPOSE. A re-read that says it is still not in
+    // front is a failed action, not a detail — and the next click may be
+    // swallowed as activation instead of doing what it was aimed at.
+    if (!raiseTookEffect(fresh)) {
+      throw new LocateError(
+        `"${win.title}" was clicked to bring it to the front, and reading it `
+        + 'back says it is still not the foreground window — the raise did '
+        + 'not take. A click aimed at it now may be swallowed as activation '
+        + 'instead of doing what it was aimed at. Something is holding focus '
+        + '(a modal elsewhere, or the OS refusing the change); deal with '
+        + 'that first.')
     }
     assertOnTop(fresh)
     return fresh
@@ -409,9 +461,8 @@ export class Locator {
       throw new LocateError(
         `(${x}, ${y}) is outside the ${bounds.width}x${bounds.height} screen `
         + 'clawtouch-mcp can address, so the click would land somewhere '
-        + `else entirely; nothing was sent. Because ${why}, pass `
-        + '--screen WxH covering the whole virtual desktop to reach this '
-        + 'window.')
+        + 'else entirely; nothing was sent. '
+        + outOfBoundsFix(x, y, bounds, why))
     }
     const res = await this.mcp.callTool('hid.click', {
       x, y,
@@ -461,8 +512,7 @@ export class Locator {
         throw new LocateError(
           `${JSON.stringify(r.target)} maps to (${x}, ${y}), outside the `
           + `${bounds.width}x${bounds.height} screen clawtouch-mcp can `
-          + 'address; nothing was sent. Pass --screen WxH covering the whole '
-          + 'virtual desktop to reach this window.')
+          + `address; nothing was sent. ${outOfBoundsFix(x, y, bounds)}`)
       }
     }
     const res = await this.mcp.callTool('hid.batch', {
@@ -513,15 +563,156 @@ export class Locator {
  * run is precisely the thing worth telling the agent about.
  */
 export function unmeasuredNote(win) {
-  // Both guards are named separately, because they do not always go
-  // missing together: macOS reports neither, a minimised window on Windows
-  // has its input state but no occlusion figure, and a rectangle too small
-  // to sample has the input state but no occlusion either. Reporting only
-  // one of them would leave the other silently unmeasured.
+  // Each is named separately, because they do not always go missing
+  // together: macOS reports no occlusion and no input state, a minimised
+  // window on Windows has its input state but no occlusion figure, and a
+  // rectangle too small to sample has the input state but no occlusion
+  // either. Reporting only one would leave the others silently unmeasured.
+  //
+  // `foreground` is here for the case where the OS could not be asked at
+  // all — normally it IS measured and present, which is why its absence
+  // is worth saying out loud rather than papering over with false.
   const missing = []
   if (typeof win.enabled !== 'boolean') missing.push('input state')
   if (typeof win.visible_fraction !== 'number') missing.push('occlusion')
+  if (typeof win.foreground !== 'boolean') missing.push('which is frontmost')
   return missing.length ? ` (${missing.join(' and ')} unmeasured here)` : ''
+}
+
+/**
+ * What to actually do about a point outside the addressable screen.
+ *
+ * A point can be out of range in two independent ways, and only one of
+ * them is fixed by widening `--screen`. Past the right or bottom edge,
+ * that is the whole answer. Below zero it is no answer at all: `--screen`
+ * carries a size and no origin, so the addressable area always starts at
+ * (0, 0) and no `WxH` admits a negative coordinate. Measured on macOS
+ * with the second display moved to origin (-1920, 0): `--screen
+ * 3432x1200` — the size of the whole virtual desktop — still addresses
+ * only [0,3432)x[0,1200), and every point on that display clamps to
+ * x=0. Telling that caller to widen `--screen` sends them to redo what
+ * they already did, and the second identical failure reads as a broken
+ * tool rather than an unreachable point.
+ *
+ * A point can be BOTH (negative x, past the bottom edge), so the two
+ * halves are emitted independently rather than as an either/or — and
+ * the negative half also has to mention widening, because moving the
+ * display right of the primary puts it past the old bounds instead.
+ *
+ * Deliberately not offered as a remedy: `hid.click`/`hid.move` with
+ * `relative: true` skip clamping entirely and could physically reach
+ * that display. It is not a fix for anyone here — a relative delta
+ * cannot be aimed at a point this layer located in absolute space.
+ */
+export function outOfBoundsFix(x, y, bounds, why) {
+  const parts = []
+  if (x < 0 || y < 0) {
+    parts.push('A negative coordinate is out of range whatever --screen '
+      + 'says: the flag carries a size and no origin, so the addressable '
+      + 'area always starts at (0, 0). If this is a display placed left '
+      + 'of or above the primary one, move it right of or below in the OS '
+      + 'display settings — and give --screen a size that includes where '
+      + 'it lands.')
+  }
+  // Without bounds we cannot tell a far-edge overflow from anything
+  // else, so the generic advice is a fallback for having nothing
+  // else to say — never an addition to the negative half, which
+  // would re-attach the advice that cannot work.
+  const pastEdge = bounds
+    ? (x >= bounds.width || y >= bounds.height)
+    : parts.length === 0
+  if (pastEdge) {
+    parts.push(why
+      ? `Because ${why}, pass --screen WxH covering the whole virtual `
+        + 'desktop to reach it.'
+      : 'Pass --screen WxH covering the whole virtual desktop to reach it.')
+  }
+  return parts.join(' ')
+}
+
+/**
+ * One agent-facing line for a window in `computer_windows`' answer.
+ *
+ * Lives here, not in index.js, for a mundane but load-bearing reason:
+ * index.js imports `@deepseek-ai/dsh-tools`, which the published plugin
+ * does not depend on and CI does not install, so anything test.js needs
+ * to reach has to sit below that import. It is also the right side of the
+ * line conceptually — this is the same "say which answers you do not
+ * have" rule as `unmeasuredNote`, applied to the tool's OUTPUT shape
+ * (`visible_percent` / `accepts_input`) rather than the raw window dict
+ * (`visible_fraction` / `enabled`).
+ *
+ * The star can only ever say YES. Everything it cannot say — including a
+ * `foreground` that is missing rather than false — has to be in the note,
+ * or "not in front" and "nobody asked" render identically.
+ */
+/**
+ * Is the window that came back the SAME one we were working with?
+ *
+ * One place for this question, because it kept being answered partly.
+ * The re-read asks by TITLE — mutable, and not unique — so the reply can
+ * be a different window that happens to answer to it. `pid` alone was
+ * the first answer and it is not enough: two windows of the SAME
+ * application share a pid, so a sibling passed while the screenshot and
+ * every click after it went somewhere else.
+ *
+ * `rect` completes it. Raising a window does not move it, so a rectangle
+ * that changed is a different window (or one that moved under us, which
+ * is equally disqualifying for a point computed against the old one).
+ * Both are compared only when both sides carry them — an absent field is
+ * not evidence either way, here as everywhere else in this codebase.
+ */
+export function sameWindow(before, after) {
+  if (typeof before.pid === 'number' && typeof after.pid === 'number'
+      && before.pid !== after.pid) {
+    return false
+  }
+  const a = before.rect
+  const b = after.rect
+  if (Array.isArray(a) && Array.isArray(b)
+      && a.length === 4 && b.length === 4) {
+    return a.every((v, i) => v === b[i])
+  }
+  return true
+}
+
+/**
+ * Did the raise we performed actually take?
+ *
+ * The other half of the same mistake: we had the answer and did not read
+ * it. We clicked the window ON PURPOSE to bring it forward, so a re-read
+ * that says `foreground: false` is a failed action and has to be
+ * reported — the README promises exactly that. Some applications swallow
+ * the first click as activation, so "clicked, still not in front" is the
+ * shape of a target click that will do nothing.
+ *
+ * `false` only. An ABSENT `foreground` means the platform could not be
+ * asked, and refusing on that would ground the plugin wherever the
+ * question is unanswerable — the same reason the occlusion guard lets an
+ * unmeasured window through. Unknown is carried in the note, not in a
+ * refusal.
+ */
+export function raiseTookEffect(fresh) {
+  return fresh.foreground !== false
+}
+
+export function renderWindowLine(w) {
+  const unmeasured = []
+  if (typeof w.accepts_input !== 'boolean') unmeasured.push('input state')
+  if (typeof w.visible_percent !== 'number') unmeasured.push('occlusion')
+  if (typeof w.foreground !== 'boolean') unmeasured.push('which is frontmost')
+  const listed = unmeasured.length > 2
+    ? `${unmeasured.slice(0, -1).join(', ')} and `
+      + `${unmeasured[unmeasured.length - 1]}`
+    : unmeasured.join(' and ')
+  return `${w.foreground ? '* ' : '  '}${w.title}  (${w.width}x${w.height})`
+    + (w.accepts_input === false
+      ? '  — NOT accepting input, a modal dialog is over it'
+      : '')
+    + (typeof w.visible_percent === 'number' && w.visible_percent < 100
+      ? `  — only ${w.visible_percent}% visible, something is in front of it`
+      : '')
+    + (unmeasured.length ? `  — ${listed} NOT measured here` : '')
 }
 
 export function assertOnTop(win) {
