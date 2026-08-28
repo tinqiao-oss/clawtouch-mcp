@@ -1,3 +1,5 @@
+**English** | [简体中文](README.zh-CN.md)
+
 # dsh-clawtouch
 
 > **Tell it what to click. It clicks it — with a real mouse.**
@@ -165,9 +167,12 @@ range can match an installed `0.1.x-rc.y`, so declaring it would make the
 install fail against the very version that works. Any dsh that can load
 plugins already provides it.
 
-You also need the hardware: a Raspberry Pi Pico 2 running the open
-[ClawTouch HID firmware](https://github.com/tinqiao-oss/clawtouch-hid), or
-any turnkey ClawTouch device.
+You also need the hardware: a Raspberry Pi Pico 2 (about ¥55 / $8) running
+the open [ClawTouch HID firmware](https://github.com/tinqiao-oss/clawtouch-hid),
+or any turnkey [ClawTouch device](https://clawtouch.cn). There is no
+software-only mode — synthetic events are the thing this project exists to
+avoid, and they carry requirements (a process on the target machine, in the
+same session, holding focus) that a physical HID device simply does not have.
 
 Verify before involving an agent:
 
