@@ -192,6 +192,118 @@ test('non-JSON prose fails loudly', () => {
     VisionError)
 })
 
+// ── the one repaired malformation (qwen-vl-max, measured 2026-09-13) ──
+//
+// 15.8% of qwen-vl-max's single-target replies left "markers" open and ran
+// straight into "target". The content was right every time; only the
+// brace was missing. These pin the repair AND its limits — the negative
+// cases matter more, because a repair that generalises is a guesser.
+
+test('qwen\'s unclosed markers object is repaired — the reply seen in the wild', () => {
+  // Verbatim from a benchmark run on the Windows Calculator.
+  const out = parseAnswer('{"markers":{"tl":[14,15],"br":[298,526],'
+    + '"target":{"found":true,"point":[43,350],"label":"数字键 7",'
+    + '"confidence":0.99}}')
+  assert.deepEqual(out.markers.tl, [14, 15])
+  assert.deepEqual(out.markers.br, [298, 526])
+  assert.equal(out.target.found, true)
+  assert.deepEqual(out.target.point, [43, 350])
+  assert.equal(out.target.confidence, 0.99)
+  assert.equal(out.repaired, true)   // said out loud, so the rate stays countable
+})
+
+test('the repair covers the batch shape and either marker order', () => {
+  const out = parseAnswer('{"markers":{"br":[3,4],"tl":[1,2],'
+    + '"targets":[{"n":1,"found":true,"point":[5,6]},{"n":2,"found":false}]}', 2)
+  assert.deepEqual(out.markers.tl, [1, 2])
+  assert.deepEqual(out.markers.br, [3, 4])
+  assert.deepEqual(out.targets[0].point, [5, 6])
+  assert.equal(out.targets[1].found, false)
+})
+
+test('a fenced reply is repaired; one wrapped in commentary is not', () => {
+  const shape = '{"markers":{"tl":[1,2],"br":[3,4],'
+    + '"target":{"found":true,"point":[7,8]}}'
+  const out = parseAnswer('```json\n' + shape + '\n```')
+  assert.deepEqual(out.target.point, [7, 8])
+  assert.equal(out.repaired, true)
+  // Only the whole reply is ever repaired: extracting it from prose means
+  // cutting text away, and what gets cut can be a second answer.
+  assert.throws(() => parseAnswer('Here you go:\n' + shape + '\nHope that helps.'),
+    VisionError)
+})
+
+test('escaped quotes inside a label are not mistaken for keys', () => {
+  const out = parseAnswer('{"markers":{"tl":[1,2],"br":[3,4],"target":{"found":true,'
+    + '"point":[5,6],"label":"say \\"target\\": now"}}')
+  assert.deepEqual(out.target.point, [5, 6])
+  assert.equal(out.target.label, 'say "target": now')
+  assert.equal(out.repaired, true)
+})
+
+test('other malformations still fail loudly — the repair does not generalise', () => {
+  const T = '"target":{"found":true,"point":[5,6]}'
+  const broken = [
+    // exactly ONE brace missing, but not the markers one: the outer brace.
+    // A "close any one brace" repair would accept this; ours must not.
+    `{"markers":{"tl":[1,2],"br":[3,4]},${T}`,
+    // one bracket missing inside the target's point
+    '{"markers":{"tl":[1,2],"br":[3,4]},"target":{"found":true,"point":[5,6}}',
+    // truncated mid-answer: nothing to close deterministically
+    '{"markers":{"tl":[1,2],"br":[3,4]},"target":{"found":true,"point":[5,',
+    // the known shape PLUS another missing brace: one brace does not fix it
+    `{"markers":{"tl":[1,2],"br":[3,4],${T}`,
+    // markers written as {x,y} objects and left open: not the measured shape
+    `{"markers":{"tl":{"x":1,"y":2},"br":{"x":3,"y":4},${T}}`,
+    // markers not exactly tl + br: renamed, duplicated, or with an extra key
+    `{"markers":{"aa":[1,2],"bb":[3,4],${T}}`,
+    `{"markers":{"tl":[1,2],"tl":[3,4],${T}}`,
+    `{"markers":{"tl":[1,2],"br":[3,4],"mid":[9,9],${T}}`,
+    `{"markers":{"tl":[1,2],"br":[3,4],"scale":1.0,${T}}`,
+    // a marker that is not exactly a pair of numbers
+    `{"markers":{"tl":["a","b"],"br":[3,4],${T}}`,
+    `{"markers":{"tl":[1,2,999],"br":[3,4],${T}}`,
+    // markers not the reply's first key: a sibling before it, or nested
+    `{"note":"x","markers":{"tl":[1,2],"br":[3,4],${T}}`,
+    `{"info":{"markers":{"tl":[1,2],"br":[3,4],${T}}}`,
+    // a well-formed reply whose NESTED object has the known shape: the repair
+    // must not reach in there (unanchored, it would click [5,6] here)
+    '{"markers":{"tl":[1,2],"br":[3,4]},"info":{"markers":{"tl":[1,2],'
+      + '"br":[3,4],"target":{"found":false}},"target":{"found":true,"point":[5,6]}}',
+    // a second answer, however it is spelled — JSON.parse keeps the LAST
+    // duplicate, so each of these would turn "not found" into a click:
+    `{"markers":{"tl":[1,2],"br":[3,4],"target":{"found":false},${T}}`,
+    `{"markers":{"tl":[1,2],"br":[3,4],"target":{"found":false},`
+      + '"t\\u0061rget":{"found":true,"point":[5,6]}}',
+    `{"markers":{"tl":[1,2],"br":[3,4],${T},`
+      + '"targets":[{"n":1,"found":true,"point":[5,6]}]}',
+    // ...or hidden behind the last '}', where a brace slice would drop it
+    `{"markers":{"tl":[1,2],"br":[3,4],${T}},"target":null`,
+    // duplicate fields inside the one answer: which "found", which "point"?
+    '{"markers":{"tl":[1,2],"br":[3,4],'
+      + '"target":{"found":false,"point":[5,6],"found":true}}',
+    '{"markers":{"tl":[1,2],"br":[3,4],'
+      + '"target":{"found":true,"point":[5,6],"point":[9,10]}}',
+    // the known shape, but inside commentary: not the whole reply
+    `Sure: {"markers":{"tl":[1,2],"br":[3,4],${T}}`,
+  ]
+  for (const reply of broken) {
+    assert.throws(() => parseAnswer(reply), VisionError, reply)
+  }
+})
+
+test('a well-formed reply is never touched by the repair', () => {
+  const plain = parseAnswer('{"markers":{"tl":[1,2],"br":[3,4]},'
+    + '"target":{"found":true,"point":[5,6]}}')
+  assert.equal(plain.repaired, false)
+  // "target" nested inside markers is legal JSON: it parses as written, so
+  // the top-level target is simply absent — no brace is moved to "fix" it.
+  const out = parseAnswer('{"markers":{"tl":[1,2],"br":[3,4],"target":[5,6]}}')
+  assert.equal(out.target.found, false)
+  assert.equal(out.repaired, false)
+  assert.deepEqual(out.markers.target, [5, 6])   // read where it was written
+})
+
 // ── guards added after an adversarial review (2026-08-23) ──
 //
 // Every one of these was a path that produced a CONFIDENT WRONG CLICK
