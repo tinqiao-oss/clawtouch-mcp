@@ -7,6 +7,46 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — dsh plugin (`dsh-clawtouch` 0.1.1): one click in six failed on a missing brace
+
+With `qwen-vl-max` as the eye, a single-target `computer_click` regularly
+came back as
+
+    {"markers":{"tl":[14,15],"br":[298,526],"target":{"found":true,"point":[43,350],…}}
+
+— the `markers` object never closed. The plugin parses strictly on
+purpose, so each of these was a failed click. Measured over 165
+single-target calls on four ordinary Windows windows: **15.8%** of replies
+had exactly this shape (**44%** on a small Calculator window). The content
+was right every time — with the brace restored, all of those points landed
+inside their targets — so the failure was pure loss. Batch replies
+(`computer_click_sequence`) almost never do it.
+
+`parseAnswer` now repairs that one shape and nothing else. Only the whole
+reply is repaired (a leading fence is fine, prose around it is not — cutting
+prose away can also cut away a second answer). It must open with `markers`,
+holding exactly `tl` and `br`, once each, each a pair of numbers, running
+straight into `"target"`/`"targets"`. After the one brace is added the
+result must parse, carry exactly one of `target`/`targets` at the top, and
+repeat no key in any object: `JSON.parse` silently keeps the last duplicate,
+which would let the repair choose between two answers (`"found":false` then
+`"found":true`, or a second key spelled `"target"`). The repair moves no
+value, so it cannot make the model point anywhere it did not. Everything
+else malformed still fails loudly, and every shape two review rounds found
+is a negative test; removing any one guard fails the suite. When the repair
+fires, `parseAnswer` returns `repaired: true` and the locator logs it, so
+the rate stays checkable against real traffic.
+
+Re-measured with the final repair: it fired on 25 of 189 single-target
+calls and all 25 landed inside their targets; single-target hit rate went
+from 80.6% to 95.2%, wrong clicks were 4.8% against 3.6% before (8 vs 6 of
+165 — run-to-run noise; the repair moves no coordinate), and every one of
+24 absent-target probes was still refused. Two "one-line" alternatives were
+measured first and rejected: a numeric JSON example in the prompt made the
+model copy it (wrong clicks rose from 3.6% to 18%), and
+`response_format: json_object` turned the broken replies into "not found"
+instead of answers.
+
 ## [0.5.1] — 2026-08-28 — the frontmost window is measured, not guessed
 
 ### Fixed — macOS reported a `foreground` window it had never measured

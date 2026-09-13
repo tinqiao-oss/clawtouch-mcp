@@ -184,35 +184,143 @@ function collectText(content) {
 }
 
 /**
+ * The one malformation this parser repairs, and nothing like it.
+ *
+ * qwen-vl-max, asked for a single target, regularly leaves the "markers"
+ * object open and carries straight on into "target":
+ *
+ *   {"markers":{"tl":[14,15],"br":[298,526],"target":{"found":true,...}}
+ *
+ * Measured 2026-09-13 over 165 single-target calls on four ordinary
+ * windows: 26 replies (15.8%) had exactly this shape — 44% on a small
+ * Calculator window — and every one of them failed a click whose content
+ * was right: with the brace restored, all 26 points landed inside their
+ * targets. Batch replies almost never do it.
+ *
+ * What the repair may and may not do. It adds one brace and moves no
+ * value, so it can make a reply usable but can never make the model point
+ * somewhere it did not. It is not the only possible completion: putting
+ * the brace at the very end instead would nest "target" inside "markers"
+ * and read as "not found". That reading throws away an answer the model
+ * actually gave and is not a shape the prompt asks for, so the requested
+ * shape wins — the 26 measured cases all pointed inside their targets.
+ *
+ * The match is kept as narrow as the evidence, because anything wider is
+ * a guesser. Only the WHOLE reply is repaired (a leading ```json fence is
+ * fine; prose around it is not — cutting prose away could also cut away a
+ * second answer). The reply must open with "markers"; that object must hold
+ * exactly "tl" and "br", once each, each a pair of numbers, and run straight
+ * into "target"/"targets". After the brace is added the result must parse,
+ * carry exactly one of "target"/"targets" at the top, and repeat no key in
+ * any object — because JSON.parse silently keeps the LAST duplicate, which
+ * would let the repair choose between two answers (`"found":false` then
+ * `"found":true`, or a second key spelled `"target"`). Everything else
+ * malformed fails loudly, exactly as before. When the repair does fire the
+ * result says so (`repaired: true`) and the locator logs it, so the rate
+ * stays checkable against real traffic.
+ */
+const PAIR = '\\[\\s*-?\\d+(?:\\.\\d+)?\\s*,\\s*-?\\d+(?:\\.\\d+)?\\s*\\]'
+const UNCLOSED_MARKERS = new RegExp(
+  '^(\\s*\\{\\s*"markers"\\s*:\\s*\\{'
+  + `\\s*"(tl|br)"\\s*:\\s*${PAIR}\\s*,`
+  + `\\s*"(tl|br)"\\s*:\\s*${PAIR})`
+  + '\\s*,(\\s*"targets?"\\s*:)')
+
+/**
+ * Does any object in this valid JSON text repeat a key, with escapes
+ * decoded the way JSON.parse decodes them?
+ *
+ * A structural walk, not a text search: counting `"target":` in the raw
+ * text was tried and was wrong both ways — an escape hid a real duplicate,
+ * and an escaped quote inside a name invented a fake one.
+ */
+function repeatsAKey(json) {
+  const scopes = []   // per open container: a Set of keys for objects, null for arrays
+  for (let i = 0; i < json.length; i += 1) {
+    const c = json[i]
+    if (c === '{') scopes.push(new Set())
+    else if (c === '[') scopes.push(null)
+    else if (c === '}' || c === ']') scopes.pop()
+    else if (c === '"') {
+      let j = i + 1
+      while (j < json.length && json[j] !== '"') j += json[j] === '\\' ? 2 : 1
+      const name = JSON.parse(json.slice(i, j + 1))
+      let k = j + 1
+      while (k < json.length && /\s/.test(json[k])) k += 1
+      const scope = scopes[scopes.length - 1]
+      if (json[k] === ':' && scope) {
+        if (scope.has(name)) return true
+        scope.add(name)
+      }
+      i = j
+    }
+  }
+  return false
+}
+
+/** The reply as an object if it is exactly the known shape, else undefined. */
+function repairUnclosedMarkers(text) {
+  const m = UNCLOSED_MARKERS.exec(text)
+  if (!m || m.index !== 0 || m[2] === m[3]) return undefined
+  const fixed = m[1] + '},' + m[4] + text.slice(m.index + m[0].length)
+  let obj
+  try {
+    obj = JSON.parse(fixed)
+  } catch {
+    return undefined   // not the known shape after all
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return undefined
+  if (('target' in obj) === ('targets' in obj)) return undefined
+  if (repeatsAKey(fixed)) return undefined
+  return obj
+}
+
+/**
  * Pull the JSON object out of a model reply.
  *
  * Told "JSON only", models still wrap it in ```json fences or add a
  * sentence of commentary often enough that failing the whole click over
  * it would be the single largest source of flakiness. Fence-strip first,
- * then fall back to the outermost braces.
+ * then fall back to the outermost braces, and only then try the single
+ * repair described above (on the whole reply, not on the braces' slice).
  */
 export function parseAnswer(text, expected = 1) {
   const cleaned = String(text)
     .replace(/^\s*```(?:json)?/i, '')
     .replace(/```\s*$/, '')
     .trim()
+  const start = cleaned.indexOf('{')
+  const end = cleaned.lastIndexOf('}')
+  const candidates = [cleaned]
+  if (start >= 0 && end > start) candidates.push(cleaned.slice(start, end + 1))
+
   let obj
-  try {
-    obj = JSON.parse(cleaned)
-  } catch {
-    const start = cleaned.indexOf('{')
-    const end = cleaned.lastIndexOf('}')
+  let parseError
+  for (const candidate of candidates) {
+    try {
+      obj = JSON.parse(candidate)
+      break
+    } catch (err) {
+      // Last one wins on purpose: the brace slice's error is the one worth
+      // reporting — the whole reply failing only says there was prose.
+      parseError = err
+    }
+  }
+  let repaired = false
+  if (obj === undefined) {
+    // The whole reply only — never the brace slice, which can drop a
+    // second answer that follows the last '}' (`...}},"target":null`).
+    obj = repairUnclosedMarkers(cleaned)
+    repaired = obj !== undefined
+  }
+  if (obj === undefined) {
     if (start < 0 || end <= start) {
       throw new VisionError(
         `vision model did not return JSON: ${cleaned.slice(0, 300)}`)
     }
-    try {
-      obj = JSON.parse(cleaned.slice(start, end + 1))
-    } catch (err) {
-      throw new VisionError(
-        `vision model returned malformed JSON (${err.message}): `
-        + cleaned.slice(0, 300))
-    }
+    throw new VisionError(
+      `vision model returned malformed JSON (${parseError.message}): `
+      + cleaned.slice(0, 300))
   }
 
   const markers = {}
@@ -240,7 +348,7 @@ export function parseAnswer(text, expected = 1) {
   for (let n = 1; n <= expected; n += 1) {
     targets.push(readTarget(byIndex.get(n) ?? {}))
   }
-  return { markers, target: targets[0], targets }
+  return { markers, target: targets[0], targets, repaired }
 }
 
 /** One target entry, with the leniency that is safe and none that isn't. */

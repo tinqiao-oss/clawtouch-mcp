@@ -378,6 +378,12 @@ export class Locator {
       throw err
     }
     const tVision = Date.now()
+    if (answer.repaired) {
+      // Logged, not hidden: the repair's justification is a measured rate,
+      // and a rate stays true only while someone can keep counting it.
+      this.log('info', 'vision reply left "markers" unclosed; repaired the '
+        + 'one missing brace (see parseAnswer)')
+    }
 
     let fit
     try {
