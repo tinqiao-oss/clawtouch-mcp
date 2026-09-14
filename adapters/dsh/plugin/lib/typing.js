@@ -5,8 +5,9 @@
  * per character on a US keyboard layout. A character with no key on that
  * layout — Chinese, an emoji, a curly quote, "é", a no-break space — makes
  * the firmware stop AT that character, after every character before it has
- * already been typed. The server also sends text in 32-character chunks and
- * goes on to the next chunk after a failed one. So a mixed string used to
+ * already been typed. The server also sent text in 32-character chunks and
+ * went on to the next chunk after a failed one (until clawtouch-mcp 0.5.2,
+ * which checks the text itself and stops at a failed chunk). So a mixed string used to
  * arrive as fragments, with an error attached, in a field the agent then
  * reasoned about as if nothing had happened.
  *

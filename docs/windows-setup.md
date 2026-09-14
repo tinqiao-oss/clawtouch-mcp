@@ -250,7 +250,7 @@ Ask Claude to call `device.info`. Expected output:
 {
   "info": {"port": "COM6", "connected": true, "seq": 0, ...},
   "screen": {"width": 5120, "height": 1440, "source": "detected"},
-  "mcp_version": "0.5.1"
+  "mcp_version": "0.5.2"
 }
 ```
 
@@ -267,14 +267,19 @@ Ask Claude to call `device.info`. Expected output:
 If the MCP server runs on the **same PC** as the agent driving it and the
 agent app (Claude Code / Cursor) is frontmost, a `hid.key("alt+f4")` lands
 in the agent and closes it mid-task — real USB HID has no app targeting.
-`hid.click` the target window first, or drive a remote target. Full table +
+`hid.click` the target window first, or run the agent on another machine
+(starting `clawtouch-mcp` on this one over SSH, for example). Full table +
 mitigations:
 [INTEGRATIONS.md → "Known footgun: self-interrupt"](../examples/integrations/INTEGRATIONS.md#known-footgun-self-interrupt-on-a-shared-machine).
 
 ### Input method matters for `hid.type` — paste, don't type
 
 `hid.type` sends raw US-ANSI HID keycodes; the active input method decides
-what characters they become. With **Microsoft Pinyin** in **Chinese mode**,
+what characters they become. Text containing anything outside ASCII —
+Chinese, fullwidth punctuation, emoji — is refused (since 0.5.2) before any
+of it is typed, so it shows up as a clear error rather than a half-typed
+field; what follows is about ASCII text meeting an input method. With
+**Microsoft Pinyin** in **Chinese mode**,
 those keycodes feed the IME composition buffer and the result is *not* what
 you typed. Verified empirically on Windows 11 26100 (system Microsoft Pinyin,
 typing into Notepad):

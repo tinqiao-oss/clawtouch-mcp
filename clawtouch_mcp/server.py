@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
 from . import __version__
-from .bridge import SerialHidBridge, auto_detect_ports, list_pico_ports
+from .bridge import SerialHidBridge, auto_detect_ports, check_typeable, list_pico_ports
 from . import cursor as _cursor_mod
 from . import screen as _screen
 from .cursor import (
@@ -212,8 +212,10 @@ def _ensure_windows_dpi_awareness() -> None:
         return
     try:
         import ctypes
-        # Try the modern per-monitor-v2 awareness first; fall back to
-        # the older v1 API on pre-1809 Windows; ignore failures (Wine,
+        # Per-monitor awareness first — SetProcessDpiAwareness(2) is
+        # PROCESS_PER_MONITOR_DPI_AWARE (v1; v2 would need
+        # SetProcessDpiAwarenessContext) — falling back to the older
+        # system-aware API where shcore is missing; ignore failures (Wine,
         # locked-down kiosks, …).
         try:
             ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -460,6 +462,9 @@ class UnavailableBridge:
                  tried_ports: list[str], baudrate: int) -> None:
         self._server = server
         self._tried_ports = list(tried_ports)
+        # What the last detection found; None until the first retry. Tells a
+        # --port that is not there apart from a board that is busy.
+        self._detected: list[str] | None = None
         self._baudrate = baudrate
         self.is_connected = False
         self.port = "<unavailable>"
@@ -475,7 +480,9 @@ class UnavailableBridge:
         candidates: list[str] = []
         if self._server.config.port:
             candidates.append(self._server.config.port)
-        for p in auto_detect_ports():
+        detected = auto_detect_ports()
+        self._detected = detected       # for the failure message
+        for p in detected:
             if p not in candidates:
                 candidates.append(p)
         for port in candidates:
@@ -501,6 +508,27 @@ class UnavailableBridge:
         return False
 
     def _fail(self) -> None:
+        # Two different situations, and the remedy for one is wrong for the
+        # other: telling someone with no board to "close the program using
+        # it" sends them looking for a program that does not exist.
+        if not self._tried_ports:
+            raise HidUnavailableError(
+                "No ClawTouch HID board was found: no USB serial port with "
+                "the Raspberry Pi vendor ID is present, so nothing can be "
+                "pressed. Plug in the board (a Raspberry Pi Pico 2 running the "
+                "clawtouch-hid firmware) and retry this tool call - detection "
+                "runs again on every call. To try the tools without hardware, "
+                "start clawtouch-mcp with --mock (nothing is pressed)."
+            )
+        if self._detected == []:
+            # Only the --port was tried, and detection found no board at all:
+            # the port may simply not exist.
+            raise HidUnavailableError(
+                f"Could not open {self._tried_ports[0]} (given with --port), "
+                "and no ClawTouch HID board was detected. Check that the "
+                "board is plugged in and the port name is right; if another "
+                "program holds that port, close it. Then retry this tool call."
+            )
         raise HidUnavailableError(
             f"HID hardware is unavailable: tried port(s) {self._tried_ports}, "
             f"all busy or absent. Most likely another program is using the "
@@ -555,8 +583,12 @@ class UnavailableBridge:
             "available": False,
             "tried_ports": self._tried_ports,
             "reason": (
-                "All candidate Pico ports busy/absent on startup; "
-                "every action attempt also lazy-retries reconnect"
+                (
+                    "No Pico board detected"
+                    if not self._tried_ports or self._detected == []
+                    else "All candidate Pico ports busy/absent"
+                )
+                + "; every action attempt also lazy-retries reconnect"
             ),
         }
 
@@ -1170,7 +1202,12 @@ class ClawTouchMcpServer:
         ))
         self._register(Tool(
             name="hid.type",
-            description=HID_PREFIX + "Type a string as if on a physical keyboard (US layout).",
+            description=HID_PREFIX + (
+                "Type a string as if on a physical keyboard (US layout). Plain "
+                "ASCII only: text containing any other character (Chinese, "
+                "emoji, curly quotes) is refused before anything is typed - "
+                "paste such text via the clipboard instead."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {"text": {"type": "string"}},
@@ -2142,13 +2179,33 @@ class ClawTouchMcpServer:
         text = str(kw["text"])
         if len(text) > MAX_TYPE_LEN:
             raise ValueError(f"text too long ({len(text)} > {MAX_TYPE_LEN})")
+        check_typeable(text)
         ok = await self.bridge.type_text(text)
         # Report characters actually sent: type_text strips control bytes
         # (newline/tab/…) by default, so the wire count can be lower than
         # len(text). Reporting the raw length would tell the agent "typed N
         # chars" when some were silently dropped (e.g. a lone "\n").
         sent = sum(1 for ch in text if not (ch < " " or ch == "\x7f"))
-        return {"ok": ok, "chars": sent}
+        return {"ok": ok, "chars": sent, **self._typed_before_failure(ok)}
+
+    def _typed_before_failure(self, ok: bool) -> dict:
+        """After a failed type_text, replace the requested count with what
+        the device confirmed: the bridge stops at the first chunk that was
+        not acknowledged, so the rest was never sent, and part of that chunk
+        may have been typed. An agent retrying the whole text on the strength
+        of the requested count would type the confirmed part twice. Bridges
+        that do not track progress (mock, test doubles) leave the count as
+        requested."""
+        if ok:
+            return {}
+        confirmed = getattr(self.bridge, "last_type_confirmed", None)
+        if not isinstance(confirmed, int):
+            return {}
+        out: dict[str, Any] = {"chars": confirmed}
+        unconfirmed = getattr(self.bridge, "last_type_unconfirmed", 0)
+        if isinstance(unconfirmed, int) and unconfirmed:
+            out["unconfirmed_chars"] = unconfirmed
+        return out
 
     async def _tool_scroll(self, **kw) -> dict:
         self.rate.check()
@@ -2159,18 +2216,19 @@ class ClawTouchMcpServer:
     def _maybe_warn_self_interrupt(self, modifiers: list[str], key: str) -> None:
         """One-shot stderr heads-up the first time a quit/close combo is
         sent (see _is_self_interrupt_combo). Warn-only: the keystroke still
-        goes out — blocking would break the legitimate remote-target case."""
+        goes out — closing the frontmost window on purpose is legitimate
+        (for one, when the agent runs on another machine)."""
         if self._warned_self_interrupt or not _is_self_interrupt_combo(modifiers, key):
             return
         self._warned_self_interrupt = True
         combo = "+".join([*modifiers, key]) if modifiers else key
         logger.warning(
             "sent a quit/close combo (%s). USB HID has no app targeting — "
-            "keystrokes hit whatever window is frontmost. If this server "
-            "shares a machine with your agent (Claude Code / Cursor / ...) "
-            "and the agent is focused, this can quit the agent itself "
-            "mid-task. Mitigate: hid.click the target window first, or drive "
-            "a remote target (Pico 2 W). See INTEGRATIONS.md 'known footgun: "
+            "keystrokes hit whatever window is frontmost. If your agent "
+            "(Claude Code / Cursor / ...) runs on this machine and is "
+            "focused, this can quit the agent itself mid-task. Mitigate: "
+            "hid.click the target window first, so it and not the agent is "
+            "frontmost. See INTEGRATIONS.md 'known footgun: "
             "self-interrupt'. (shown once per session)",
             combo,
         )
@@ -2478,9 +2536,10 @@ class ClawTouchMcpServer:
             text = str(op["text"])
             if len(text) > MAX_TYPE_LEN:
                 raise ValueError(f"text too long ({len(text)} > {MAX_TYPE_LEN})")
+            check_typeable(text)
             ok = await self.bridge.type_text(text)
             sent = sum(1 for ch in text if not (ch < " " or ch == "\x7f"))
-            return {**base, "ok": ok, "chars": sent}
+            return {**base, "ok": ok, "chars": sent, **self._typed_before_failure(ok)}
 
         if t == "scroll":
             delta = int(op["delta"])

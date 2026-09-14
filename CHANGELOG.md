@@ -7,6 +7,106 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-09-15 — no console fallback for a busy board · untypeable text is refused whole · dsh-clawtouch 0.1.2
+
+### Fixed — with the board busy, the server opened its REPL console and wrote protocol frames into it
+
+A Pico running the open firmware shows two serial ports: the REPL console
+and the data channel. `list_pico_ports` marks the data one, but the server's
+try-list (`auto_detect_ports`) appended every other likely-Pico port after
+the data ports "defensively" — and with one board, that is its console. So
+when another program held the data port (the ClawTouch desktop app, a serial
+monitor), the server connected to the console instead and reported
+"connected". Nothing is written on connect, but the first tool call wrote
+protocol frames into CircuitPython's REPL, which reads what arrives as
+keystrokes: a frame carries its sequence number in plain bytes, and
+sequence 3 and 4 are `0x03` / `0x04` — Ctrl-C and Ctrl-D, which interrupt
+and restart the firmware the other program was using. Reproduced on
+Windows with the data port held open by another process.
+
+The try-list is now the port detection marked as each board's data
+channel, and nothing else. A busy board leaves the server in its no-device
+state, and the next tool call says the port is busy — which is what the
+message has always told the user to fix. `auto_detect_port` (singular)
+loses its console fallback too (that branch was unreachable; the function
+itself is still what the computer-use demos call).
+
+That makes the marking itself load-bearing, so it got two fixes. Which port
+is the data channel is now read from the **USB interface number** where the
+OS reports one for every port of the board (Windows and Linux: pyserial's
+`location`, e.g. `1-13:x.2`; the console is interface 0, the data channel
+2), falling back to the highest port number otherwise (macOS, whose device
+names encode the interface anyway). Port numbers only usually agree:
+Windows hands out COM numbers from whatever is free, so a console can sit
+above its data port. And ports are grouped into boards more carefully: a
+port that reports no serial number joins the board of the port at the same
+USB path that does, and boards with no serial number at all are told apart
+by their USB path (on every OS, macOS included) — as long as every such
+port reports one; if any does not, they keep sharing one group as before,
+because splitting a board would leave a lone console marked as data. Before
+this, every serial-less port shared one group, which — with the padded
+try-list gone — would have left all but one such board unreachable.
+`list_pico_ports` entries gain a `location` field. Where the OS reports
+neither interface numbers nor device names that encode them, detection
+still rests on port numbers, as it always did.
+
+### Fixed — `hid.type` could leave text half typed
+
+The firmware types one key per character on a US layout and stops at the
+first character with no key there (Chinese, an emoji, a curly quote, "é"),
+after typing everything before it — and the bridge sends text in
+32-character chunks and went on to the next chunk after a failed one, so a
+mixed string arrived as fragments around a gap. Now `hid.type` and the
+`type` op of `hid.batch` check the whole text first and refuse it — nothing
+typed — naming the characters, with the way round (rewrite in ASCII, or
+paste from the clipboard). `SerialHidBridge.type_text` makes the same check
+itself — the computer-use demos call it directly — raising `ValueError`
+before any frame, and it now stops at the first chunk that is not
+acknowledged. When that happens, `hid.type` and the batch op report `chars`
+as the characters the device confirmed, plus `unconfirmed_chars` for the
+chunk that failed (part of it may have been typed) — not the requested
+count, which a retry would otherwise re-type on top of. The tool
+description says "plain ASCII only".
+
+### Fixed — "no board" was reported as "board busy"
+
+With no Pico plugged in at all, every tool call said the hardware was
+"busy or absent" and asked the user to close the program using it. It now
+says no board was found, how to plug one in, and that `--mock` tries the
+tools without hardware; with `--port` given and no board detected, it says
+the named port could not be opened and no board was found. `device.info`
+gives the same reason. A board that is there but busy keeps its message.
+
+### Changed — docs: the board acts on the machine it is plugged into
+
+Earlier versions of the README described a cross-host mode: an agent on
+one machine driving another over USB HID, with nothing on the target. The
+open firmware has no such command path — it reads commands from its USB CDC
+data channel, the same cable that carries its keyboard and mouse — so the
+board always acts on the machine it is plugged into, and `clawtouch-mcp`
+runs there. The README (both languages), `INTEGRATIONS.md`, both setup
+guides and the computer-use example now say so, and describe what does
+work: running the agent on another machine, with `clawtouch-mcp` started on
+the target (over SSH, for example) — keys, typing and relative moves then
+work as they do locally, while absolute clicks (which read the cursor) and
+`hid.screenshot` need the server inside the target's logged-in desktop
+session (`DISPLAY`/`XAUTHORITY` on Linux; not a plain Windows OpenSSH
+session).
+The self-interrupt warning no longer suggests a remote target, and the
+related-work paragraph no longer says this project decouples the agent from
+the target machine. Also corrected: the `hid.type` row of the tool table
+(ASCII text, not "a UTF-8 string"), a DPI-awareness comment that called the
+per-monitor v1 API "v2", and the HIDAgent citation (one author).
+
+24 new server tests: the try-list, the data port read from the interface
+number, board grouping (serial-less boards, macOS locations, an unreadable
+location, a port without a serial), a busy data port at startup and on lazy
+retry, the typing refusal in `hid.type`, `hid.batch` and the bridge, the
+bridge stopping at a failed chunk and what a failed type reports, and the
+no-board messages. The regression tests among them fail when their fix is
+removed; the rest pin behaviour that must not change (ASCII still types,
+single-port boards still connect). 414 passed.
+
 ### Fixed — dsh plugin (`dsh-clawtouch` 0.1.2): results that reported input which never happened, and text that stopped halfway
 
 Three ways the plugin could tell the agent something was pressed when it
@@ -40,8 +140,9 @@ was not, or leave it guessing what was:
 - **Non-ASCII text was typed halfway.** The device types one key per
   character on a US layout; the first character without a key (Chinese, an
   emoji, a curly quote, "é") stops the firmware after everything before it
-  was typed, and the server sends the text in 32-character chunks, going on
-  to the next after a failed one. `computer_type` now checks the whole text
+  was typed, and the server sent the text in 32-character chunks, going on
+  to the next after a failed one (fixed server-side too, above).
+  `computer_type` now checks the whole text
   first and refuses — before its `target` click, so nothing on screen
   changes — naming the characters to rewrite. The tool description says
   "plain ASCII only" up front. When the server leaves out control
@@ -2370,7 +2471,8 @@ under the working name `openclaw-mcp` but were never published. The
   for this OSS release.
 - No multi-touch HID profile yet — only mouse and keyboard.
 
-[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.6...v0.5.0
 [0.4.6]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.5...v0.4.6

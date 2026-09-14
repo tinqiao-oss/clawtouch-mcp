@@ -53,23 +53,22 @@ and needs **no mouse / keyboard driver and no HID agent process** on the input
 side of the target. That difference is the whole point of this project — every
 other section below just builds on it.
 
-**Local mode is the common case** (agent + `clawtouch-mcp` + Pico + the screen
-all on one PC; the `clawtouch-mcp` process lives there because it's the agent's
-host, but the input side needs no driver). Cross-host control — agent on one
-machine driving a target on another over USB HID — is an *additional* capability
-the same hardware unlocks; see [Deployment modes](#deployment-modes).
+**The board acts on the machine it is plugged into.** It takes its commands
+over the same USB cable it types through, so `clawtouch-mcp` runs on that
+machine too — the input side still needs no driver. The agent itself can run
+elsewhere; see [Deployment modes](#deployment-modes).
 
 **Good for:**
 
-- **Kiosks / locked-down machines** — drive a machine you can't (or won't)
-  install software on; nothing extra runs on the input side.
+- **Kiosks / locked-down machines** — no input driver or input agent to
+  install or keep running: the board is a standard USB keyboard and mouse
+  (`clawtouch-mcp` itself runs on the machine).
 - **Accessibility** — let a user drive their own computer via an agent issuing
   HID commands, without fighting per-app synthetic-input compatibility.
 - **Compatibility testing** — verify your software handles *external* HID input
   correctly, which can differ from injected synthetic events.
-- **Cross-host RPA / test rigs** — an agent on your dev laptop drives an
-  industrial PC, an offline test target, or a QA-lab phone, with no agent on
-  the target (visual feedback needs a separate path — see Deployment modes).
+- **Test rigs** — an agent on your dev laptop drives a test machine that runs
+  `clawtouch-mcp` (started over SSH, for example — see Deployment modes).
 
 **Not for:**
 
@@ -82,9 +81,9 @@ the same hardware unlocks; see [Deployment modes](#deployment-modes).
 
 For standard desktop apps (browser, IDE, office suites) the software-only path
 is already enough — the hardware is just an extra option there, not a
-requirement. Its irreplaceable value is the cases above, where the target can't
-host an agent, must show the OS a genuine physical HID device, or has to be
-driven across machines. For the compliance boundary on the "not for" cases, see
+requirement. Its irreplaceable value is the cases above, where the input has to
+arrive as a genuine physical HID device with no input driver or input agent on
+the target. For the compliance boundary on the "not for" cases, see
 [Acceptable use](#acceptable-use).
 
 ## Quickstart
@@ -169,11 +168,11 @@ PRs adding new clients welcome.
 
 ## Deployment modes
 
-*Is the agent on the same machine as the screen?* `clawtouch-mcp` covers the **input side only** (agent tool call → HID report → real input). The **visual side** (agent reads the screen to decide what to do next) is **not in this repo** — how you wire the two sides together depends on where the agent runs.
+*Is the agent on the same machine as the screen?* `clawtouch-mcp` covers the **input side** (agent tool call → HID report → real input), plus an opt-in `hid.screenshot` of the machine it runs on. What the agent does with the screen — reading it, deciding what to do next — is not in this repo.
 
 **Local mode — the common case.** agent + `clawtouch-mcp` + Pico + the controlled screen all on **one PC**. `hid.screenshot` captures that same screen, so the visual feedback loop closes naturally; the Pico is a standard USB HID device needing no driver. Good for accessibility, single-machine RPA, compatibility testing, in-machine kiosk self-service.
 
-**Cross-host mode — input supported, visual is your problem.** agent + `clawtouch-mcp` on machine **A**; the Pico and the controlled screen on machine **B**. This repo fully covers the input side (A → B over USB HID), **but `hid.screenshot` still captures A's screen, not B's** — HID carries input one-way only; reverse screen capture isn't in the spec. Pick a visual path: **HDMI capture card** (B stays truly software-free, needs capture hardware) · **VNC / RDP** (open, no vendor lock-in, but B is no longer software-free) · **API / log verification** (check progress at checkpoints, not real-time; fixed-flow RPA only) · **blind operation** (pre-baked command sequence, no feedback; fully deterministic macros only). Good for industrial PCs that can't run a modern OS, strictly isolated embedded test targets, QA-lab phone farms.
+**Agent on another machine.** The board takes its commands over its USB CDC data channel — the same cable that carries its keyboard and mouse — so it always acts on the machine it is plugged into, and `clawtouch-mcp` runs there. The agent can still run elsewhere: have your MCP client start `clawtouch-mcp` on the target machine through any transport it supports (an SSH command, for example). Keys, typing and relative mouse moves then work as they do locally. Absolute clicks and moves read the cursor position, and `hid.screenshot` reads the screen, so for those the server has to run inside the machine's logged-in desktop session — which a plain SSH login often is not: on Linux, set `DISPLAY` (and `XAUTHORITY`) for the desktop's X server; on Windows, OpenSSH sessions sit outside the interactive desktop, so start the server from within the session instead; on macOS it works once Screen Recording is granted (see [macOS setup](docs/macos-setup.md)). What this firmware does not provide is a way to drive a machine that runs nothing at all: that would need a second command path to the board, which is not part of this repo.
 
 ## Safety
 
@@ -189,9 +188,10 @@ PRs adding new clients welcome.
 * `hid.type` is for **ASCII / US-keyboard-layout text**. Control
   characters (newline / tab / etc.) are **stripped** by default so an
   agent's multi-line draft isn't accidentally submitted — send Enter with
-  `hid.key("enter")` and Tab with `hid.key("tab")`. Non-ASCII text (CJK,
-  emoji) is typed through the US layout and generally will **not** work;
-  drive the host IME or a clipboard path from your agent for those.
+  `hid.key("enter")` and Tab with `hid.key("tab")`. Text containing anything
+  outside ASCII (CJK, emoji, curly quotes) is **refused before any of it is
+  typed** — the firmware would otherwise stop at the first such character with
+  the text half entered; put that text on the clipboard and paste it instead.
 * All operations **rate-limited** to `--ops-per-sec` (default 20). This
   counts *tool calls*, not individual HID reports — one call such as
   `hid.drag` or a long `hid.type` emits many reports, so the effective
@@ -204,7 +204,7 @@ PRs adding new clients welcome.
 
 `clawtouch-mcp` turns your agent's tool calls into **real USB HID input** — the
 same property that makes the legitimate use cases work (kiosks, accessibility,
-compatibility testing, cross-host RPA) carries a symmetric risk:
+compatibility testing, test rigs) carries a symmetric risk:
 
 **An autonomous agent connected here has, in practice, the same reach over the
 host as a person sitting at the keyboard.** It can open any application, run
@@ -274,7 +274,7 @@ Seventeen tools register: **fourteen always-on `hid.*` input tools**, plus
 | `hid.click` | v1.0 | Click at (x, y) |
 | `hid.move` | v1.0 | Move the mouse to (x, y) |
 | `hid.hover` | v1.0 | Move to (x, y), then idle |
-| `hid.type` | v1.0 | Type a UTF-8 string |
+| `hid.type` | v1.0 | Type ASCII text (US layout) |
 | `hid.scroll` | v1.0 | Wheel scroll up / down |
 | `hid.key` | v1.0 | Press a named key or shortcut (`enter`, `ctrl+c`, …) |
 | `hid.release_all` | v1.0 | Panic stop — release every held button and key |
@@ -353,8 +353,8 @@ $ clawtouch-mcp --port COM7
 ## Acceptable use
 
 This server is built for legitimate uses — accessibility, RPA, test
-automation, cross-machine workflows where the target machine must
-stay clean. This project does **not** support, document, or assist
+automation, kiosks where no input driver may be installed. This project
+does **not** support, document, or assist
 with use cases that:
 
 - Bypass, evade, or interfere with any target platform's anti-fraud,
@@ -441,9 +441,9 @@ got — always divide click coordinates by `scale_x`/`scale_y`.
 
 ## Related work
 
-The MCP / Computer-Use ecosystem already has projects that hand an LLM agent control of a desktop, in two camps. **Software-only MCP servers on the target PC** — [`domdomegg/computer-use-mcp`](https://github.com/domdomegg/computer-use-mcp), [`AB498/computer-control-mcp`](https://github.com/AB498/computer-control-mcp), the various [`mcp-pyautogui`](https://github.com/hathibelagal-dev/mcp-pyautogui) implementations, and ByteDance's [UI-TARS](https://github.com/bytedance/UI-TARS-desktop) — call PyAutoGUI / OS input APIs in-process: lowest friction, but the agent shares the target's OS / session / focus, and a crash disrupts the user's actual desktop. **Hardware-bridge servers** decouple the two: [`sunasaji/mcp-serial-hid-kvm`](https://github.com/sunasaji/mcp-serial-hid-kvm) (a CH9329 / CH9350L USB-HID ASIC plus capture card) is the closest direct peer in architecture, and CMU's [**HIDAgent**](https://arxiv.org/abs/2602.00492) (Bigham et al., 2026-01; < $30 RP2040 + HDMI-to-USB + CH340 serial bridge, shipped as a Python library) the closest academic peer. `clawtouch-mcp` follows the same decoupling but pairs with the open-firmware [`clawtouch-hid`](https://github.com/tinqiao-oss/clawtouch-hid) stack, so the wire protocol is user-extensible and the firmware is auditable — not a fixed-function ASIC.
+The MCP / Computer-Use ecosystem already has projects that hand an LLM agent control of a desktop, in two camps. **Software-only MCP servers on the target PC** — [`domdomegg/computer-use-mcp`](https://github.com/domdomegg/computer-use-mcp), [`AB498/computer-control-mcp`](https://github.com/AB498/computer-control-mcp), the various [`mcp-pyautogui`](https://github.com/hathibelagal-dev/mcp-pyautogui) implementations, and ByteDance's [UI-TARS](https://github.com/bytedance/UI-TARS-desktop) — call PyAutoGUI / OS input APIs in-process: lowest friction, no hardware. **Hardware-bridge servers** send the input from a separate USB device instead: [`sunasaji/mcp-serial-hid-kvm`](https://github.com/sunasaji/mcp-serial-hid-kvm) (a CH9329 / CH9350L USB-HID ASIC plus capture card) is the closest direct peer in architecture, and CMU's [**HIDAgent**](https://arxiv.org/abs/2602.00492) (Bigham, 2026-01; < $30 RP2040 + HDMI-to-USB + CH340 serial bridge, shipped as a Python library) the closest academic peer. `clawtouch-mcp` is in the second group, paired with the open-firmware [`clawtouch-hid`](https://github.com/tinqiao-oss/clawtouch-hid) stack, so the wire protocol is user-extensible and the firmware is auditable — not a fixed-function ASIC.
 
-ClawTouch's irreplaceable edge is the **genuine hardware HID path**: the OS sees a real physical keyboard / mouse. In local mode — the common case — that real HID plus zero driver on the input side is exactly what makes it work for accessibility, compatibility testing, and apps that reject synthetic input; if you only need synthetic input on one machine and the app doesn't care where input comes from, the software-only servers above are simpler. Cross-host mode is an *additional* capability on top: it can drive a target that can't host an agent or must stay physically isolated — something a software-only server can't do at all.
+ClawTouch's irreplaceable edge is the **genuine hardware HID path**: the OS sees a real physical keyboard / mouse. That real HID plus zero driver on the input side is what makes it useful for accessibility and compatibility testing; if you do not need input to arrive from a USB device, the software-only servers above are simpler.
 
 ## Open source roadmap, contributing & license
 

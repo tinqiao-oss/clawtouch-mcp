@@ -106,6 +106,56 @@ def _port_sort_key(device: str) -> tuple[int, str]:
     return (int(m.group(1)) if m else -1, device or "")
 
 
+def _location_parts(location: Optional[str]) -> tuple[Optional[str], Optional[int]]:
+    """Split a pyserial ``location`` into (USB device path, interface number).
+
+    Windows reports ``1-13:x.2`` and Linux ``1-1.4:1.2`` — the device's place
+    in the USB tree, then (after the last ``:``) the interface, whose number is
+    the last dot-separated part. macOS reports only the device's place
+    (``20-1.4``, no ``:``): that is the path, with no interface number — its
+    device names already encode the interface (``usbmodem21201`` /
+    ``…21203``). Either part is None when it cannot be read.
+    """
+    if not location:
+        return None, None
+    if ":" not in location:
+        return location, None
+    device_path, _, tail = location.rpartition(":")
+    last = tail.rsplit(".", 1)[-1]
+    interface = int(last) if last.isascii() and last.isdigit() else None
+    return (device_path or None), interface
+
+
+def untypable_chars(text: str) -> list[str]:
+    """Distinct characters in ``text`` that the firmware's US keyboard layout
+    has no key for, in first-seen order. Printable ASCII is typeable; the C0
+    controls and DEL are stripped before sending (``type_text``), so only
+    code points above 0x7F are reported."""
+    return list(dict.fromkeys(ch for ch in text if ord(ch) > 0x7F))
+
+
+def check_typeable(text: str) -> None:
+    """Refuse text the device cannot type, before any of it is sent.
+
+    The firmware presses one key per character on a US layout and stops at
+    the first character without a key — after typing everything before it.
+    Checking first turns a half-typed field into a refusal with nothing
+    typed. Raises ValueError (which the MCP server returns as ``isError``)."""
+    bad = untypable_chars(text)
+    if not bad:
+        return
+    shown = " ".join(repr(c) for c in bad[:8])
+    if len(bad) > 8:
+        shown += f" and {len(bad) - 8} more"
+    raise ValueError(
+        f"nothing was typed: the text contains {shown}, which the device's "
+        "US keyboard layout has no key for. It types one key per character, "
+        "so it would stop at the first of them with the text half entered. "
+        "Rewrite those in plain ASCII, or put the text on the clipboard and "
+        "paste it (hid.key ctrl+v, or cmd+v on macOS)."
+    )
+
+
 def list_pico_ports() -> list[dict[str, Any]]:
     """Return candidate serial ports that look like a Pico 2.
 
@@ -118,9 +168,15 @@ def list_pico_ports() -> list[dict[str, Any]]:
     Each returned entry carries:
     - ``likely_pico``: ``True`` for both CDC ports of every Pico
     - ``is_data_port``: ``True`` only for the data channel — the one
-      callers should actually open. Within each group of ports sharing
-      a serial_number, the highest-numbered device wins (Apple / Linux /
-      Windows convention: interface declaration order → port number).
+      callers should actually open. One port per board: the ports of a
+      board are grouped by serial number (or, for boards that report none,
+      by their place in the USB tree, when every such port reports one),
+      and within a group the port on the highest USB **interface number**
+      is the data channel — the console is declared first. Where the OS
+      reports no interface number for every port of the group (macOS), the
+      highest-numbered device name stands in for it, which on macOS encodes
+      the same thing.
+    - ``location``: pyserial's location string, as reported.
 
     Single-CDC firmwares (or boards with only one port enumerated)
     have ``is_data_port=True`` on their sole port — the heuristic
@@ -128,6 +184,7 @@ def list_pico_ports() -> list[dict[str, Any]]:
     """
     raw: list[dict[str, Any]] = []
     for p in serial.tools.list_ports.comports():
+        location = getattr(p, "location", None)
         entry = {
             "device": p.device,
             "name": p.name,
@@ -136,62 +193,78 @@ def list_pico_ports() -> list[dict[str, Any]]:
             "pid": p.pid,
             "serial_number": p.serial_number,
             "manufacturer": p.manufacturer,
+            "location": location,
             "likely_pico": (p.vid == _PICO_VID and p.pid is not None),
             "is_data_port": False,
         }
         raw.append(entry)
 
-    # Group likely-Pico entries by serial_number; within each group, the
-    # highest-numbered port is the data channel. Empty serial groups all
-    # serial-less devices together — rare in practice, but the highest-
-    # numbered one is still a safer pick than the first.
+    # One group per board. The serial number identifies a board, and a port
+    # that reports none joins the board of any port at the same USB device
+    # path that does. Boards without any serial number are told apart by
+    # their USB path — but only when every such port has one: a port whose
+    # path could not be read cannot be matched to its board, and splitting
+    # its board would leave a lone console marked as a data port. Then all of
+    # them share one group, as every serial-less port did before — one data
+    # port for all of them is safer than offering ports that may be consoles.
+    picos = [e for e in raw if e["likely_pico"]]
+    path_of = {id(e): _location_parts(e["location"])[0] for e in picos}
+    serial_at: dict[str, str] = {}
+    for e in picos:
+        if e["serial_number"] and path_of[id(e)]:
+            serial_at.setdefault(path_of[id(e)], e["serial_number"])
+
+    def serial_for(e: dict[str, Any]) -> Optional[str]:
+        path = path_of[id(e)]
+        return e["serial_number"] or (serial_at.get(path) if path else None)
+
+    split_by_path = all(path_of[id(e)] for e in picos if not serial_for(e))
     groups: dict[str, list[dict[str, Any]]] = {}
-    for e in raw:
-        if not e["likely_pico"]:
-            continue
-        groups.setdefault(e["serial_number"] or "", []).append(e)
+    for e in picos:
+        board_serial = serial_for(e)
+        if board_serial:
+            key = f"sn:{board_serial}"
+        elif split_by_path:
+            key = f"usb:{path_of[id(e)]}"
+        else:
+            key = ""
+        groups.setdefault(key, []).append(e)
     for ports in groups.values():
-        ports.sort(key=lambda x: _port_sort_key(x["device"]))
+        interfaces = [_location_parts(x["location"])[1] for x in ports]
+        if all(i is not None for i in interfaces):
+            # The interface number says which channel a port is. Port
+            # numbers do not: Windows hands out COM numbers from whatever is
+            # free, so a console can end up above its data port.
+            ports.sort(key=lambda x: _location_parts(x["location"])[1])
+        else:
+            ports.sort(key=lambda x: _port_sort_key(x["device"]))
         ports[-1]["is_data_port"] = True
 
     return raw
 
 
 def auto_detect_port() -> Optional[str]:
-    """Return the data-channel port of the first detected Pico, or None.
-
-    Prefers the explicit data port (correct for dual-CDC composite devices).
-    Falls back to any likely-Pico port if no group has a data port marked —
-    shouldn't happen with the current ``list_pico_ports`` logic but keeps
-    the function defensive against future schema changes.
-    """
-    ports = list_pico_ports()
-    for p in ports:
-        if p["is_data_port"]:
-            return p["device"]
-    for p in ports:  # defensive fallback
-        if p["likely_pico"]:
-            return p["device"]
-    return None
+    """Return the data-channel port of the first detected Pico, or None."""
+    ports = auto_detect_ports()
+    return ports[0] if ports else None
 
 
 def auto_detect_ports() -> list[str]:
-    """Return all detected Pico data-channel ports, ordered.
+    """Return the data-channel port of every detected Pico, in enumeration
+    order — one port per board.
 
-    Same logic as ``auto_detect_port`` but returns the full list, letting
-    callers fall back across multiple boards when the first one is busy
-    (e.g. occupied by another process such as ClawTouch on the same machine).
-    Data ports come first, then defensive likely-Pico ports.
+    The full list lets callers fall back across several boards when the
+    first one is busy (e.g. held by another process such as ClawTouch on the
+    same machine). A port that ``list_pico_ports`` did not mark as a data
+    port is never offered, not even as a fallback when the data port is busy.
+    That fallback used to exist, and with one board it meant: data port held
+    by another program → connect to the same board's console instead and
+    report "connected". The console is CircuitPython's REPL, which reads what
+    arrives as keystrokes, and a protocol frame carries its sequence number
+    in plain bytes — seq 3 and 4 are 0x03 / 0x04, Ctrl-C and Ctrl-D, which
+    interrupt and restart the firmware the other program is using.
     """
-    ports = list_pico_ports()
-    out: list[str] = []
-    for p in ports:
-        if p["is_data_port"]:
-            out.append(p["device"])
-    for p in ports:
-        if p["likely_pico"] and p["device"] not in out:
-            out.append(p["device"])
-    return out
+    return [p["device"] for p in list_pico_ports() if p["is_data_port"]]
 
 
 # ── Bridge ──
@@ -218,6 +291,9 @@ class SerialHidBridge:
         # Diagnostic for the most recent failed _send_raw — server-side
         # tool handlers read this to enrich their isError content.
         self._last_error_detail: Optional[str] = None
+        # Progress of the most recent type_text (see there).
+        self.last_type_confirmed = 0
+        self.last_type_unconfirmed = 0
 
     # ── Lifecycle ──
 
@@ -456,7 +532,11 @@ class SerialHidBridge:
         accidentally submitted by the ``\\n`` being typed as Enter on
         the host. Pass ``allow_control=True`` to opt in to the raw
         behaviour (e.g. when intentionally driving a terminal app).
+
+        Text containing a character the US layout cannot type raises
+        ValueError before anything is sent (see ``check_typeable``).
         """
+        check_typeable(text)
         if not allow_control:
             # Drop control bytes (incl. \n, \r, \t, NUL). Tab is in
             # the printable HID set but typing it into a chat input
@@ -473,13 +553,26 @@ class SerialHidBridge:
                     len(text) - len(cleaned),
                 )
             text = cleaned
-        ok = True
+        # How far this call got, for a caller reporting a failure: characters
+        # in chunks the device acknowledged, and the size of the chunk that
+        # failed (some of which may have been typed).
+        self.last_type_confirmed = 0
+        self.last_type_unconfirmed = 0
         for i in range(0, len(text), chunk_size):
+            chunk = text[i:i + chunk_size]
             resp = await self._send_raw(
-                build_type_string(text[i:i + chunk_size], seq_id=self._next_seq())
+                build_type_string(chunk, seq_id=self._next_seq())
             )
-            ok = ok and (resp is not None and resp.cmd_type == CommandType.ACK)
-        return ok
+            if resp is None or resp.cmd_type != CommandType.ACK:
+                # Stop at the first chunk that was not acknowledged. The
+                # firmware types a chunk key by key and may have typed part
+                # of it before failing; sending the chunks after it would
+                # type the rest of the text around a gap — output that looks
+                # finished in the target field and is not.
+                self.last_type_unconfirmed = len(chunk)
+                return False
+            self.last_type_confirmed += len(chunk)
+        return True
 
     async def key_combo(self, modifiers: list[str], key: str) -> bool:
         mask = modifiers_to_mask(modifiers)

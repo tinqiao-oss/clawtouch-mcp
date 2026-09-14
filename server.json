@@ -6,12 +6,12 @@
     "url": "https://github.com/tinqiao-oss/clawtouch-mcp",
     "source": "github"
   },
-  "version": "0.5.1",
+  "version": "0.5.2",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "clawtouch-mcp",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "transport": {
         "type": "stdio"
       }
