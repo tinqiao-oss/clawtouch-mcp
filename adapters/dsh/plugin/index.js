@@ -48,8 +48,10 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { McpStdioClient } from './lib/mcp-client.js'
 import {
   Locator, describeResult, LocateError, TargetNotFound,
-  renderWindowLine,
+  renderWindowLine, notPressedNote,
 } from './lib/locator.js'
+import { refusedCombo } from './lib/keyguard.js'
+import { clickVerb, typeText, pressKey, scrollWheel } from './lib/actions.js'
 
 export const name = 'clawtouch'
 
@@ -64,14 +66,8 @@ export const inject = ['tools']
 const DEFAULT_COMMAND = 'clawtouch-mcp'
 const DEFAULT_MAX_WIDTH = 1600
 
-/** Key combos that would quit the agent driving the keyboard. Real USB
- *  HID has no app-level addressing: the keystroke lands wherever focus
- *  is, and if that is the dsh window, the session ends mid-task. */
-const QUIT_COMBOS = [
-  { key: 'q', mods: ['gui', 'cmd', 'win'], what: 'Cmd+Q (quit application)' },
-  { key: 'f4', mods: ['alt'], what: 'Alt+F4 (close window)' },
-  { key: 'w', mods: ['gui', 'cmd', 'win'], what: 'Cmd+W (close window)' },
-]
+// Which key combos are refused, and why, is in lib/keyguard.js (a pure
+// function, so the rules are tested without a host).
 
 export function apply(ctx, userConfig = {}) {
   const config = normalize(userConfig)
@@ -128,6 +124,10 @@ function normalize(raw) {
     // which window the person is looking at.
     autoRaise: raw.autoRaise !== false,
     allowQuitCombos: Boolean(raw.allowQuitCombos),
+    // Alt+Tab, the Windows key, Cmd+Tab...: they move focus off the task
+    // window, and every later real keystroke follows it. Refused unless the
+    // machine being driven is not the one the agent runs on.
+    allowFocusSwitchCombos: Boolean(raw.allowFocusSwitchCombos),
     registerSkill: raw.registerSkill !== false,
     vision: {
       endpoint: vision.endpoint,
@@ -186,8 +186,8 @@ function registerTools(ctx, locator, config, log) {
     name: 'computer_click',
     description:
       'Click something on the real screen, described in words. A vision '
-      + 'model finds it and a USB HID device performs the click, so the '
-      + 'target OS sees a genuine physical mouse. You will not see the '
+      + 'model finds it and a USB HID mouse clicks it — a real click, with '
+      + 'no undo. You will not see the '
       + 'screen: say what you want clicked and read back what happened. '
       + 'If the reply says the target was not found, look at the window '
       + 'list or describe the element differently rather than retrying '
@@ -288,8 +288,10 @@ function registerTools(ctx, locator, config, log) {
       const where = result.results
         .map((r) => `${JSON.stringify(r.target)} (${r.screen[0]}, ${r.screen[1]})`)
         .join(' -> ')
+      const note = notPressedNote(result)
       const summary = `${verb} ${result.results.length} in ${result.source}: `
         + `${where} [${result.timings.totalMs}ms for the look]`
+        + (note ? ` — ${note}` : '')
       log('info', summary)
       return {
         clicked: Boolean(result.clicked),
@@ -438,12 +440,14 @@ function registerTools(ctx, locator, config, log) {
     description:
       'Type text on the real keyboard. Keystrokes go wherever the focus '
       + 'already is — pass `target` to click a field first, which is '
-      + 'almost always what you want.',
+      + 'almost always what you want. Plain ASCII only: the device types one '
+      + 'key per character on a US layout, so text with Chinese, emoji or '
+      + 'curly quotes is refused before anything is typed.',
     parameters: {
       text: {
         type: 'string',
         required: true,
-        description: 'The literal text to type.',
+        description: 'The literal text to type, in plain ASCII.',
       },
       target: {
         type: 'string',
@@ -461,24 +465,8 @@ function registerTools(ctx, locator, config, log) {
       },
       render: (_args, value) => [{ type: 'text', text: value.summary }],
     },
-    execute: (args) => run(async () => {
-      const prefix = []
-      if (args.target) {
-        const clicked = await locator.click({
-          target: args.target, window: args.window,
-        })
-        prefix.push(describeResult(clicked, clickVerb(clicked)))
-      }
-      if (config.dryRun) {
-        return { summary: [...prefix, `would type ${args.text.length} chars`].join('; ') }
-      }
-      const res = await mcpCall(locator, 'hid.type', { text: args.text })
-      return {
-        summary: [...prefix,
-          `typed ${res.chars ?? args.text.length} characters`,
-        ].join('; '),
-      }
-    }),
+    // In lib/actions.js, with key and scroll, so the tests reach them.
+    execute: (args) => run(() => typeText({ locator, config }, args)),
   }))
 
   ctx.tools.register(defineTool({
@@ -506,13 +494,7 @@ function registerTools(ctx, locator, config, log) {
       },
       render: (_args, value) => [{ type: 'text', text: value.summary }],
     },
-    execute: (args) => run(async () => {
-      const mods = Array.isArray(args.modifiers) ? args.modifiers : []
-      const combo = [...mods, args.key].join('+')
-      if (config.dryRun) return { summary: `would press ${combo}` }
-      await mcpCall(locator, 'hid.key', { key: args.key, modifiers: mods })
-      return { summary: `pressed ${combo}` }
-    }),
+    execute: (args) => run(() => pressKey({ locator, config }, args)),
   }))
 
   ctx.tools.register(defineTool({
@@ -542,74 +524,42 @@ function registerTools(ctx, locator, config, log) {
       },
       render: (_args, value) => [{ type: 'text', text: value.summary }],
     },
-    execute: (args) => run(async () => {
-      const prefix = []
-      if (args.target) {
-        const clicked = await locator.click({
-          target: args.target, window: args.window,
-        })
-        prefix.push(describeResult(clicked, clickVerb(clicked)))
-      }
-      if (config.dryRun) {
-        return { summary: [...prefix, `would scroll ${args.amount}`].join('; ') }
-      }
-      // The wire argument is `delta`, not `amount`. Naming it `amount` at
-      // the agent-facing edge is fine; passing that name through was not
-      // — the server rejected every call with a KeyError.
-      await mcpCall(locator, 'hid.scroll', { delta: args.amount })
-      return {
-        summary: [...prefix, `scrolled ${args.amount}`].join('; '),
-      }
-    }),
+    execute: (args) => run(() => scrollWheel({ locator, config }, args)),
   }))
-}
-
-/**
- * Call a raw clawtouch-mcp tool and require it to say it SUCCEEDED.
- *
- * Every action tool answers `{ ok: true, ... }`. Treating "no error" as
- * success meant an unreadable reply — non-JSON text, an empty body, a
- * result whose `ok` never arrived — still produced "typed 12 characters".
- * Physical input either happened or it did not, and the agent has no other
- * way to find out.
- */
-async function mcpCall(locator, tool, args) {
-  const res = await locator.mcp.callTool(tool, args)
-  if (res.isError) throw new Error(`${tool} failed: ${res.text.slice(0, 300)}`)
-  if (!res.json || res.json.ok !== true) {
-    throw new Error(`${tool} did not confirm it ran: `
-      + `${res.text.slice(0, 300) || 'empty reply'}`)
-  }
-  return res.json
-}
-
-/** "clicked" only when something really was clicked — a dry run that says
- *  it clicked is a lie the agent then reasons from. */
-function clickVerb(result) {
-  return result && result.clicked ? 'clicked' : 'would click'
 }
 
 // ───────────────────────────── guard ─────────────────────────────
 
 function registerGuard(ctx, config) {
-  if (config.allowQuitCombos) return
+  const quit = !config.allowQuitCombos
+  const focus = !config.allowFocusSwitchCombos
+  if (!quit && !focus) return
   ctx.tools.guard((exec) => {
     if (exec.name !== 'computer_key') return undefined
     const args = exec.arguments ?? {}
-    const key = String(args.key ?? '').trim().toLowerCase()
-    const mods = new Set((Array.isArray(args.modifiers) ? args.modifiers : [])
-      .map((m) => String(m).toLowerCase()))
-    for (const combo of QUIT_COMBOS) {
-      if (key !== combo.key) continue
-      if (!combo.mods.some((m) => mods.has(m))) continue
-      return `${combo.what} is blocked: a USB HID keystroke lands on `
+    const hit = refusedCombo(args.key, args.modifiers, { quit, focus })
+    if (!hit) return undefined
+    if (hit.kind === 'quit') {
+      return `${hit.what} is blocked: a USB HID keystroke lands on `
         + 'whatever window has focus, so if that is this agent\'s own '
         + 'window the combo ends this session mid-task. Close the target '
         + 'another way (click its close button), or set '
         + '`allowQuitCombos: true` in the plugin config if the machine '
         + 'being driven is not this one.'
     }
-    return undefined
+    // Raising a covered window is Windows-only (see the platform table in
+    // the README), so the way round differs.
+    const wayRound = process.platform === 'win32'
+      ? 'To work in a different window, name it: '
+        + '`computer_click({ window: "<title>", target })` brings that window '
+        + 'forward by its title bar.'
+      : 'To work in a different window, click a part of it that is visible. '
+        + 'This plugin cannot bring a covered window forward on this platform.'
+    return `${hit.what} is blocked: it moves focus to another window, and `
+      + 'a USB HID keystroke goes wherever focus is — every later key, and '
+      + 'every "type into the focused field", would land there instead of '
+      + `the task window. ${wayRound} Set \`allowFocusSwitchCombos: true\` in `
+      + 'the plugin config if the machine being driven is not this one.'
   })
 }
 
@@ -617,8 +567,8 @@ function registerGuard(ctx, config) {
 
 const SKILL = `# Driving a real computer
 
-You can operate a real screen through a USB HID device. The keyboard and
-mouse are physical: the target OS cannot tell them from a person's.
+You can operate this machine's real screen through a USB HID mouse and
+keyboard. What you click and type happens on the actual screen.
 
 ## What you can and cannot see
 
@@ -678,8 +628,20 @@ colour, by the text on it, by what it sits next to.
 
 - Keystrokes go to whatever window has focus. Click the field first, or
   pass \`target\` to \`computer_type\`, which does it for you.
+- Text is typed one key per character on a US keyboard layout. Chinese,
+  emoji and curly quotes have no key there, so \`computer_type\` refuses such
+  text before typing any of it. If a Chinese input method is switched on,
+  typed letters can turn into candidates and punctuation into full-width
+  forms — check the field before relying on what was typed.
+- A reply that says "would click" or "nothing was pressed" means no input
+  happened (a dry run, or a server with no device). Do not carry on as if
+  it had.
 - Quit combos (Cmd+Q, Alt+F4, Cmd+W) are blocked by default — on a shared
   machine they would close this session.
+- So are window-switching combos (Alt+Tab, the Windows key, Cmd+Tab). They
+  move focus away and every later keystroke follows it. To reach another
+  window, name it: \`computer_click({ window: "<title>", target })\` (on
+  Windows this brings it forward; elsewhere click a visible part of it).
 - Every click is real and immediate. There is no undo. Before anything
   irreversible — sending a message, confirming a payment, deleting — use
   \`computer_find\` to verify you are pointing at what you think.

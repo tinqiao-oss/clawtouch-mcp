@@ -33,9 +33,11 @@ computer_click({ target: "那个蓝色的发送按钮" })
 | **成品 ClawTouch 设备** | 开箱即用。咨询/订购 → [clawtouch.cn](https://clawtouch.cn) |
 | **自己烧一块** | 树莓派官方 **Pico 2** (约 ¥55) + 开源固件 [clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)。按那个仓库的说明把固件拖进 BOOTSEL 盘即可 |
 
-> **能不能不用硬件?** 不能。软件模拟的合成事件正是这个项目要避开的东西 ——
-> 它需要目标机上跑着一个进程、同一用户会话、还得拿到焦点。物理 HID 没有这些
-> 前提,这也是它存在的唯一理由。
+> **能不能不用硬件?** 目前不能:插件的每一次点击和按键都经这块板子发出,
+> 没有它就只能看、按不了任何东西。不过「看得准不准」可以先验:配置里开
+> `dryRun: true`,只定位、报告坐标,什么都不按,不插板子也能用。
+> (`mock: true` 只用来测试插件和 `clawtouch-mcp` 之间的连线,同样什么都不按,
+> 每条结果都会写明。)
 
 ### 2. Python 端 `clawtouch-mcp` (必须)
 
@@ -140,9 +142,27 @@ Linux 没有窗口列表,只能截整个桌面 —— 实测在多显示器下�
 
 - **键盘输入进的是当前有焦点的窗口。** 先点输入框,或者给 `computer_type`
   传 `target` 让它替你点。
-- **退出类组合键默认被拦截** (Cmd+Q / Alt+F4 / Cmd+W)。一次真实的 HID 按键
-  落在拥有焦点的任何窗口上 —— 如果那是 agent 自己的窗口,会话当场结束。
-  确实要放开就在配置里 `allowQuitCombos: true`。
+- **退出类组合键默认被拦截**:macOS 上 Cmd+Q / Cmd+W;Windows 与 Linux 桌面上
+  Alt+F4 / Ctrl+W / Ctrl+F4。一次真实的 HID 按键落在拥有焦点的任何窗口上 ——
+  如果那是 agent 自己的窗口(包括浏览器里的 dsh 网页,Ctrl+W 就关掉它),会话当场
+  结束。确实要放开就在配置里 `allowQuitCombos: true`。
+- **切换窗口的组合键也默认被拦截**:Windows 与 Linux 桌面上 Alt+Tab、Alt+Esc、
+  Ctrl+Esc、Ctrl+Alt+Del 和所有 Win/Super 键组合;macOS 上 Cmd+Tab、Cmd+空格、
+  Cmd+\`、Cmd+H、Cmd+M、Cmd+Option+Esc、Ctrl+方向键、Ctrl+F2/F3(Cmd+C 这类普通
+  应用快捷键不受影响)。真实按键跟着焦点走,焦点一离开任务窗口,之后的每一个键都会
+  落到别处 —— 实测中 agent 按了一次 Alt+Tab,整场再没回来。要操作别的窗口:Windows
+  上给 `computer_click` 传 `window`,它会点标题栏把窗口抬到前面;其他平台点那个窗口
+  露出来的部分。被控的不是运行 dsh 的这台机器时,才在配置里
+  `allowFocusSwitchCombos: true`。
+- 两道拦截都按 `clawtouch-mcp` 的解析方式读组合键:`key: "alt+tab"` 就是 Alt+Tab,
+  首尾空白按 Python 的规则去掉,数字键按数字读。
+- **打字走美式键盘布局,一个字符按一个键。** 中文、emoji、弯引号在这个布局上
+  没有对应的键,`computer_type` 遇到这类文字会在点击和打字之前整段拒绝,不会
+  打到一半才停。开着中文输入法时,打出的字母可能变成候选词、标点变成全角,
+  打完要核对。
+- **`dryRun: true`** 只定位、报告坐标,什么都不按 —— 连把后台窗口抬到前面的那一下
+  标题栏点击也不点,所以被挡住的窗口会直接拒绝。新机器上先用它跑一遍,不插板子
+  也能用。
 - **抬窗口是点它的标题栏,不是抢焦点 API。** 而且点完会重新读一次窗口状态 ——
   确认不了就如实报告,不假装成功。
 - 这等于把一台机器的真实键鼠交给 agent,**和一个人坐在键盘前是一回事**。

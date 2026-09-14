@@ -160,25 +160,76 @@ check('a missing required argument is rejected', () => {
   assert.ok(violations.length > 0, 'expected `target` to be required')
 })
 
+// ── what the model is told ──
+
+check('model-facing text keeps to what the plugin does', () => {
+  // The agent needs to know the input is real and has no undo — and nothing
+  // this plugin does not itself measure. Covers the skill and every tool.
+  const texts = [
+    skills[0].content, skills[0].description, skills[0].whenToUse,
+    ...[...registered.values()].flatMap((t) => [
+      t.description, JSON.stringify(t.parameters),
+    ]),
+  ]
+  const unmeasured = /cannot tell|genuine physical/i
+  for (const text of texts) assert.doesNotMatch(String(text), unmeasured)
+})
+
+let pendingAsync = Promise.resolve()
+const checkAsync = (label, fn) => {
+  pendingAsync = pendingAsync.then(() => fn().then(
+    () => console.log(`ok    ${label}`),
+    (err) => { failed += 1; console.error(`FAIL  ${label}\n      ${err.message}`) }))
+}
+
+checkAsync('computer_type refuses untypeable text before touching anything', async () => {
+  // Refused before the target click too: a field clicked for text that was
+  // never going to be typed is still a change on screen. Nothing is spawned
+  // here — this has to fail before the plugin reaches for the server.
+  const tool = registered.get('computer_type')
+  await assert.rejects(
+    () => tool.execute({ text: 'Hello，世界', target: 'the message box' }),
+    /nothing was typed or clicked: the text contains "，" "世" "界"/)
+})
+
 // ── the guard's decision table ──
 
 const guard = guards[0]
 const decide = (toolName, args) => guard({ name: toolName, arguments: args })
 
-check('guard denies Cmd+Q', () => {
-  assert.match(String(decide('computer_key', { key: 'q', modifiers: ['gui'] })),
-    /blocked/)
+// Which combos quit or switch windows depends on the OS the guard runs on
+// (lib/keyguard.js), and this runs on whatever the tester has: use the
+// spellings that platform refuses. test.js covers every platform's table.
+const MAC = process.platform === 'darwin'
+const QUIT = MAC
+  ? { name: 'Cmd+Q', args: { key: 'q', modifiers: ['cmd'] }, shorthand: 'cmd+q' }
+  : { name: 'Alt+F4', args: { key: 'F4', modifiers: ['alt'] }, shorthand: 'alt+f4' }
+const CLOSE = MAC
+  ? { name: 'Cmd+W', args: { key: 'w', modifiers: ['cmd'] } }
+  : { name: 'Ctrl+W', args: { key: 'w', modifiers: ['ctrl'] } }
+const SWITCH = MAC
+  ? { name: 'Cmd+Tab', args: { key: 'tab', modifiers: ['cmd'] }, shorthand: 'Cmd+Tab' }
+  : { name: 'Alt+Tab', args: { key: 'tab', modifiers: ['alt'] }, shorthand: 'Alt+Tab' }
+const QUIT_MSG = /ends this session/
+const SWITCH_MSG = /moves focus/
+
+check(`guard denies ${QUIT.name}`, () => {
+  assert.match(String(decide('computer_key', QUIT.args)), QUIT_MSG)
 })
-check('guard denies Alt+F4', () => {
-  assert.match(String(decide('computer_key', { key: 'F4', modifiers: ['alt'] })),
-    /blocked/)
+check(`guard denies ${CLOSE.name}`, () => {
+  assert.match(String(decide('computer_key', CLOSE.args)), QUIT_MSG)
 })
-check('guard denies Cmd+W', () => {
-  assert.match(String(decide('computer_key', { key: 'w', modifiers: ['cmd'] })),
-    /blocked/)
+check(`guard denies ${QUIT.name} written as shorthand in \`key\``, () => {
+  // clawtouch-mcp splits "alt+f4" itself; the guard used to miss it
+  assert.match(String(decide('computer_key', { key: QUIT.shorthand })), QUIT_MSG)
+})
+check(`guard denies ${SWITCH.name}`, () => {
+  assert.match(String(decide('computer_key', SWITCH.args)), SWITCH_MSG)
+  assert.match(String(decide('computer_key', { key: SWITCH.shorthand })), SWITCH_MSG)
 })
 check('guard allows an ordinary combo', () => {
   assert.equal(decide('computer_key', { key: 'c', modifiers: ['ctrl'] }), undefined)
+  assert.equal(decide('computer_key', { key: 'tab', modifiers: ['shift'] }), undefined)
 })
 check('guard allows q without a GUI modifier', () => {
   assert.equal(decide('computer_key', { key: 'q', modifiers: [] }), undefined)
@@ -195,12 +246,26 @@ check('guard survives malformed arguments', () => {
 // ── opting out ──
 
 const plain = { ...ctx, tools: { register: () => () => {}, guard: () => () => {} } }
-check('allowQuitCombos: true registers no guard', () => {
+const guardsFor = (config) => {
   const seen = []
   apply({ ...plain, tools: { register: () => () => {}, guard: (f) => { seen.push(f); return () => {} } } },
-    { allowQuitCombos: true, registerSkill: false })
-  assert.equal(seen.length, 0)
+    { registerSkill: false, ...config })
+  return seen
+}
+check('both opt-outs together register no guard', () => {
+  assert.equal(guardsFor({ allowQuitCombos: true, allowFocusSwitchCombos: true }).length, 0)
+})
+check(`allowQuitCombos alone still refuses ${SWITCH.name}, and lets ${QUIT.name} through`, () => {
+  const [g] = guardsFor({ allowQuitCombos: true })
+  assert.match(String(g({ name: 'computer_key', arguments: SWITCH.args })), SWITCH_MSG)
+  assert.equal(g({ name: 'computer_key', arguments: QUIT.args }), undefined)
+})
+check(`allowFocusSwitchCombos alone still refuses ${QUIT.name}, and lets ${SWITCH.name} through`, () => {
+  const [g] = guardsFor({ allowFocusSwitchCombos: true })
+  assert.match(String(g({ name: 'computer_key', arguments: QUIT.args })), QUIT_MSG)
+  assert.equal(g({ name: 'computer_key', arguments: SWITCH.args }), undefined)
 })
 
+await pendingAsync
 console.log(failed === 0 ? '\nsmoke ok' : `\n${failed} smoke failures`)
 process.exit(failed === 0 ? 0 : 1)

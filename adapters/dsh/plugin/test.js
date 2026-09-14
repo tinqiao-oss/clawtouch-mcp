@@ -18,10 +18,13 @@ import {
 import { parseAnswer, VisionError } from './lib/vision.js'
 import {
   assertOnTop, unmeasuredNote, outOfBoundsFix, renderWindowLine, sameWindow,
-  LocateError,
+  LocateError, describeResult, notPressedNote, SIMULATED_NOTE,
 } from './lib/locator.js'
 import { McpStdioClient } from './lib/mcp-client.js'
 import { Locator } from './lib/locator.js'
+import { refusedCombo } from './lib/keyguard.js'
+import { untypableChars, untypableMessage } from './lib/typing.js'
+import { typeText, pressKey, scrollWheel } from './lib/actions.js'
 
 let passed = 0
 let failed = 0
@@ -595,7 +598,7 @@ await asyncTest('a background window is raised by clicking its caption', async (
   // application itself calls a drag area (which narrows it down but does
   // not settle it, hence the re-read afterwards).
   const { locator, calls } = locatorWith({
-    'device.info': { json: { screen: { width: 1920, height: 1080, source: 'explicit' } } },
+    'device.info': { json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } } },
     'hid.click': { json: { ok: true, clicked: true } },
     'screen.windows': { json: { window: { ...ONTOP } } },
   })
@@ -636,7 +639,7 @@ await asyncTest('an unconfirmed raise click fails loudly', async () => {
   // Reporting a raise that did not happen would send the next screenshot
   // at whatever is still in front.
   const { locator } = locatorWith({
-    'device.info': { json: { screen: { width: 1920, height: 1080, source: 'explicit' } } },
+    'device.info': { json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } } },
     'hid.click': { json: { ok: false, hint: 'no convergence' } },
   })
   await assert.rejects(
@@ -652,7 +655,7 @@ await asyncTest('a raise that left it covered is caught by re-reading',
     // two conditions into one fixture is how the raise-did-not-take check
     // below went untested.
     const { locator } = locatorWith({
-      'device.info': { json: { screen: { width: 1920, height: 1080, source: 'explicit' } } },
+      'device.info': { json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } } },
       'hid.click': { json: { ok: true, clicked: true } },
       'screen.windows': { json: { window: { ...ONTOP, foreground: true, visible_fraction: 0 } } },
     })
@@ -668,7 +671,7 @@ await asyncTest('a raise the re-read says did not happen is a failure',
     // click may be swallowed as activation instead of doing what it was
     // aimed at. Unoccluded, so only this check can fail it.
     const { locator } = locatorWith({
-      'device.info': { json: { screen: { width: 1920, height: 1080, source: 'explicit' } } },
+      'device.info': { json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } } },
       'hid.click': { json: { ok: true, clicked: true } },
       'screen.windows': { json: { window: { ...ONTOP, foreground: false, visible_fraction: 1 } } },
     })
@@ -684,7 +687,7 @@ await asyncTest('an UNMEASURED foreground does not fail the raise', async () => 
   const fresh = { ...ONTOP, visible_fraction: 1 }
   delete fresh.foreground
   const { locator } = locatorWith({
-    'device.info': { json: { screen: { width: 1920, height: 1080, source: 'explicit' } } },
+    'device.info': { json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } } },
     'hid.click': { json: { ok: true, clicked: true } },
     'screen.windows': { json: { window: fresh } },
   })
@@ -698,7 +701,7 @@ await asyncTest('a re-read that errors is not a raise that worked',
     // assumption the re-read exists to replace, and the next screenshot
     // would be taken at a rectangle nobody confirmed.
     const { locator } = locatorWith({
-      'device.info': { json: { screen: { width: 1920, height: 1080, source: 'explicit' } } },
+      'device.info': { json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } } },
       'hid.click': { json: { ok: true, clicked: true } },
       'screen.windows': { json: { hint: 'enumeration failed' }, text: '', isError: true },
     })
@@ -711,7 +714,7 @@ await asyncTest('a re-read that errors is not a raise that worked',
 await asyncTest('a re-read that returns no window is refused too', async () => {
   // The window may have been closed, or renamed, while we reached for it.
   const { locator } = locatorWith({
-    'device.info': { json: { screen: { width: 1920, height: 1080, source: 'explicit' } } },
+    'device.info': { json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } } },
     'hid.click': { json: { ok: true, clicked: true } },
     'screen.windows': {
       json: { available: ['Something else'] }, text: '', isError: false,
@@ -766,7 +769,7 @@ await asyncTest('a raise point outside the declared screen says why', async () =
       calls.push({ name, args })
       if (name === 'device.info') {
         return {
-          json: { screen: { width: 1920, height: 1080, source: 'explicit' } },
+          json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } },
           text: '', images: [], isError: false,
         }
       }
@@ -801,7 +804,7 @@ await asyncTest('a NEGATIVE raise point gets the other advice', async () => {
       calls.push({ name })
       if (name === 'device.info') {
         return {
-          json: { screen: { width: 1920, height: 1080, source: 'explicit' } },
+          json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } },
           text: '', images: [], isError: false,
         }
       }
@@ -828,7 +831,7 @@ await asyncTest('a re-read that answers with a different window is refused',
     // if the target renames itself in those 450ms another window can answer
     // to the old one, and everything after this would be aimed at that one.
     const { locator } = locatorWith({
-      'device.info': { json: { screen: { width: 1920, height: 1080, source: 'explicit' } } },
+      'device.info': { json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } } },
       'hid.click': { json: { ok: true, clicked: true } },
       'screen.windows': {
         json: { window: { ...ONTOP, pid: 999 } }, text: '', isError: false,
@@ -847,7 +850,7 @@ await asyncTest('a SIBLING window of the same app is refused too', async () => {
   // screenshot and every click after it went somewhere else. Raising does
   // not move a window, so a changed rect is the tell.
   const { locator } = locatorWith({
-    'device.info': { json: { screen: { width: 1920, height: 1080, source: 'explicit' } } },
+    'device.info': { json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } } },
     'hid.click': { json: { ok: true, clicked: true } },
     'screen.windows': {
       json: { window: { ...ONTOP, pid: 10, rect: [600, 0, 900, 500] } },
@@ -940,7 +943,7 @@ await asyncTest('the click refusal carries the negative advice and sends nothing
     // before anything is sent, and the message has to name the real fix.
     const { locator, calls } = locatorWith({
       'device.info': {
-        json: { screen: { width: 1512, height: 982, source: 'detected' } },
+        json: { info: { connected: true }, screen: { width: 1512, height: 982, source: 'detected' } },
       },
     })
     locator.point = async () => ({ screen: [-980, 420] })
@@ -957,7 +960,7 @@ await asyncTest('the click refusal carries the negative advice and sends nothing
 await asyncTest('the multi-target refusal carries the same split', async () => {
   const { locator, calls } = locatorWith({
     'device.info': {
-      json: { screen: { width: 1512, height: 982, source: 'explicit' } },
+      json: { info: { connected: true }, screen: { width: 1512, height: 982, source: 'explicit' } },
     },
   })
   locator.pointMany = async () => ({
@@ -991,7 +994,7 @@ await asyncTest('a list with no foreground window is not called foreground',
         text: '', images: [], isError: false,
       },
       'device.info': {
-        json: { screen: { width: 1920, height: 1080, source: 'explicit' } },
+        json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } },
       },
     })
     const picked = await locator.resolveRegion({})
@@ -1014,7 +1017,7 @@ await asyncTest('a flagged window is still reported as the foreground one',
         text: '', images: [], isError: false,
       },
       'device.info': {
-        json: { screen: { width: 1920, height: 1080, source: 'explicit' } },
+        json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } },
       },
     })
     const picked = await locator.resolveRegion({})
@@ -1033,7 +1036,7 @@ await asyncTest('a window whose foreground field is missing says so',
         text: '', images: [], isError: false,
       },
       'device.info': {
-        json: { screen: { width: 1920, height: 1080, source: 'explicit' } },
+        json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } },
       },
     })
     const picked = await locator.resolveRegion({})
@@ -1198,6 +1201,489 @@ await asyncTest('an unreadable list still widens when NO window was named',
     const picked = await locator.resolveRegion({})
     assert.equal(picked.source, 'full screen')
     assert.equal(picked.region, undefined)
+  })
+
+// ── key combos the guard refuses (lib/keyguard.js) ─────────────────────
+//
+// A real keystroke goes wherever focus is. These cover the call an agent
+// actually made on 2026-09-13 (Alt+Tab, which took focus off the task
+// window for good), the shorthand spelling that used to walk past the
+// quit check, and the everyday combos that must keep working.
+
+const refuse = (key, modifiers, platform = 'win32', opts = {}) =>
+  refusedCombo(key, modifiers, { platform, ...opts })
+
+test('Alt+Tab is refused however it is spelled', () => {
+  for (const [key, mods] of [
+    ['tab', ['alt']], ['Tab', ['Alt']], ['tab', ['alt', 'shift']],
+    ['alt+tab', []], ['Alt+Tab', undefined], ['shift+alt+tab', []], ['tab', ['ALT ']],
+  ]) {
+    const hit = refuse(key, mods)
+    assert.equal(hit?.kind, 'focus', `${JSON.stringify([key, mods])} got through`)
+  }
+})
+
+test('the quit guard no longer misses the shorthand spelling', () => {
+  // clawtouch-mcp splits "alt+f4" into key f4 held with alt; the old guard
+  // compared `key` to "f4" and let this through
+  assert.equal(refuse('alt+f4', [])?.kind, 'quit')
+  assert.equal(refuse('cmd+q', [], 'darwin')?.kind, 'quit')
+  assert.equal(refuse('gui+w', [], 'darwin')?.kind, 'quit')
+  assert.equal(refuse('F4', ['alt'])?.kind, 'quit')
+})
+
+test('the other focus-switching combos are refused', () => {
+  for (const [key, mods] of [
+    ['esc', ['alt']], ['escape', ['ctrl']], ['esc', ['ctrl', 'shift']],
+    ['delete', ['ctrl', 'alt']], ['tab', ['gui']], ['ctrl+esc', []],
+  ]) {
+    assert.equal(refuse(key, mods)?.kind, 'focus', `${JSON.stringify([key, mods])} got through`)
+  }
+})
+
+test('on Windows every Windows-key combination is refused', () => {
+  for (const key of ['d', 'r', 'l', 'e', '1', 'up', 'space']) {
+    assert.equal(refuse(key, ['win'])?.kind, 'focus', `Win+${key} got through`)
+    assert.equal(refuse(`win+${key}`, [])?.kind, 'focus', `win+${key} shorthand got through`)
+  }
+  assert.equal(refuse('d', ['gui'], 'linux')?.kind, 'focus')
+})
+
+test('on macOS Command is an application shortcut, except the ones that leave the app', () => {
+  for (const key of ['c', 'v', 's', 'a', 'z', 'f']) {
+    assert.equal(refuse(key, ['cmd'], 'darwin'), null, `Cmd+${key} was refused`)
+  }
+  for (const [key, mods] of [
+    ['tab', ['cmd']], ['space', ['cmd']], [' ', ['cmd']], ['`', ['cmd']], ['h', ['cmd']],
+    ['m', ['cmd']], ['esc', ['cmd', 'alt']], ['left', ['ctrl']],
+  ]) {
+    assert.equal(refuse(key, mods, 'darwin')?.kind, 'focus', `${JSON.stringify([key, mods])} got through`)
+  }
+})
+
+test('ordinary keys and in-app combos go through', () => {
+  for (const [key, mods] of [
+    ['tab', []], ['tab', ['shift']], ['tab', ['ctrl']], ['esc', []], ['enter', []],
+    ['c', ['ctrl']], ['v', ['ctrl']], ['s', ['ctrl', 'shift']], ['left', ['ctrl']],
+    ['delete', []], ['delete', ['ctrl']], ['f4', []], ['q', []], ['+', []], ['ctrl+plus', []],
+  ]) {
+    assert.equal(refuse(key, mods), null, `${JSON.stringify([key, mods])} was refused`)
+  }
+})
+
+test('each class is switched off on its own', () => {
+  assert.equal(refuse('tab', ['alt'], 'win32', { focus: false }), null)
+  assert.equal(refuse('f4', ['alt'], 'win32', { focus: false })?.kind, 'quit')
+  assert.equal(refuse('f4', ['alt'], 'win32', { quit: false }), null)
+  assert.equal(refuse('tab', ['alt'], 'win32', { quit: false })?.kind, 'focus')
+})
+
+test('arguments are read the way the plugin forwards them', () => {
+  assert.equal(refuse(undefined, undefined), null)    // no key: the server rejects the call
+  assert.equal(refuse('tab', 'alt'), null)            // non-array modifiers are sent as none: plain Tab
+  assert.equal(refuse('tab', ['alt', 7])?.kind, 'focus')
+  // the server stringifies the key: a numeric 1 held with Win is Win+1
+  assert.equal(refuse(1, ['win'])?.kind, 'focus')
+  assert.equal(refuse(42, ['alt']), null)             // "42" is no key at all
+})
+
+test('whitespace Python strips is stripped here too — the bypass the review found', () => {
+  // The server strips names with Python's str.strip(), which also removes
+  // U+001C-U+001F and U+0085; JavaScript's trim() does not. Each of these was
+  // pressed by the server as the combo on the right while the guard saw an
+  // unknown key.
+  assert.equal(refuse('tab', ['alt'])?.kind, 'focus')      // Alt+Tab
+  assert.equal(refuse('f4', ['alt'])?.kind, 'quit')        // Alt+F4
+  assert.equal(refuse('d', ['gui'])?.kind, 'focus')        // Win+D
+  assert.equal(refuse('alt+tab', [])?.kind, 'focus')       // shorthand tail
+  assert.equal(refuse('　tab', ['alt'])?.kind, 'focus')      // both strip this one
+  // JavaScript-only whitespace: the server would reject "﻿tab"; refusing it is harmless
+  assert.equal(refuse('﻿tab', ['alt'])?.kind, 'focus')
+})
+
+test('Windows: Ctrl+W and Ctrl+F4 close like Cmd+W; Win+Q is the shell, not quit', () => {
+  assert.equal(refuse('w', ['ctrl'])?.kind, 'quit')
+  assert.equal(refuse('F4', ['control'])?.kind, 'quit')
+  const winQ = refuse('q', ['win'])
+  assert.equal(winQ?.kind, 'focus')
+  assert.match(winQ.what, /^Win\+Q/)
+  assert.equal(refuse('q', ['win'], 'win32', { focus: false }), null)
+  assert.match(refuse('d', ['gui'], 'linux').what, /^Super\+D/)
+})
+
+test('macOS refuses only what does something there', () => {
+  for (const [key, mods] of [['esc', ['alt']], ['esc', ['ctrl']], ['tab', ['alt']], ['w', ['ctrl']], ['delete', ['ctrl', 'alt']]]) {
+    assert.equal(refuse(key, mods, 'darwin'), null, `${JSON.stringify([key, mods])} was refused on macOS`)
+  }
+  assert.equal(refuse('f2', ['ctrl'], 'darwin')?.kind, 'focus')   // keyboard focus to the menu bar
+  assert.equal(refuse('F3', ['ctrl'], 'darwin')?.kind, 'focus')   // ... to the Dock
+  assert.match(refuse('esc', ['cmd', 'option'], 'darwin').what, /Cmd\+Option\+Esc/)
+})
+
+// ── what computer_type can type ─────────────────────────────────────────
+//
+// The device types one key per character on a US layout and stops at the
+// first character that has no key — after everything before it went out.
+// So the whole text is checked before anything is sent.
+
+test('plain ASCII is typeable; control characters are left to the server', () => {
+  assert.deepEqual(untypableChars('Hello, world! 7+9=16 ~`|\\{}[]<>?'), [])
+  // The server strips these itself and reports what it really sent.
+  assert.deepEqual(untypableChars('line one\nline two\ttab\r\x7f'), [])
+  assert.deepEqual(untypableChars(''), [])
+})
+
+test('non-ASCII is found before anything is sent, each character once', () => {
+  assert.deepEqual(untypableChars('Hello，世界 世界'), ['，', '世', '界'])
+  // What a model writes without being asked: curly quotes, a dash, an accent.
+  assert.deepEqual(untypableChars('“quoted” — café'), ['“', '”', '—', 'é'])
+  // These two look like whitespace and are not on the layout either.
+  assert.deepEqual(untypableChars('a bc'), [' ', ''])
+})
+
+test('an emoji is one character, not two UTF-16 halves', () => {
+  assert.deepEqual(untypableChars('ok 👍👍'), ['👍'])
+})
+
+test('the refusal says nothing happened and names what to fix', () => {
+  const msg = untypableMessage(untypableChars('你好 hello'))
+  assert.match(msg, /^nothing was typed or clicked/)
+  assert.match(msg, /"你" "好"/)
+  assert.match(untypableMessage([...'一二三四五六七八九十']), /and 2 more/)
+})
+
+// ── a server with no device, and a dry run, never read as a press ───────
+//
+// `clawtouch-mcp --mock` answers every action `ok` — `clicked: true`
+// included — and presses nothing. `mock: true` is what someone without a
+// board tries first, so relaying that as "clicked" is the worst place for
+// this plugin to be wrong.
+
+const MOCK_INFO = {
+  json: {
+    info: { port: '<mock>', connected: true, mock: true },
+    screen: { width: 1920, height: 1080, source: 'explicit' },
+  },
+}
+const REAL_INFO = {
+  json: {
+    info: { port: 'COM6', connected: true },
+    screen: { width: 1920, height: 1080, source: 'explicit' },
+  },
+}
+const LOCATED = {
+  screen: [100, 200],
+  source: 'window "Calc"',
+  fit: { x: { scale: 1 }, y: { scale: 1 } },
+  timings: { totalMs: 5 },
+}
+
+await asyncTest('a --mock click goes out but is not reported as a click', async () => {
+  const { locator, calls } = locatorWith({
+    'device.info': MOCK_INFO,
+    'hid.click': { json: { ok: true, clicked: true } },
+  })
+  locator.point = async () => ({ ...LOCATED })
+  const out = await locator.click({ target: 'the 7 key' })
+  assert.equal(out.clicked, false)
+  assert.equal(out.simulated, true)
+  // Still sent — exercising that path is what --mock is for...
+  assert.equal(calls.filter((c) => c.name === 'hid.click').length, 1)
+  // ...and the device was asked about once, not once per question.
+  assert.equal(calls.filter((c) => c.name === 'device.info').length, 1)
+  assert.match(describeResult(out, 'would click'),
+    /nothing was pressed: clawtouch-mcp is running with --mock/)
+})
+
+await asyncTest('a click on a real device is still a click', async () => {
+  const { locator } = locatorWith({
+    'device.info': REAL_INFO,
+    'hid.click': { json: { ok: true, clicked: true } },
+  })
+  locator.point = async () => ({ ...LOCATED })
+  const out = await locator.click({ target: 'the 7 key' })
+  assert.equal(out.clicked, true)
+  assert.equal(out.simulated, undefined)
+  assert.equal(notPressedNote(out), '')
+  assert.doesNotMatch(describeResult(out, 'clicked'), /nothing was pressed/)
+})
+
+await asyncTest('a --mock click sequence is not reported as clicks either', async () => {
+  const { locator } = locatorWith({
+    'device.info': MOCK_INFO,
+    'hid.batch': { json: { ok: true, results: [{ ok: true }, { ok: true }] } },
+  })
+  locator.pointMany = async () => ({
+    results: [
+      { target: 'the 7 key', screen: [10, 10] },
+      { target: 'the plus key', screen: [20, 10] },
+    ],
+  })
+  const out = await locator.clickSequence({ targets: ['the 7 key', 'the plus key'] })
+  assert.equal(out.clicked, false)
+  assert.equal(notPressedNote(out), SIMULATED_NOTE)
+})
+
+await asyncTest('a --mock server is not asked to raise a window', async () => {
+  // Its "click" would log, the re-read would say the raise did not take,
+  // and the agent would be told something was holding focus.
+  const { locator, calls } = locatorWith({ 'device.info': MOCK_INFO })
+  const out = await locator.ensureReachable({ ...ONTOP, foreground: false })
+  assert.equal(out.title, 'Calc')
+  assert.ok(!calls.some((c) => c.name === 'hid.click'))
+})
+
+await asyncTest('dryRun does not click to raise a window', async () => {
+  // "Locates and reports without pressing anything" — the title-bar click
+  // that brings a window forward is a press, and in a browser it can open
+  // a tab.
+  const { locator, calls } = locatorWith({}, { dryRun: true })
+  const out = await locator.ensureReachable({ ...ONTOP, foreground: false })
+  assert.equal(out.title, 'Calc')
+  assert.equal(calls.length, 0, 'nothing should have been sent')
+})
+
+await asyncTest('dryRun refuses a covered window and says why it was not raised',
+  async () => {
+    const { locator, calls } = locatorWith({}, { dryRun: true })
+    await assert.rejects(
+      () => locator.ensureReachable({ ...ONTOP, foreground: false, visible_fraction: 0 }),
+      (err) => err instanceof LocateError
+        && /in front of it/.test(err.message)
+        && /No click was made to raise it: dryRun presses nothing/.test(err.message))
+    assert.equal(calls.length, 0)
+  })
+
+await asyncTest('a dry-run click sends nothing and says nothing was pressed', async () => {
+  const { locator, calls } = locatorWith({}, { dryRun: true })
+  locator.point = async () => ({ ...LOCATED })
+  const out = await locator.click({ target: 'the 7 key' })
+  assert.equal(out.clicked, false)
+  assert.equal(out.dryRun, true)
+  assert.equal(calls.length, 0)
+  assert.match(describeResult(out, 'would click'), /nothing was pressed: dryRun is on/)
+})
+
+await asyncTest('an unreadable device.info is refused, then asked again', async () => {
+  // Not "a device" by default: guessing that is how a mock's clicks got
+  // reported as clicks. And not remembered either.
+  let n = 0
+  const { locator, calls } = locatorWith({
+    'device.info': () => (++n === 1
+      ? { json: undefined, text: 'metadata unavailable', images: [], isError: true }
+      : MOCK_INFO),
+  })
+  await assert.rejects(() => locator.simulated(),
+    (err) => err instanceof LocateError && /could not be read/.test(err.message)
+      && /nothing was sent/.test(err.message))
+  assert.equal(await locator.simulated(), true, 'asked again, and believed')
+  assert.equal(calls.filter((c) => c.name === 'device.info').length, 2)
+})
+
+await asyncTest('a reply of the wrong shape is not an answer', async () => {
+  // Parseable is not enough: `{}` carries no `info`, so it says nothing
+  // about the device — and must not be cached as if it did.
+  for (const bad of [{}, [], { error: 'metadata unavailable' }, { info: [] }]) {
+    let n = 0
+    const { locator } = locatorWith({
+      'device.info': () => (++n === 1
+        ? { json: bad, text: JSON.stringify(bad), images: [], isError: false }
+        : MOCK_INFO),
+    })
+    await assert.rejects(() => locator.simulated(), /could not be read/,
+      `${JSON.stringify(bad)} was taken as an answer`)
+    assert.equal(await locator.simulated(), true)
+  }
+})
+
+await asyncTest('when the device cannot be established, the click is not sent',
+  async () => {
+    // First question an error, second one throws: the click must not go out
+    // between them — asked after it, a failure would report failure for a
+    // click that happened.
+    let n = 0
+    const { locator, calls } = locatorWith({
+      'device.info': () => {
+        n += 1
+        if (n === 1) return { json: undefined, text: 'no', images: [], isError: true }
+        throw new Error('server went away')
+      },
+      'hid.click': { json: { ok: true, clicked: true } },
+    })
+    locator.point = async () => ({ ...LOCATED })
+    await assert.rejects(() => locator.click({ target: 'the 7 key' }), /server went away/)
+    assert.deepEqual(calls.map((c) => c.name), ['device.info', 'device.info'])
+  })
+
+await asyncTest('nor is the click that would raise a window', async () => {
+  const { locator, calls } = locatorWith({
+    'device.info': { json: undefined, text: 'no', images: [], isError: true },
+    'hid.click': { json: { ok: true, clicked: true } },
+  })
+  await assert.rejects(
+    () => locator.ensureReachable({ ...ONTOP, foreground: false }),
+    /could not be read/)
+  assert.ok(!calls.some((c) => c.name === 'hid.click'), 'no raise click')
+})
+
+await asyncTest('tools asking at once share one device.info request', async () => {
+  const { locator, calls } = locatorWith({ 'device.info': MOCK_INFO })
+  await Promise.all([locator.simulated(), locator.screenBounds(), locator.simulated()])
+  assert.equal(calls.filter((c) => c.name === 'device.info').length, 1)
+})
+
+await asyncTest('a mock this plugin started is a mock even when device.info fails', async () => {
+  // The flag is known without asking, so a failed question cannot turn it
+  // back into a device.
+  const { locator } = locatorWith({
+    'device.info': { json: undefined, text: 'boom', images: [], isError: true },
+    'hid.click': { json: { ok: true, clicked: true } },
+  }, { args: ['--allow-screenshot', '--mock'] })
+  locator.point = async () => ({ ...LOCATED })
+  const out = await locator.click({ target: 'the 7 key' })
+  assert.equal(out.clicked, false)
+  assert.equal(out.simulated, true)
+})
+
+// ── the tools that send input directly: type, key, scroll ───────────────
+
+function handlerWith(replies, config = {}) {
+  const { locator, calls } = locatorWith(replies, config)
+  return { deps: { locator, config }, calls }
+}
+
+await asyncTest('computer_type on a --mock server says nothing was typed, and asks first',
+  async () => {
+    const { deps, calls } = handlerWith({
+      'device.info': MOCK_INFO,
+      'hid.type': { json: { ok: true, chars: 5 } },
+    })
+    const out = await typeText(deps, { text: 'hello' })
+    assert.match(out.summary,
+      /^would type 5 characters — nothing was pressed: clawtouch-mcp is running with --mock/)
+    assert.deepEqual(calls.map((c) => c.name), ['device.info', 'hid.type'])
+  })
+
+await asyncTest('computer_type on a real device says what was typed and what was left out',
+  async () => {
+    // The server drops control characters (a newline must not submit a
+    // draft); "typed 9" for a 10-character request has to say why.
+    const { deps } = handlerWith({
+      'device.info': REAL_INFO,
+      'hid.type': { json: { ok: true, chars: 9 } },
+    })
+    const out = await typeText(deps, { text: 'line one\nX' })
+    assert.equal(out.summary, 'typed 9 characters (1 control character such as a '
+      + 'newline or tab left out — send Enter or Tab with computer_key)')
+    const plain = handlerWith({
+      'device.info': REAL_INFO,
+      'hid.type': { json: { ok: true, chars: 5 } },
+    })
+    assert.equal((await typeText(plain.deps, { text: 'hello' })).summary, 'typed 5 characters')
+  })
+
+await asyncTest('computer_type refuses untypeable text outside a dry run, before any call',
+  async () => {
+    // `point` is not stubbed: if the refusal did not come first, the target
+    // click would reach for the window list and this would see the call.
+    const { deps, calls } = handlerWith({})
+    await assert.rejects(
+      () => typeText(deps, { text: 'Hello，世界', target: 'the message box' }),
+      (err) => err instanceof LocateError
+        && /^nothing was typed or clicked/.test(err.message))
+    assert.equal(calls.length, 0)
+  })
+
+await asyncTest('computer_type in a dry run says so and sends nothing', async () => {
+  const { deps, calls } = handlerWith({}, { dryRun: true })
+  const out = await typeText(deps, { text: 'hello' })
+  assert.equal(out.summary, 'would type 5 characters — nothing was pressed: dryRun is on')
+  assert.equal(calls.length, 0)
+})
+
+await asyncTest('computer_key: a mock says nothing was pressed, a device says pressed',
+  async () => {
+    const mock = handlerWith({ 'device.info': MOCK_INFO, 'hid.key': { json: { ok: true } } })
+    assert.match((await pressKey(mock.deps, { key: 'enter' })).summary,
+      /^would press enter — nothing was pressed: clawtouch-mcp is running with --mock/)
+    assert.deepEqual(mock.calls.map((c) => c.name), ['device.info', 'hid.key'])
+    const real = handlerWith({ 'device.info': REAL_INFO, 'hid.key': { json: { ok: true } } })
+    assert.equal((await pressKey(real.deps, { key: 'c', modifiers: ['ctrl'] })).summary,
+      'pressed ctrl+c')
+    const dry = handlerWith({}, { dryRun: true })
+    assert.equal((await pressKey(dry.deps, { key: 'enter' })).summary,
+      'would press enter — nothing was pressed: dryRun is on')
+    assert.equal(dry.calls.length, 0)
+  })
+
+await asyncTest('computer_scroll: a mock says nothing was pressed, a device says scrolled',
+  async () => {
+    const mock = handlerWith({ 'device.info': MOCK_INFO, 'hid.scroll': { json: { ok: true } } })
+    assert.match((await scrollWheel(mock.deps, { amount: -3 })).summary,
+      /^would scroll -3 — nothing was pressed: clawtouch-mcp is running with --mock/)
+    assert.deepEqual(mock.calls.map((c) => c.name), ['device.info', 'hid.scroll'])
+    const real = handlerWith({ 'device.info': REAL_INFO, 'hid.scroll': { json: { ok: true } } })
+    assert.equal((await scrollWheel(real.deps, { amount: 2 })).summary, 'scrolled 2')
+    // The wire name is `delta`; `amount` was once passed through and the
+    // server rejected every call.
+    assert.deepEqual(real.calls.find((c) => c.name === 'hid.scroll').args, { delta: 2 })
+    const dry = handlerWith({}, { dryRun: true })
+    assert.equal((await scrollWheel(dry.deps, { amount: 1 })).summary,
+      'would scroll 1 — nothing was pressed: dryRun is on')
+    assert.equal(dry.calls.length, 0)
+  })
+
+await asyncTest('type and scroll with a target click it first, then send', async () => {
+  for (const [run, args, wire] of [
+    [typeText, { text: 'hi', target: 'the message box' }, 'hid.type'],
+    [scrollWheel, { amount: -2, target: 'the list' }, 'hid.scroll'],
+  ]) {
+    const { deps, calls } = handlerWith({
+      'device.info': REAL_INFO,
+      'hid.click': { json: { ok: true, clicked: true } },
+      [wire]: { json: { ok: true, chars: 2 } },
+    })
+    deps.locator.point = async () => ({ ...LOCATED })
+    const out = await run(deps, args)
+    assert.deepEqual(calls.map((c) => c.name), ['device.info', 'hid.click', wire])
+    assert.match(out.summary, /^clicked \(100, 200\) in window "Calc".*; (typed 2 characters|scrolled -2)$/)
+  }
+})
+
+await asyncTest('after a failed device.info question, the next key asks afresh', async () => {
+  // A rejected question must not be handed to every later caller.
+  let n = 0
+  const { deps, calls } = handlerWith({
+    'device.info': () => {
+      n += 1
+      if (n === 1) throw new Error('server went away')
+      return REAL_INFO
+    },
+    'hid.key': { json: { ok: true } },
+  })
+  await assert.rejects(() => pressKey(deps, { key: 'enter' }), /server went away/)
+  assert.equal((await pressKey(deps, { key: 'enter' })).summary, 'pressed enter')
+  assert.deepEqual(calls.map((c) => c.name), ['device.info', 'device.info', 'hid.key'])
+})
+
+await asyncTest('a device.info question that fails before a key means no key went out',
+  async () => {
+    // Asked before sending, so an error can never stand for a key that was
+    // in fact pressed — which the agent would then press again.
+    const calls = []
+    const locator = new Locator({
+      config: {},
+      mcp: {
+        async callTool(name) {
+          calls.push(name)
+          if (name === 'device.info') throw new Error('server went away')
+          return { json: { ok: true }, text: '', images: [], isError: false }
+        },
+      },
+    })
+    await assert.rejects(() => pressKey({ locator, config: {} }, { key: 'enter' }),
+      /server went away/)
+    assert.deepEqual(calls, ['device.info'])
   })
 
 // ── the number TESTING-macos.md tells a tester to expect ───────────────
