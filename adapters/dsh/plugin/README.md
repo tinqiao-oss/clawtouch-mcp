@@ -121,8 +121,8 @@ and nothing claims it was.
 ### Why hardware HID
 
 Input arrives through the OS's standard USB HID driver stack, exactly like
-a plugged-in keyboard. Nothing is injected into the session, and the input
-side of the target needs no driver and no agent process. See
+a plugged-in keyboard, so the input side of the target needs no driver and
+no agent process. See
 [clawtouch-mcp](https://github.com/tinqiao-oss/clawtouch-mcp) for the
 plumbing this builds on.
 
@@ -169,10 +169,12 @@ plugins already provides it.
 
 You also need the hardware: a Raspberry Pi Pico 2 (about ¥55 / $8) running
 the open [ClawTouch HID firmware](https://github.com/tinqiao-oss/clawtouch-hid),
-or any turnkey [ClawTouch device](https://clawtouch.cn). There is no
-software-only mode — synthetic events are the thing this project exists to
-avoid, and they carry requirements (a process on the target machine, in the
-same session, holding focus) that a physical HID device simply does not have.
+or any turnkey [ClawTouch device](https://clawtouch.cn). Every click and
+keystroke this plugin makes goes out through that board, so without one it
+can look but cannot press anything. Looking is still worth checking first:
+`dryRun: true` locates and reports without pressing anything, and needs no
+board. (`mock: true` is for testing the plugin's link to `clawtouch-mcp`; it
+presses nothing either, and every result says so.)
 
 Verify before involving an agent:
 
@@ -206,8 +208,10 @@ Everything is optional except a vision key.
         autoRaise: true            # click a background window's title bar
                                    # to bring it forward before looking
         allowQuitCombos: false     # see "Safety"
+        allowFocusSwitchCombos: false  # see "Safety"
         registerSkill: true
-        mock: false                # run the HID layer without hardware
+        mock: false                # no device: exercises the server, presses
+                                   # nothing, and every result says so
         vision:
           model: qwen-vl-max
           endpoint: ...            # any OpenAI-compatible vision endpoint
@@ -270,12 +274,33 @@ error.
 This gives an agent the same reach as a person at the keyboard, with no
 undo.
 
-- **Quit combos are blocked by default.** Cmd+Q, Alt+F4 and Cmd+W are
-  denied by a guard. On a machine shared with the agent they would close
-  the session; set `allowQuitCombos: true` only when the machine being
-  driven is not the one running dsh.
-- **`dryRun: true`** locates and reports without pressing anything. Worth
-  a first pass on a new machine.
+- **Quit combos are blocked by default.** On macOS Cmd+Q and Cmd+W; on
+  Windows and Linux desktops Alt+F4, Ctrl+W and Ctrl+F4. On a machine
+  shared with the agent they would close the session (a browser showing the
+  dsh web UI closes on Ctrl+W); set `allowQuitCombos: true` only when the
+  machine being driven is not the one running dsh.
+- **Window-switching combos are blocked by default too.** On Windows and
+  Linux desktops Alt+Tab, Alt+Esc, Ctrl+Esc, Ctrl+Alt+Del and every
+  Windows/Super-key combination; on macOS Cmd+Tab, Cmd+Space, Cmd+\`,
+  Cmd+H, Cmd+M, Cmd+Option+Esc, Ctrl+arrows and Ctrl+F2/F3 (ordinary Cmd
+  shortcuts such as Cmd+C still work). A real keystroke goes wherever focus
+  is, so once focus leaves the task window every later key follows it —
+  observed in testing, where an agent pressed Alt+Tab and the rest of the
+  run never got back. To work in another window on Windows, pass `window`
+  to `computer_click`, which brings it forward by its title bar; elsewhere
+  click a visible part of it. Set `allowFocusSwitchCombos: true` only when
+  the machine being driven is not the one running dsh.
+- Both guards read a combination the way `clawtouch-mcp` will parse it:
+  `key: "alt+tab"` is Alt+Tab, surrounding whitespace is stripped as Python
+  strips it, and a numeric key is read as its digits.
+- **`dryRun: true`** locates and reports without pressing anything — not
+  even the title-bar click that brings a background window forward, so a
+  covered window is refused instead of raised. Worth a first pass on a new
+  machine, and it needs no board.
+- **Text is typed on a US keyboard layout**, one key per character.
+  `computer_type` refuses text containing anything outside plain ASCII
+  (Chinese, emoji, curly quotes) before it types or clicks anything, rather
+  than stopping halfway through it.
 - **A "not found" answer is honest, not transient.** The plugin refuses to
   click rather than guessing, and refuses a calibration whose two axes
   disagree — a misread marker would put the click anywhere.

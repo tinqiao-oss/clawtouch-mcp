@@ -146,7 +146,7 @@ npm install --no-save @deepseek-ai/dsh-tools   # smoke.js only
 node smoke.js     # registers against the real dsh tool schema
 ```
 
-Expected: `83 passed, 0 failed`, and `smoke ok`. These are platform
+Expected: `120 passed, 0 failed`, and `smoke ok`. These are platform
 independent — a failure here is a real bug, not a macOS limitation.
 (`--no-save` on purpose: the published plugin has no dependencies and
 smoke.js is a dev-only harness, so this must not land in `package.json`.

@@ -7,6 +7,108 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — dsh plugin (`dsh-clawtouch` 0.1.2): results that reported input which never happened, and text that stopped halfway
+
+Three ways the plugin could tell the agent something was pressed when it
+was not, or leave it guessing what was:
+
+- **`mock: true` reported clicks.** `clawtouch-mcp --mock` has no device and
+  answers every action with success — `hid.click` says `clicked: true` —
+  and the plugin relayed that as "clicked (x, y)". The README describes
+  `mock` as running without hardware, so it is what someone without a board
+  tries first. The plugin now settles whether the server is a mock before
+  it sends anything — from the `--mock` it started the server with, or else
+  from the server's own `device.info`, asked once per session. Only a real
+  answer counts (an object with the `info` block the server always sends);
+  when none can be read, the tool sends nothing and says that whether the
+  input would reach a device is unknown, and asks again next time instead
+  of remembering a guess. A mock still receives the action, so the path is
+  exercised, and the result reads "would click … — nothing was pressed:
+  clawtouch-mcp is running with --mock". The same goes for sequences,
+  typing, keys and scrolling; a mock server is not asked to raise a window
+  either. Settling it first matters: a question asked after the input went
+  out could fail and report a failure for input that happened, which
+  invites the agent to send it twice.
+- **`dryRun: true` could press a title bar.** It is documented as locating
+  and reporting "without pressing anything", but bringing a background
+  window forward is a real click on its caption (in a browser that can open
+  a tab), and it happened before the dry-run check. A dry run now works
+  with the window as it is, and refuses a covered one with the reason no
+  raise was attempted. Every dry-run result — clicks, typing, keys,
+  scrolling — says "nothing was pressed: dryRun is on". (Text that cannot
+  be typed is refused in a dry run too, as it would be for real.)
+- **Non-ASCII text was typed halfway.** The device types one key per
+  character on a US layout; the first character without a key (Chinese, an
+  emoji, a curly quote, "é") stops the firmware after everything before it
+  was typed, and the server sends the text in 32-character chunks, going on
+  to the next after a failed one. `computer_type` now checks the whole text
+  first and refuses — before its `target` click, so nothing on screen
+  changes — naming the characters to rewrite. The tool description says
+  "plain ASCII only" up front. When the server leaves out control
+  characters (on purpose: a newline must not submit a chat draft), the
+  result now says how many and to send Enter or Tab with `computer_key`,
+  instead of a bare "typed 9 characters" for a 10-character request.
+
+The skill and the `computer_click` description now describe the device
+plainly — a USB HID mouse and keyboard acting on this machine's screen,
+with no undo — and the skill adds what the agent was missing: text is typed
+on a US layout (and a Chinese input method can turn typed letters into
+candidates), and "would click" / "nothing was pressed" means no input
+happened. The README's hardware paragraph now says what the board does in
+this plugin and how to check the locating without one: `dryRun` needs no
+board (verified with the board's ports held by another process: the server
+falls back to its no-device state and still lists windows and captures).
+
+The typing, key and scroll tools moved into `lib/actions.js` so they are
+tested without a host. 26 new tests in `test.js`: the typing check, mock
+and dry-run reporting for every input tool, no raise click in either, the
+order (mock status settled before any input, including a target click),
+and an unreadable, wrongly shaped, failing or concurrent `device.info`.
+`smoke.js` checks the typing refusal through the host, and that the skill
+and tool descriptions keep to what the plugin does.
+
+### Fixed — dsh plugin (`dsh-clawtouch` 0.1.2): Alt+Tab ended a run, and the quit guard had a way around it
+
+A real keystroke goes wherever focus is. In a head-to-head run on Windows
+(2026-09-13), the agent — looking for a window that was not there — sent
+`computer_key` Alt+Tab. It went out through the device, focus moved to the
+editor behind the task window, and the rest of the run could not get back:
+every later key and every "type into the focused field" would have landed
+in the editor. Nothing refused it, because the guard only knew three quit
+combos.
+
+The guard now also refuses **window-switching** combos by default. On
+Windows and Linux desktops: Alt+Tab (with or without Shift), Alt+Esc,
+Ctrl+Esc, Ctrl+Alt+Del, and every Windows/Super-key combination (the shell
+owns all of them — Start, show desktop, run, lock, snap). On macOS: Cmd+Tab,
+Cmd+Space, Cmd+\`, Cmd+H, Cmd+M, Cmd+Option+Esc, Ctrl+arrows and
+Ctrl+F2/F3, while ordinary Cmd shortcuts (Cmd+C, Cmd+S) still go through.
+The refusal tells the agent the way that does work: on Windows, name the
+window in `computer_click`, which raises it by its title bar; elsewhere,
+click a visible part of it. `allowFocusSwitchCombos: true` turns this class
+off for a setup where the machine being driven is not the one running dsh.
+
+The quit class is now spelled per platform too — Cmd+Q / Cmd+W on macOS;
+Alt+F4, Ctrl+W and Ctrl+F4 on Windows and Linux (Ctrl+W is the same
+close-this gesture as Cmd+W, and closes a browser tab showing the dsh web
+UI). A Windows-key combination is no longer described as "Cmd+Q": Win+Q is
+the shell's search and is refused as a focus switch. `allowQuitCombos`
+switches only the quit class.
+
+Two older holes, found while testing this and in review of it:
+`clawtouch-mcp` reads shorthand in `key` (`"alt+f4"` is F4 held with Alt),
+but the guard compared `key` with `"f4"`, so `computer_key({ key: "alt+f4" })`
+walked past the quit check; and the server strips names with Python's
+`str.strip()`, which removes U+001C–U+001F and U+0085 where JavaScript's
+`trim()` does not, so `key: "tab"` held with Alt was pressed as Alt+Tab
+while the guard saw an unknown key. Both classes now read a combination the
+way the server will — shorthand split, the union of both whitespace sets
+stripped, a numeric key read as its digits — so the guard sees at least
+what the server presses. The rules live in a pure `lib/keyguard.js`, so they
+are unit-tested without a host (11 new tests in `test.js`, which CI runs,
+including each reproduced bypass; the host guard table in `smoke.js` covers
+the shorthand and each opt-out on its own).
+
 ### Fixed — dsh plugin (`dsh-clawtouch` 0.1.1): one click in six failed on a missing brace
 
 With `qwen-vl-max` as the eye, a single-target `computer_click` regularly

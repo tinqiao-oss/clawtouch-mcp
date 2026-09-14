@@ -79,21 +79,81 @@ export class Locator {
   }
 
   /**
-   * The screen rectangle `hid.click` can actually address, or null when
-   * the server was given no bounds at all (then it clamps nothing).
+   * What the server reports about itself and its input device, or null
+   * when that could not be read.
    *
-   * Cached: it is a property of the server's `--screen`, fixed for the
-   * life of the process, and one extra round trip per click is not free.
+   * Asked once: everything read from it here comes from startup flags
+   * (`--screen`, `--mock`), fixed for the life of the process, and one extra
+   * round trip per click is not free. The pending request is what gets
+   * cached, so two tools asking at once share one question.
+   *
+   * Only an answer is remembered — an object carrying the `info` block the
+   * server always sends. An error, a reply with no JSON, or JSON of another
+   * shape is not an answer: remembering it would decide "no bounds, not a
+   * mock" for the rest of the session on the strength of one failed read.
+   * It reads as null now and is asked again next time.
+   */
+  deviceInfo() {
+    if (!this._info) {
+      const pending = this.mcp.callTool('device.info', {}).then(
+        (res) => {
+          if (res.isError || !isAnswer(res.json)) {
+            if (this._info === pending) this._info = undefined
+            return null
+          }
+          return res.json
+        },
+        (err) => {
+          if (this._info === pending) this._info = undefined
+          throw err
+        })
+      this._info = pending
+    }
+    return this._info
+  }
+
+  /**
+   * The screen rectangle `hid.click` can actually address, or null when
+   * the server was given no bounds at all (then it clamps nothing) — or
+   * when its answer could not be read, which is not remembered.
    */
   async screenBounds() {
-    if (this._bounds !== undefined) return this._bounds
-    const res = await this.mcp.callTool('device.info', {})
-    const screen = res.json?.screen
-    this._bounds = (screen && screen.width > 0 && screen.height > 0
+    const screen = (await this.deviceInfo())?.screen
+    return (screen && screen.width > 0 && screen.height > 0
       && screen.source !== 'unset')
       ? { width: screen.width, height: screen.height, source: screen.source }
       : null
-    return this._bounds
+  }
+
+  /**
+   * True when the server runs with `--mock`: there is no device, every
+   * action answers `ok`, and nothing is pressed. `mock: true` is what
+   * someone without a board reaches for first, and relaying those answers
+   * as "clicked" is the report this plugin can least afford to get wrong.
+   *
+   * Two sources, either one enough: the flag this plugin itself started the
+   * server with (known without asking), and the server's own answer (for a
+   * `--mock` that arrived through a wrapper command instead).
+   *
+   * When neither can say, this THROWS rather than guessing "a device":
+   * whether the input about to go out would press anything is then unknown,
+   * and every caller asks this before sending — so the refusal lands before
+   * any input, and once anything has been sent the answer is already cached
+   * and cannot fail afterwards.
+   */
+  async simulated() {
+    if (Array.isArray(this.config.args) && this.config.args.includes('--mock')) {
+      return true
+    }
+    const answer = await this.deviceInfo()
+    if (!answer) {
+      throw new LocateError(
+        'clawtouch-mcp did not say what it is driving (its device.info reply '
+        + 'could not be read), so whether this input would reach a device or '
+        + 'a --mock stand-in is unknown; nothing was sent. Check that the '
+        + 'server started cleanly, then try again.')
+    }
+    return answer.info.mock === true
   }
 
   /** Visible top-level windows, for the agent to choose from. */
@@ -226,8 +286,17 @@ export class Locator {
       // than refusing over a distinction that may not matter.
       return win
     }
+    // A dry run promises that nothing is pressed, and raising IS a press —
+    // a real click on the title bar, which in a browser can open a tab.
+    if (this.config.dryRun) return this.asIs(win, 'dryRun presses nothing')
 
     const bounds = await this.screenBounds()
+    // A --mock server "clicks" by logging it. The re-read afterwards would
+    // then say the raise did not take, which is true and misleading as to
+    // why.
+    if (await this.simulated()) {
+      return this.asIs(win, 'clawtouch-mcp is running with --mock (no device)')
+    }
     const [rx, ry] = point
     if (bounds && (rx < 0 || ry < 0
         || rx >= bounds.width || ry >= bounds.height)) {
@@ -296,6 +365,25 @@ export class Locator {
     }
     assertOnTop(fresh)
     return fresh
+  }
+
+  /**
+   * Work with a window as it stands, because this session cannot click to
+   * raise it: fine when enough of it is showing, refused when it is covered
+   * — with the reason no raise was attempted, since the usual remedy
+   * ("bring it to the front") is exactly what this session cannot do.
+   */
+  asIs(win, why) {
+    this.log('info', `${why}: not clicking to bring "${win.title}" forward`)
+    try {
+      assertOnTop(win)
+    } catch (err) {
+      if (err instanceof LocateError) {
+        throw new LocateError(`${err.message} (No click was made to raise it: ${why}.)`)
+      }
+      throw err
+    }
+    return win
   }
 
   /** Capture one calibrated screenshot: markers stamped, width bounded. */
@@ -470,6 +558,9 @@ export class Locator {
         + 'else entirely; nothing was sent. '
         + outOfBoundsFix(x, y, bounds, why))
     }
+    // Settled BEFORE sending: a question asked after the click went out
+    // could fail and report a failure for a click that happened.
+    const simulated = await this.simulated()
     const res = await this.mcp.callTool('hid.click', {
       x, y,
       button: button || 'left',
@@ -496,6 +587,12 @@ export class Locator {
       throw new LocateError(
         `the click was clamped away from (${x}, ${y}): ${res.json.hint}`)
     }
+    // A --mock server answers `clicked: true` for a click that happened
+    // nowhere. Sent anyway — exercising the path is what --mock is for —
+    // but not reported as a click.
+    if (simulated) {
+      return { ...located, clicked: false, simulated: true, click: res.json }
+    }
     return { ...located, clicked: true, click: res.json }
   }
 
@@ -521,6 +618,7 @@ export class Locator {
           + `address; nothing was sent. ${outOfBoundsFix(x, y, bounds)}`)
       }
     }
+    const simulated = await this.simulated()
     const res = await this.mcp.callTool('hid.batch', {
       ops: located.results.map((r) => ({
         type: 'click',
@@ -548,8 +646,33 @@ export class Locator {
         `the click sequence was not confirmed${which ? ` (failed at ${which})` : ''}: `
         + `${res.text.slice(0, 300) || 'no result body'}`)
     }
+    if (simulated) {
+      return { ...located, clicked: false, simulated: true, batch: res.json }
+    }
     return { ...located, clicked: true, batch: res.json }
   }
+}
+
+/** A `device.info` reply that says something: an object with an `info` block. */
+function isAnswer(json) {
+  return Boolean(json) && typeof json === 'object' && !Array.isArray(json)
+    && Boolean(json.info) && typeof json.info === 'object' && !Array.isArray(json.info)
+}
+
+/**
+ * Appended to every result that pressed nothing, so a "would click" is
+ * never read as a click that happened. Exported for the tools that call
+ * the server directly (type, key, scroll).
+ */
+export const SIMULATED_NOTE = 'nothing was pressed: clawtouch-mcp is running '
+  + 'with --mock, which has no device attached'
+export const DRY_RUN_NOTE = 'nothing was pressed: dryRun is on'
+
+/** The reason a result pressed nothing, or '' when it pressed for real. */
+export function notPressedNote(result) {
+  if (result?.simulated) return SIMULATED_NOTE
+  if (result?.dryRun) return DRY_RUN_NOTE
+  return ''
 }
 
 /**
@@ -757,5 +880,7 @@ export function describeResult(result, verb = 'clicked') {
     `[scale ${result.fit.x.scale.toFixed(3)}/${result.fit.y.scale.toFixed(3)},`,
     `${result.timings.totalMs}ms]`,
   ]
+  const note = notPressedNote(result)
+  if (note) bits.push(`— ${note}`)
   return bits.filter(Boolean).join(' ')
 }
