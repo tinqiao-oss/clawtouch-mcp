@@ -163,8 +163,9 @@ below).
 If the MCP server runs on the **same Mac** as the agent driving it and the
 agent app (Claude Code / Cursor / ChatGPT Desktop) is frontmost, a
 `hid.key("cmd+q")` lands in the agent and quits it mid-task — real USB HID
-has no app targeting. `hid.click` the target window first, or drive a
-remote target. Full table + mitigations:
+has no app targeting. `hid.click` the target window first, or run the agent
+on another machine (starting `clawtouch-mcp` on this one over SSH, for
+example). Full table + mitigations:
 [INTEGRATIONS.md → "Known footgun: self-interrupt"](../examples/integrations/INTEGRATIONS.md#known-footgun-self-interrupt-on-a-shared-machine).
 
 ### TextEdit autocorrects the first letter
@@ -205,7 +206,11 @@ valid screenshot without any permission dialog.
 ### Input source matters for `hid.type`
 
 The Pico sends raw HID keycodes (US ANSI layout). The system input
-source translates those keycodes to characters. **Behavior under
+source translates those keycodes to characters. Text containing anything
+outside ASCII — Chinese, fullwidth punctuation, emoji — is refused by
+`hid.type` (since 0.5.2) before any of it is typed, so it shows up as a
+clear error rather than a half-typed field; what follows is about ASCII
+text meeting an input method. **Behavior under
 Pinyin / 拼音 IME is more nuanced than "everything gets garbled"** —
 verified empirically on macOS 26.3.1 with the system Pinyin IME:
 

@@ -21,8 +21,9 @@ What this gets you:
 
 - Input events traverse the OS HID driver stack at the USB layer —
   identical to plugging in a real keyboard/mouse — useful for
-  compatibility testing, accessibility scenarios, or environments
-  where no software can be installed on the target.
+  compatibility testing, accessibility scenarios, or machines where no
+  input driver may be installed. (The demo script itself runs on the
+  machine the board is plugged into.)
 - Same agent prompts, same reasoning model, same loop shape as the
   vanilla demos — just a different action sink.
 

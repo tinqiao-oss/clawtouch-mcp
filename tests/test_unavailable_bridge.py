@@ -137,6 +137,56 @@ async def test_start_all_ports_busy_uses_unavailable_bridge():
 # ── device_info reports availability/diagnosis ──────────────────────────
 
 
+@pytest.mark.asyncio
+async def test_no_board_at_all_is_not_blamed_on_another_program():
+    """No Pico detected is a different situation from a busy one: telling
+    someone without a board to close the program using it sends them looking
+    for a program that does not exist."""
+    server = _mk_server()
+    bridge = UnavailableBridge(server, tried_ports=[], baudrate=115200)
+    with patch.object(bridge, "_try_promote", AsyncMock(return_value=False)):
+        with pytest.raises(HidUnavailableError) as exc_info:
+            await bridge.mouse_click("left")
+    msg = str(exc_info.value)
+    assert "No ClawTouch HID board was found" in msg
+    assert "--mock" in msg, "must name the way to try without hardware"
+    assert "retry" in msg.lower()
+    assert "close any program" not in msg
+
+
+@pytest.mark.asyncio
+async def test_a_named_port_with_no_board_says_so():
+    """--port COM9 with no board plugged in: the named port is the only one
+    tried and detection finds nothing — "close the program using it" would
+    again send the user after a program that does not exist."""
+    server = _mk_server(port="COM9")
+    bridge = UnavailableBridge(server, tried_ports=["COM9"], baudrate=115200)
+
+    class Refuses:
+        def __init__(self, port, baudrate=115200):
+            self.port = port
+
+        async def connect(self):
+            raise FileNotFoundError(self.port)
+
+    with patch("clawtouch_mcp.server.auto_detect_ports", return_value=[]), \
+         patch("clawtouch_mcp.server.SerialHidBridge", Refuses):
+        with pytest.raises(HidUnavailableError) as exc_info:
+            await bridge.mouse_click("left")
+    msg = str(exc_info.value)
+    assert "Could not open COM9 (given with --port)" in msg
+    assert "no ClawTouch HID board was detected" in msg
+    info = await bridge.device_info()
+    assert info["reason"].startswith("No Pico board detected")
+
+
+def test_device_info_says_no_board_detected():
+    bridge = UnavailableBridge(_mk_server(), tried_ports=[], baudrate=115200)
+    info = asyncio.run(bridge.device_info())
+    assert info["reason"].startswith("No Pico board detected")
+    assert "lazy-retr" in info["reason"]
+
+
 def test_device_info_says_unavailable():
     server = _mk_server()
     bridge = UnavailableBridge(server, tried_ports=["COM6"], baudrate=115200)

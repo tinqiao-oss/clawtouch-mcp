@@ -63,9 +63,10 @@ and loses its context.
 
 1. **Click the target first.** Before sending `escape` / quit-class keys,
    `hid.click` the target window so it (not the agent) is frontmost.
-2. **Drive a remote target.** A cross-device setup (Pico 2 W + a separate
-   target machine) sidesteps this entirely — the HID output never reaches
-   the driver host.
+2. **Run the agent on another machine.** Start `clawtouch-mcp` on the target
+   through any transport your MCP client supports (an SSH command, for
+   example) and run the agent elsewhere: the agent's own window is then never
+   on the screen the board types into.
 3. **Self-regulate on focus.** Use `device.info` plus your own frontmost
    check and have the agent refuse interrupt-class keys while it is itself
    the frontmost app.
@@ -73,7 +74,8 @@ and loses its context.
 As a backstop the server logs a **one-time** warning to stderr the first
 time it sends a quit-class combo (`cmd+q` / `alt+f4`). It is **warn-only**
 — the keystroke is never blocked or swallowed, since the same combo is
-perfectly legitimate against a remote target.
+perfectly legitimate when the agent runs on another machine, or when the
+frontmost window is the one it means to close.
 
 ## Verified clients
 

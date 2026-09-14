@@ -46,21 +46,20 @@ HID 设备**(基于 Raspberry Pi Pico 2、运行 [开源 ClawTouch HID 固件](#
 设备,目标机在**输入这一侧不需要任何鼠标键盘驱动、也不需要 HID agent 进程**。这
 个差别就是本项目存在的全部理由 —— 下面每一节都建立在它之上。
 
-**本机模式是主流用法**(agent + `clawtouch-mcp` + Pico + 被控屏全在同一台 PC;
-`clawtouch-mcp` 进程装在这里是因为它是 agent 的运行环境,但输入侧零驱动)。跨机
-控制 —— agent 在一台机、通过 USB HID 驱动另一台机上的目标 —— 是同一套硬件解锁的
-*额外*能力;见 [部署模式](#部署模式)。
+**板子操作的是它插着的那台机器。**它通过打字用的同一根 USB 线接收指令,所以
+`clawtouch-mcp` 也跑在那台机器上 —— 输入侧依然不需要驱动。agent 本身可以在别处;
+见 [部署模式](#部署模式)。
 
 **适合:**
 
-- **kiosk / 锁机环境** —— 驱动一台你装不了(或不想装)软件的机器,输入侧不跑任何
-  额外东西。
+- **kiosk / 锁机环境** —— 不用安装或常驻任何输入驱动、输入 agent:板子就是一套
+  标准 USB 键鼠(`clawtouch-mcp` 本身跑在这台机器上)。
 - **无障碍辅助** —— 让用户用 agent 发 HID 指令操控自己的电脑,不用跟各应用的合成
   输入兼容性死磕。
 - **兼容性测试** —— 验证你的软件对*外接* HID 输入的处理是否正确(跟注入的合成事件
   可能有差异)。
-- **跨机 RPA / 测试台架** —— 开发笔记本上的 agent 去驱动工控机、离线测试目标、或
-  QA 实验室的手机,目标机零 agent(视觉反馈需另配一条路径 —— 见部署模式)。
+- **测试台架** —— 开发笔记本上的 agent 去驱动一台跑着 `clawtouch-mcp` 的测试机
+  (比如通过 SSH 启动它 —— 见部署模式)。
 
 **不适合:**
 
@@ -70,8 +69,8 @@ HID 设备**(基于 Raspberry Pi Pico 2、运行 [开源 ClawTouch HID 固件](#
   agent / RPA 框架做,本仓库只做底层 HID 原语。
 
 标准桌面应用(浏览器 / IDE / Office 套件)用软件方案已经够用 —— 硬件对它们只是多
-一个选项、不是必需。它不可替代的价值集中在上面这几类:目标机装不了 agent、需要让
-OS 看到真实物理 HID 设备、或要跨机驱动。"不适合"那两类的合规边界另见
+一个选项、不是必需。它不可替代的价值集中在上面这几类:输入必须以真实物理 HID 设备
+的形式到达,且目标机上不装输入驱动、不跑输入 agent。"不适合"那两类的合规边界另见
 [可接受用途](#可接受用途)。
 
 ## 快速上手
@@ -149,11 +148,11 @@ Hermes Agent、ChatGPT Desktop / Codex CLI、Cherry Studio、Trae IDE)
 
 ## 部署模式
 
-*agent 跟被控屏是不是同一台机?* `clawtouch-mcp` 只负责**输入侧** (agent 工具调用 → HID 报告 → 真实输入)。**视觉侧** (agent 看屏决定下一步) 本仓库不附带方案 —— 你具体怎么搭配,取决于 agent 跑在哪台机。
+*agent 跟被控屏是不是同一台机?* `clawtouch-mcp` 负责**输入侧** (agent 工具调用 → HID 报告 → 真实输入),外加一个可选开启的 `hid.screenshot`,截的是它所在那台机器的屏。agent 拿屏幕做什么 (看屏、决定下一步) 不在本仓库范围内。
 
 **本机模式 (Local) —— 主流用法。** agent + `clawtouch-mcp` + Pico + 被控屏 都在**同一台 PC**。`hid.screenshot` 抓的就是这块屏,视觉闭环天然成立;Pico 走 standard USB HID,不需装任何驱动。适合:无障碍辅助 / 单机 RPA / 兼容性测试 / 本机内 kiosk 自助。
 
-**跨机模式 (Cross-host) —— 输入侧支持,视觉侧需自行解决。** agent + `clawtouch-mcp` 在 A 机,Pico 跟被控屏在 B 机。输入侧 (A → B 通过 USB HID) 本仓库完整覆盖,**但 `hid.screenshot` 抓的仍然是 A 的屏,不是 B 的** —— HID 只单向传输输入,反向屏幕采集不在 HID 范围内。视觉路径要自己选一种:**HDMI 采集卡** (B 端真正零软件,代价是外接采集硬件) · **VNC / RDP** (standard 协议无 vendor lock-in,但 B 端不再"零软件") · **API / 日志验证** (关键节点验证,非实时;仅适合固定流程 RPA) · **盲控** (一次性下发完整指令、不看反馈;仅适合完全确定性 macro)。适合:跑不动现代 OS 的工控机 / 严格隔离的嵌入式测试目标 / QA 实验室手机机柜。
+**agent 在另一台机器上。** 板子通过它的 USB CDC 数据通道接收指令 —— 和它输出键鼠用的是同一根线 —— 所以它永远只操作它插着的那台机器,`clawtouch-mcp` 也跑在那里。agent 仍然可以在别处:让你的 MCP 客户端通过它支持的任意方式在被控机上启动 `clawtouch-mcp` (比如一条 SSH 命令),按键、打字和相对移动就跟本机一样能用。绝对坐标的点击和移动要读光标位置,`hid.screenshot` 要读屏幕,这两类需要服务端跑在那台机器已登录的桌面会话里,而普通 SSH 登录往往不是:Linux 上要为桌面的 X server 设好 `DISPLAY` (以及 `XAUTHORITY`);Windows 的 OpenSSH 会话不在交互式桌面里,要从桌面会话内启动服务端;macOS 授予屏幕录制权限后可用 (见 [macOS 配置](docs/macos-setup.md))。本固件做不到的是驱动一台什么都不运行的机器:那需要给板子另一条指令通道,不在本仓库范围内。
 
 ## 安全
 
@@ -163,9 +162,9 @@ Hermes Agent、ChatGPT Desktop / Codex CLI、Cherry Studio、Trae IDE)
 * 单次输入文本**最多 4096 字符**
 * `hid.type` 仅适合 **ASCII / US 键盘布局文本**。控制字符(换行 / Tab 等)
   默认会被**剥除**(免得 agent 的多行草稿被误提交)—— 换行请用
-  `hid.key("enter")`、Tab 请用 `hid.key("tab")`。非 ASCII 文本(中文、emoji)
-  经 US 布局逐字符键入, 一般**打不出来**; 这类文本请在 agent 层走宿主
-  输入法 / 剪贴板方案。
+  `hid.key("enter")`、Tab 请用 `hid.key("tab")`。含有 ASCII 以外字符(中文、
+  emoji、弯引号)的文本会**在打出任何字之前整段拒绝** —— 否则固件会在第一个这类
+  字符处停下, 文本只打了一半; 这类文本请放进剪贴板再粘贴。
 * 所有操作受 `--ops-per-sec` 速率限制(默认 20 次/秒)
 * `hid.screenshot` **默认禁用**,加 `--allow-screenshot` 才启用
 * `hid.release_all` 暴露给 agent 作为紧急停止手段
@@ -176,7 +175,7 @@ Hermes Agent、ChatGPT Desktop / Codex CLI、Cherry Studio、Trae IDE)
 > **不是**针对失控 agent 的安全边界。
 
 `clawtouch-mcp` 把你的 agent 的工具调用变成**真实的 USB HID 输入** —— 正是这一
-特性让那些正当用途成立(kiosk、无障碍辅助、兼容性测试、跨机 RPA),它同时也带
+特性让那些正当用途成立(kiosk、无障碍辅助、兼容性测试、测试台架),它同时也带
 来一个对称的风险:
 
 **接入这里的自主 agent,实际上对宿主机的触及范围跟坐在键盘前的真人相当。**它
@@ -235,7 +234,7 @@ MIT 协议,不构成任何担保或注意义务,亦不将责任转移给亭桥;M
 | `hid.click` | v1.0 | 在 (x, y) 点击 |
 | `hid.move` | v1.0 | 把鼠标移到 (x, y) |
 | `hid.hover` | v1.0 | 移到 (x, y) 后悬停 |
-| `hid.type` | v1.0 | 输入一段 UTF-8 字符串 |
+| `hid.type` | v1.0 | 输入 ASCII 文本(US 布局) |
 | `hid.scroll` | v1.0 | 滚轮上 / 下滚动 |
 | `hid.key` | v1.0 | 按下具名键或快捷键(`enter`、`ctrl+c` …) |
 | `hid.release_all` | v1.0 | 紧急停止 —— 释放所有按下的键和鼠标按钮 |
@@ -315,8 +314,8 @@ $ clawtouch-mcp --port COM7
 
 ## 可接受用途
 
-本 server 为正当用途设计 —— 无障碍辅助、RPA、自动化测试、目标机
-必须保持干净的跨机工作流。本项目**不支持、不文档化、不协助**以下
+本 server 为正当用途设计 —— 无障碍辅助、RPA、自动化测试、不允许安装
+输入驱动的 kiosk。本项目**不支持、不文档化、不协助**以下
 用例:
 
 - 规避、绕过或干扰任何目标平台的反作弊、反滥用、限速、风控等
@@ -381,9 +380,9 @@ Pillow 的编译扩展被挡。要强制走它,传 `--screenshot-backend mss-png
 
 ## 相关工作
 
-MCP / Computer-Use 生态里已经有几个让 LLM agent 控制桌面的项目, 大体分两类。**目标机本地跑的纯软件 MCP server** —— [`domdomegg/computer-use-mcp`](https://github.com/domdomegg/computer-use-mcp)、[`AB498/computer-control-mcp`](https://github.com/AB498/computer-control-mcp)、各种 [`mcp-pyautogui`](https://github.com/hathibelagal-dev/mcp-pyautogui) 实现, 以及字节的 [UI-TARS](https://github.com/bytedance/UI-TARS-desktop) —— 在进程内调 PyAutoGUI / 系统输入 API: 上手成本最低, 但 agent 跟目标共用同一个 OS / 会话 / 焦点状态, 崩了会干扰用户实际的桌面。**硬件桥接 server** 把两者解耦: [`sunasaji/mcp-serial-hid-kvm`](https://github.com/sunasaji/mcp-serial-hid-kvm) (CH9329 / CH9350L USB-HID ASIC + 采集卡) 是架构上最直接的同类项目, CMU 的 [**HIDAgent**](https://arxiv.org/abs/2602.00492) (Bigham 等, 2026-01; < $30 的 RP2040 + HDMI→USB + CH340 串口桥, 以 Python 库形式发布) 是最接近的学术同行。`clawtouch-mcp` 走同样的解耦思路, 但搭配的是开源固件的 [`clawtouch-hid`](https://github.com/tinqiao-oss/clawtouch-hid) 栈 —— 所以线协议可扩展、固件可审计, 而不是固化功能的 ASIC。
+MCP / Computer-Use 生态里已经有几个让 LLM agent 控制桌面的项目, 大体分两类。**目标机本地跑的纯软件 MCP server** —— [`domdomegg/computer-use-mcp`](https://github.com/domdomegg/computer-use-mcp)、[`AB498/computer-control-mcp`](https://github.com/AB498/computer-control-mcp)、各种 [`mcp-pyautogui`](https://github.com/hathibelagal-dev/mcp-pyautogui) 实现, 以及字节的 [UI-TARS](https://github.com/bytedance/UI-TARS-desktop) —— 在进程内调 PyAutoGUI / 系统输入 API: 上手成本最低, 不需要硬件。**硬件桥接 server** 则改由一块独立的 USB 设备发出输入: [`sunasaji/mcp-serial-hid-kvm`](https://github.com/sunasaji/mcp-serial-hid-kvm) (CH9329 / CH9350L USB-HID ASIC + 采集卡) 是架构上最直接的同类项目, CMU 的 [**HIDAgent**](https://arxiv.org/abs/2602.00492) (Bigham, 2026-01; < $30 的 RP2040 + HDMI→USB + CH340 串口桥, 以 Python 库形式发布) 是最接近的学术同行。`clawtouch-mcp` 属于第二类, 搭配的是开源固件的 [`clawtouch-hid`](https://github.com/tinqiao-oss/clawtouch-hid) 栈 —— 所以线协议可扩展、固件可审计, 而不是固化功能的 ASIC。
 
-ClawTouch 的不可替代之处是那条**真实硬件 HID 通路**: OS 看到的是真实物理键鼠。本机模式 —— 也是常见场景 —— 下, 这条真实 HID 加上输入侧零驱动, 正是无障碍 / 兼容性测试 / 挑剔合成输入的应用用得上的点; 如果你只是在本机做合成输入、且应用不挑输入来源, 上面那些纯软件 server 更省事。跨机模式是在此之上的*额外*能力: 它能控制装不了 agent、或必须物理隔离的目标机, 这是纯软件方案根本做不到的。
+ClawTouch 的不可替代之处是那条**真实硬件 HID 通路**: OS 看到的是真实物理键鼠。这条真实 HID 加上输入侧零驱动, 正是无障碍辅助和兼容性测试用得上的点; 如果输入不需要以 USB 设备的形式到达, 上面那些纯软件 server 更省事。
 
 ## 开源路线图、参与贡献与 License
 
