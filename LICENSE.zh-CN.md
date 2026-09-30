@@ -11,7 +11,7 @@
 MIT 协议
 
 版权所有 (c) 2026 北京亭桥科技有限公司
-Copyright (c) 2026 Tinqiao Technology (Beijing) Co., Ltd.
+Copyright (c) 2026 Beijing Tinqiao Technology Co., Ltd.
 
 特此免费授予任何获得本软件及相关文档文件 ("软件") 副本的人士不受限制地
 处置本软件的权利, 包括但不限于使用、复制、修改、合并、发布、分发、再

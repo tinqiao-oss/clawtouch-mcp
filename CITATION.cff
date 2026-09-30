@@ -7,7 +7,7 @@ abstract: >-
   mouse input on a target machine over USB-CDC.
 type: software
 authors:
-  - name: "Tinqiao Technology (Beijing) Co., Ltd."
+  - name: "Beijing Tinqiao Technology Co., Ltd."
     website: "https://clawtouch.cn"
 repository-code: "https://github.com/tinqiao-oss/clawtouch-mcp"
 url: "https://github.com/tinqiao-oss/clawtouch-mcp"

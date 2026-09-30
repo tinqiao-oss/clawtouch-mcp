@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
+# SPDX-FileCopyrightText: 2026 Beijing Tinqiao Technology Co., Ltd.
 """Tests for the no-Pillow screenshot fallback (v0.4.3).
 
 Background — real-world report (macOS, Tencent WorkBuddy's bundled

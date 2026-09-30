@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
+# SPDX-FileCopyrightText: 2026 Beijing Tinqiao Technology Co., Ltd.
 """Port detection — dual-CDC composite device handling.
 
 The Pico firmware exposes TWO CDC channels (console + data) that

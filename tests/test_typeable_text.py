@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
+# SPDX-FileCopyrightText: 2026 Beijing Tinqiao Technology Co., Ltd.
 """Text the device cannot type is refused before any of it is sent.
 
 The firmware presses one key per character on a US layout and stops at the

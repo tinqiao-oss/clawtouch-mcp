@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
+# SPDX-FileCopyrightText: 2026 Beijing Tinqiao Technology Co., Ltd.
 """End-to-end stdio loop integration test.
 
 Spawns `python -m clawtouch_mcp --mock` as a real subprocess, feeds it

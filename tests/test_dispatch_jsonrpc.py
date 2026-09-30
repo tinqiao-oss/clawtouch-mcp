@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
+# SPDX-FileCopyrightText: 2026 Beijing Tinqiao Technology Co., Ltd.
 """JSON-RPC 2.0 conformance for dispatch (0.4.3 audit fixes).
 
 - Never reply to a Notification, even an *unhandled* one (§4.1). Previously an

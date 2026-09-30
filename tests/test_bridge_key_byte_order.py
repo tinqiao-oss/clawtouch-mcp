@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
+# SPDX-FileCopyrightText: 2026 Beijing Tinqiao Technology Co., Ltd.
 """End-to-end byte-order lock for the real SerialHidBridge keyboard path.
 
 The v1.1.1 keyboard byte-order unification (`[modifiers, keycode]`) is the

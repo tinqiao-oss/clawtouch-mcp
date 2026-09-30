@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
+# SPDX-FileCopyrightText: 2026 Beijing Tinqiao Technology Co., Ltd.
 """Regression test for the Retina-screen MCP buffer overflow fix.
 
 Bug history (pre-fix, see CHANGELOG v0.2.5):

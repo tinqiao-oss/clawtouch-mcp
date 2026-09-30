@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# SPDX-FileCopyrightText: 2026 Tinqiao Technology (Beijing) Co., Ltd.
+# SPDX-FileCopyrightText: 2026 Beijing Tinqiao Technology Co., Ltd.
 """MCP stdio server exposing the ClawTouch HID input + device tool set.
 
 Implements the subset of MCP spec (2024-11-05 / 2025-03-26) needed by
