@@ -301,8 +301,8 @@ comes through clean:
 | `hello world from clawtouch hid` | `hello world from clawtouch hid` — exact, spaces preserved |
 | `a:b;c,d.e!f?g` | `a:b;c,d.e!f?g` — **ASCII colon/comma stay ASCII** (no fullwidth `：，`) |
 
-**The robust fix for real text — paste via the clipboard.** This is what the
-ClawTouch desktop product does and the pattern we recommend: never type
+**The robust fix for real text — paste via the clipboard.** The pattern we
+recommend: never type
 non-ASCII char-by-char; put the text on the clipboard and paste it, which
 bypasses the IME composition buffer entirely. Verified to deliver the exact
 string — Chinese, fullwidth punctuation, em-dash and emoji — **regardless of

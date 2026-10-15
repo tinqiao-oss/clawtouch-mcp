@@ -223,9 +223,8 @@ verified empirically on macOS 26.3.1 with the system Pinyin IME:
 
 **The robust fix for real text — paste via the clipboard.** Switching the
 input source (below) only makes *ASCII* reliable; you still cannot type
-Chinese or any non-US-layout glyph through raw HID keycodes at all. The way
-the ClawTouch desktop product handles this — and the pattern we recommend —
-is to **never type non-ASCII char-by-char: put the text on the clipboard
+Chinese or any non-US-layout glyph through raw HID keycodes at all. The pattern
+we recommend is to **never type non-ASCII char-by-char: put the text on the clipboard
 and paste it**, which bypasses the IME composition buffer entirely:
 
 ```bash

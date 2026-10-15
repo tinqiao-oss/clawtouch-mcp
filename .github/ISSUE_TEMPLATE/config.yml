@@ -1,9 +1,8 @@
 blank_issues_enabled: true
 
 contact_links:
-  - name: 商务咨询 / Commercial inquiry
-    url: https://clawtouch.cn
+  - name: 其他咨询 / Other inquiries
+    url: https://clawtouch.cn/en/open-source.html
     about: |
-      Commercial and OEM inquiries — please email support@tinqiao.com directly.
-      Commercial discussions stay off public issue trackers; do not file sensitive
-      information as a GitHub issue.
+      Non-technical questions (e.g. the pre-flashed dev kit) — please email
+      support@tinqiao.com. Do not file sensitive information as a GitHub issue.

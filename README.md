@@ -14,7 +14,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/clawtouch-mcp.svg)](https://pypi.org/project/clawtouch-mcp/)
 [![Python](https://img.shields.io/pypi/pyversions/clawtouch-mcp.svg)](https://pypi.org/project/clawtouch-mcp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Commercial: clawtouch.cn](https://img.shields.io/badge/commercial-clawtouch.cn-orange.svg)](https://clawtouch.cn)
+[![Website: clawtouch.cn](https://img.shields.io/badge/website-clawtouch.cn-orange.svg)](https://clawtouch.cn/en/open-source.html)
 [![clawtouch-mcp MCP server](https://glama.ai/mcp/servers/tinqiao-oss/clawtouch-mcp/badges/score.svg)](https://glama.ai/mcp/servers/tinqiao-oss/clawtouch-mcp)
 
 <p align="center">
@@ -393,8 +393,8 @@ Content Labeling Measure* effective 2025-09-01).
 
 This server can talk to:
 
-1. **ClawTouch HID device** — turnkey hardware, drop-shipped, plug-and-play.
-   Order or get a sample at [clawtouch.cn](https://clawtouch.cn).
+1. **ClawTouch HID device** — pre-flashed dev kit, plug-and-play (ships within China).
+   See [clawtouch.cn](https://clawtouch.cn/en/open-source.html#get-hardware).
 2. **Any RP2350 board running [clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** —
    the OSS firmware + protocol module (wire epoch 1, frozen envelope) live in their own public repo.
    Buy a Pico 2 (~$8), flash the firmware, you're done.
@@ -412,11 +412,6 @@ call. No data leaves your machine.
 Yes — buy an $8 Raspberry Pi Pico 2, flash the open-source
 [clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid) firmware,
 and the server will talk to it the same way as the turnkey device.
-
-**How is this different from the closed-source ClawTouch desktop app?**
-This MCP server is the bottom HID primitive layer. The desktop product
-is a separate closed-source agent on top of the same hardware; contact
-`support@tinqiao.com` for details.
 
 **Is there a JavaScript / TypeScript version?**
 Not yet. `clawtouch-bridge-sdk` (Python + Node) is planned — see the
@@ -447,7 +442,7 @@ ClawTouch's irreplaceable edge is the **genuine hardware HID path**: the OS sees
 
 ## Open source roadmap, contributing & license
 
-**Open-core model.** Hardware and protocol primitives are open; the integrated commercial product stays closed.
+The firmware, wire protocol, MCP server and skill templates are all MIT-licensed.
 
 | Component | Status |
 |---|---|
@@ -455,13 +450,12 @@ ClawTouch's irreplaceable edge is the **genuine hardware HID path**: the OS sees
 | **[clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** — firmware + protocol module, wire epoch 1 | ✅ Released |
 | **[clawtouch-skills](https://github.com/tinqiao-oss/clawtouch-skills)** — markdown skill files for LLM agents | ✅ Released |
 | **clawtouch-bridge-sdk** — Python + Node HID SDK | 🔵 Future |
-| Backend / desktop app / adapters / vision models | 🔒 Closed — `support@tinqiao.com` |
 
 ### Contributing
 
 PRs welcome for: new MCP tools mapping to existing HID primitives, bug fixes, client-integration examples, doc improvements, non-English README translations.
 
-Not taking PRs for: agent-loop logic or application-level features (intentionally out of scope — see [Acceptable use](#acceptable-use)) or adapters for specific applications (those live in the closed-source desktop app).
+Not taking PRs for: agent-loop logic or application-level features (intentionally out of scope — see [Acceptable use](#acceptable-use)) or adapters for specific applications (app-specific know-how belongs in [clawtouch-skills](https://github.com/tinqiao-oss/clawtouch-skills) as Markdown).
 
 `clawtouch-mcp` is maintained by **Tinqiao Technology** — the team behind **ClawTouch** ([clawtouch.cn](https://clawtouch.cn)).
 
@@ -477,8 +471,7 @@ marks referenced in this repository) are covered separately in
 [TRADEMARKS.md](TRADEMARKS.md) — the MIT License does **not** grant
 any trademark rights.
 
-For commercial deployments at scale, enterprise support, or OEM hardware
-discussion: `support@tinqiao.com`.
+Questions: `support@tinqiao.com`.
 
 ## Architecture overview
 
@@ -492,4 +485,4 @@ flowchart LR
     class B this;
 ```
 
-This repo is the MCP-server hop: it translates MCP tool calls into framed bytes over USB-CDC; the firmware turns them into standard USB HID reports. For how it fits the larger Perception → Decision → Action loop and how the closed-source desktop app layers on these open HID primitives, see the official technical documentation: [system architecture &amp; data flow](https://clawtouch.cn/en/docs/architecture.html) and [data security &amp; compliance](https://clawtouch.cn/en/docs/security.html).
+This repo is the MCP-server hop: it translates MCP tool calls into framed bytes over USB-CDC; the firmware turns them into standard USB HID reports.

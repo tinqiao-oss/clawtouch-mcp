@@ -164,15 +164,8 @@ like Claude Desktop drives the HID device via stdio JSON-RPC).
 | Safety rails | Your code | Server enforces (`--screen`, `--ops-per-sec`) |
 | Use when... | You're building a Computer Use loop | You're plugging HID into an existing agent |
 
-## Looking for a packaged Computer Use loop?
+## What these demos don't cover
 
 These demos give you the **action sink** (real HID instead of synthetic
 input). The reasoning loop, screenshot pipeline, UI element detection,
 and application-specific adapters are still your job.
-
-The ClawTouch desktop product packages that whole loop end-to-end:
-vision-based UI element detection, multi-step task orchestration, and
-built-in adapters for popular Chinese-market apps — no glue code
-required. That's the closed-source side of the open-core split.
-See [clawtouch.cn](https://clawtouch.cn) or write `support@tinqiao.com`
-for evaluation access.

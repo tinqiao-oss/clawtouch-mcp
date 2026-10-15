@@ -12,7 +12,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/clawtouch-mcp.svg)](https://pypi.org/project/clawtouch-mcp/)
 [![Python](https://img.shields.io/pypi/pyversions/clawtouch-mcp.svg)](https://pypi.org/project/clawtouch-mcp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Commercial: clawtouch.cn](https://img.shields.io/badge/commercial-clawtouch.cn-orange.svg)](https://clawtouch.cn)
+[![官网: clawtouch.cn](https://img.shields.io/badge/website-clawtouch.cn-orange.svg)](https://clawtouch.cn/open-source.html)
 [![clawtouch-mcp MCP server](https://glama.ai/mcp/servers/tinqiao-oss/clawtouch-mcp/badges/score.svg)](https://glama.ai/mcp/servers/tinqiao-oss/clawtouch-mcp)
 
 <p align="center">
@@ -337,8 +337,8 @@ $ clawtouch-mcp --port COM7
 
 本 server 能跟两种硬件对话:
 
-1. **ClawTouch HID 设备** — 成品硬件,即插即用。咨询/订购请去
-   [clawtouch.cn](https://clawtouch.cn)。
+1. **ClawTouch HID 设备** — 成品硬件,即插即用。购买方式见
+   [clawtouch.cn](https://clawtouch.cn/open-source.html#get-hardware)。
 2. **任何刷了 [clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid) 的 RP2350 板** —
    开源固件 + v1.1 协议 (v1.0 baseline 冻结) 在独立公开仓里。买一块 Pico 2(树莓派官方 ¥55),
    烧固件,就能用。
@@ -355,10 +355,6 @@ $ clawtouch-mcp --port COM7
 能。买一块 ¥55 的 Raspberry Pi Pico 2(树莓派官方价),烧开源
 [clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid) 固件,
 本 server 跟它通信的方式跟成品 ClawTouch 设备完全一样。
-
-**跟闭源的 ClawTouch 桌面端有什么区别?**
-本 MCP server 是最底层 HID 原语。桌面端是独立的闭源 agent, 跑在同一套
-硬件之上, 邮件咨询 `support@tinqiao.com`。
 
 **有 JavaScript / TypeScript 版本吗?**
 暂时没有。`clawtouch-bridge-sdk`(Python + Node 双语言)在规划中 —— 见
@@ -386,7 +382,7 @@ ClawTouch 的不可替代之处是那条**真实硬件 HID 通路**: OS 看到�
 
 ## 开源路线图、参与贡献与 License
 
-**open-core 模式。**硬件与协议层原语开源;集成的商业产品闭源。
+固件、线协议、MCP server 与技能模板全部 MIT 开源。
 
 | 组件 | 状态 |
 |---|---|
@@ -394,13 +390,12 @@ ClawTouch 的不可替代之处是那条**真实硬件 HID 通路**: OS 看到�
 | **[clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** — 固件 + 协议模块,wire epoch 1 | ✅ 已发布 |
 | **[clawtouch-skills](https://github.com/tinqiao-oss/clawtouch-skills)** — 给 LLM agent 用的 markdown skill 文件 | ✅ 已发布 |
 | **clawtouch-bridge-sdk** — Python + Node HID SDK | 🔵 规划中 |
-| 后端服务 / 桌面端 / 应用适配器 / 视觉模型 | 🔒 闭源 — `support@tinqiao.com` |
 
 ### 参与贡献
 
 欢迎 PR:新增映射现有 HID 原语的 MCP 工具、Bug 修复、客户端集成示例、文档改进、非中文 README 翻译。
 
-不接受的 PR:agent 循环逻辑或应用层功能(故意排除在范围外 — 见[可接受用途](#可接受用途)),以及特定应用的适配器(这部分在闭源桌面端)。
+不接受的 PR:agent 循环逻辑或应用层功能(故意排除在范围外 — 见[可接受用途](#可接受用途)),以及特定应用的适配器(特定应用的操作经验请以 Markdown 形式贡献到 [clawtouch-skills](https://github.com/tinqiao-oss/clawtouch-skills))。
 
 `clawtouch-mcp` 由 **北京亭桥科技** 维护 —— ClawTouch 产品团队([clawtouch.cn](https://clawtouch.cn))。
 
@@ -414,7 +409,7 @@ MIT © 北京亭桥科技有限公司 — 见 [LICENSE](LICENSE) (英文版, 法
 亭桥旗下商标, 及本仓库引用的第三方商标) 由 [TRADEMARKS.md](TRADEMARKS.md)
 单独规约 —— MIT 协议**不**授予任何商标权利。
 
-商业部署 / 企业支持 / OEM 硬件合作咨询:`support@tinqiao.com`
+其他问题:`support@tinqiao.com`
 
 ## 架构总览
 
@@ -428,4 +423,4 @@ flowchart LR
     class B this;
 ```
 
-本仓库就是中间这一跳的 MCP server:把 MCP 工具调用翻译成 USB-CDC 上的带帧字节,固件再转成标准 USB HID 报告。想了解它在完整的"感知 → 决策 → 执行"循环里的位置、以及闭源桌面端如何搭在这些开源 HID 原语之上,请看官方技术文档:[系统架构 + 数据流](https://clawtouch.cn/docs/architecture.html) 与 [数据安全 + 合规](https://clawtouch.cn/docs/security.html)。
+本仓库就是中间这一跳的 MCP server:把 MCP 工具调用翻译成 USB-CDC 上的带帧字节,固件再转成标准 USB HID 报告。
