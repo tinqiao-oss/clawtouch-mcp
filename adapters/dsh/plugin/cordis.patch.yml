@@ -21,7 +21,11 @@
         # Locate and report, but never actually press anything. Useful for
         # the first run on a new machine.
         dryRun: false
-        vision:
-          model: qwen-vl-max
-          # Leave apiKey unset and export DASHSCOPE_API_KEY instead, so a
-          # key never lands in a profile file.
+        # The eye: which dsh model route looks at the screenshot. Left out,
+        # the current conversation's model looks (it must accept images).
+        # To pick another route configured in dsh, set both:
+        #   vision:
+        #     provider: bailian
+        #     model: qwen3.8-max
+        # The README's "Choosing the eye" has measurements per model and a
+        # ready-to-paste Bailian route. No API key is read by this plugin.

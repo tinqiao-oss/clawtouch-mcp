@@ -1232,6 +1232,20 @@ test('the quit guard no longer misses the shorthand spelling', () => {
   assert.equal(refuse('F4', ['alt'])?.kind, 'quit')
 })
 
+test('Alt+Space (the window menu: close or minimise next) is refused off macOS', () => {
+  // 2026-11-14: an agent pressed Alt+Space then N and minimised its task window.
+  for (const [key, mods, platform] of [
+    ['space', ['alt'], 'win32'], ['alt+space', [], 'win32'], ['Space', ['ALT'], 'linux'],
+    [' ', ['alt'], 'win32'],
+  ]) {
+    assert.equal(refuse(key, mods, platform)?.kind, 'quit', `${JSON.stringify([key, mods, platform])} got through`)
+  }
+  // Option+Space on a Mac types a character; Win+Space stays a focus refusal.
+  assert.equal(refuse('space', ['alt'], 'darwin'), null)
+  assert.equal(refuse('space', ['win'], 'win32')?.kind, 'focus')
+  assert.equal(refuse('space', [], 'win32'), null)
+})
+
 test('the other focus-switching combos are refused', () => {
   for (const [key, mods] of [
     ['esc', ['alt']], ['escape', ['ctrl']], ['esc', ['ctrl', 'shift']],
@@ -1685,6 +1699,389 @@ await asyncTest('a device.info question that fails before a key means no key wen
       /server went away/)
     assert.deepEqual(calls, ['device.info'])
   })
+
+// ── a retired vision model names the config line to change ────────────
+
+await asyncTest('a 404 "Model not exist" says which config line to change', async () => {
+  const { locate } = await import('./lib/vision.js')
+  const realFetch = globalThis.fetch
+  // The body DashScope sent for qwen-vl-max on 2026-11-14.
+  globalThis.fetch = async () => new Response(
+    '{"error":{"message":"Model not exist.","type":"invalid_request_error"}}',
+    { status: 404 })
+  try {
+    await assert.rejects(
+      () => locate({
+        imageBase64: 'AA==', mimeType: 'image/jpeg', target: 'the 7 key',
+        markerHint: '', config: { apiKey: 'k', model: 'gone-model' },
+      }),
+      (err) => err instanceof VisionError
+        && /returned 404/.test(err.message)
+        && /"gone-model" is not served/.test(err.message)
+        && /vision\.model/.test(err.message))
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+async function sentBody(config) {
+  const { locate } = await import('./lib/vision.js')
+  const realFetch = globalThis.fetch
+  let body
+  globalThis.fetch = async (_url, init) => {
+    body = JSON.parse(init.body)
+    return new Response(JSON.stringify({ choices: [{ message: { content:
+      '{"markers":{"tl":[1,1],"br":[9,9]},"target":{"found":false}}' } }] }))
+  }
+  try {
+    await locate({ imageBase64: 'AA==', mimeType: 'image/jpeg', target: 'x',
+      markerHint: '', config: { apiKey: 'k', ...config } })
+  } finally {
+    globalThis.fetch = realFetch
+  }
+  return body
+}
+
+await asyncTest('the default eye is sent with thinking off — 45 s median without it', async () => {
+  const body = await sentBody({})
+  assert.equal(body.model, 'qwen3.8-max')
+  assert.equal(body.enable_thinking, false)
+  // Naming the default model explicitly (as cordis.patch.yml does) is the same.
+  assert.equal((await sentBody({ model: 'qwen3.8-max' })).enable_thinking, false)
+})
+
+await asyncTest('another model or endpoint gets no extra fields unless asked', async () => {
+  assert.equal('enable_thinking' in await sentBody({ model: 'other-vl' }), false)
+  assert.equal('enable_thinking' in await sentBody({
+    endpoint: 'https://example.invalid/v1/chat/completions' }), false)
+  const asked = await sentBody({ model: 'other-vl', extraBody: { top_k: 1 } })
+  assert.equal(asked.top_k, 1)
+})
+
+await asyncTest('extraBody {} sends nothing extra; it cannot replace model or messages', async () => {
+  assert.equal('enable_thinking' in await sentBody({ extraBody: {} }), false)
+  const body = await sentBody({ extraBody: { model: 'evil', messages: [] } })
+  assert.equal(body.model, 'qwen3.8-max')
+  assert.equal(body.messages.length, 2)
+})
+
+await asyncTest('a non-object extraBody is refused before any request', async () => {
+  await assert.rejects(() => sentBody({ extraBody: 'enable_thinking=false' }),
+    (err) => err instanceof VisionError && /extraBody/.test(err.message))
+})
+
+await asyncTest('an ordinary 500 gets no model hint', async () => {
+  const { locate } = await import('./lib/vision.js')
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response('upstream overloaded', { status: 500 })
+  try {
+    await assert.rejects(
+      () => locate({
+        imageBase64: 'AA==', mimeType: 'image/jpeg', target: 'x',
+        markerHint: '', config: { apiKey: 'k' },
+      }),
+      (err) => /returned 500/.test(err.message) && !/vision\.model/.test(err.message))
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+
+// ── the eye: a dsh model route (lib/eye.js) ───────────────────────────
+
+const eyeMod = await import('./lib/eye.js')
+const { DshEye, EyeError, resolveRoute, chooseEffort, legacyKeys } = eyeMod
+const { stopIfCancelled } = await import('./lib/locator.js')
+
+/** Stand-in for the host's BlockAssembler: same surface the eye reads. */
+class FakeAssembler {
+  constructor() { this._text = ''; this._finish = null; this._usage = undefined }
+  push(chunk) {
+    if (chunk.type === 'text') this._text += chunk.text
+    if (chunk.type === 'usage') this._usage = chunk.usage
+    if (chunk.type === 'finish') this._finish = chunk.reason
+  }
+  // The real one reports {kind:'stop'} when no finish chunk ever came.
+  get finish() { return this._finish ?? { kind: 'stop' } }
+  get usage() { return this._usage }
+  blocks() { return this._text ? [{ type: 'text', text: this._text }] : [] }
+}
+
+function fakeServices({ modalities = ['text', 'image'], efforts, chunks, prepareError } = {}) {
+  const seen = { saved: [], prepared: [], streamed: [] }
+  const llm = {
+    async prepareCall(config, _signal, configure) {
+      if (prepareError) throw new Error(prepareError)
+      const info = { provider: config.provider, id: config.model,
+        inputModalities: modalities === null ? undefined : modalities,
+        ...(efforts ? { reasoning: { efforts } } : {}) }
+      const controls = configure({ maxTokens: config.maxTokens, temperature: config.temperature }, info)
+      seen.prepared.push({ config, controls })
+      return {
+        config: { provider: config.provider, model: config.model, ...controls },
+        async *stream(options) {
+          seen.streamed.push(options)
+          for (const c of (chunks ?? [{ type: 'text', text: '{"ok":1}' }, { type: 'finish', reason: { kind: 'stop' } }])) {
+            if (options.signal?.aborted) throw new Error('aborted')
+            yield c
+          }
+        },
+      }
+    },
+  }
+  const attachments = {
+    async saveImage(input) { seen.saved.push(input); return { id: 'ref1' } },
+  }
+  return { services: { llm, attachments, BlockAssembler: FakeAssembler }, seen }
+}
+
+const EXEC = { agent: { model: { current: () => ({ provider: 'deepseek-official', model: 'deepseek-flash' }) } } }
+
+test('legacy 0.1.x keys are found by presence, even when empty', () => {
+  assert.deepEqual(legacyKeys({ endpoint: '', model: 'x' }), ['endpoint'])
+  assert.deepEqual(legacyKeys({ apiKey: undefined, extraBody: {} }), ['apiKey', 'extraBody'])
+  assert.deepEqual(legacyKeys({ provider: 'a', model: 'b' }), [])
+  assert.deepEqual(legacyKeys(undefined), [])
+})
+
+test('the route: both set wins, neither borrows the conversation, one alone is an error', () => {
+  assert.deepEqual(resolveRoute({ provider: 'bailian', model: 'qwen3.8-max' }, EXEC),
+    { provider: 'bailian', model: 'qwen3.8-max', from: 'config' })
+  assert.deepEqual(resolveRoute({}, EXEC),
+    { provider: 'deepseek-official', model: 'deepseek-flash', from: 'conversation' })
+  assert.throws(() => resolveRoute({ model: 'qwen3.8-max' }, EXEC), /go together/)
+  assert.throws(() => resolveRoute({}, {}), /no model to look with/)
+})
+
+test('effort: configured wins, else "off" when offered, else the lowest, else none', () => {
+  assert.equal(chooseEffort('high', { reasoning: { efforts: [{ id: 'off' }] } }), 'high')
+  assert.equal(chooseEffort(undefined, { reasoning: { efforts: [{ id: 'low' }, { id: 'off' }] } }), 'off')
+  assert.equal(chooseEffort(undefined, { reasoning: { efforts: [{ id: 'minimal' }, { id: 'high' }] } }), 'minimal')
+  assert.equal(chooseEffort(undefined, { reasoning: { efforts: ['low', 'high'] } }), 'low')
+  assert.equal(chooseEffort(undefined, {}), undefined)
+})
+
+await asyncTest('a legacy config is refused before any service is touched', async () => {
+  const { services, seen } = fakeServices()
+  const eye = new DshEye({ vision: { endpoint: 'https://x', apiKey: 'k' } })
+  eye.attach(services)
+  await assert.rejects(() => eye.prepare(EXEC), (err) => err instanceof EyeError
+    && /vision\.endpoint, vision\.apiKey/.test(err.message) && /Nothing was pressed/.test(err.message))
+  assert.equal(seen.prepared.length, 0)
+})
+
+await asyncTest('no llm/attachments service: refused with a reason, not a crash', async () => {
+  const eye = new DshEye({ vision: {} })
+  await assert.rejects(() => eye.prepare(EXEC), /no model service/)
+})
+
+await asyncTest('a route that cannot see images is refused — dsh would send a text placeholder', async () => {
+  for (const modalities of [['text'], null]) {  // null = not declared
+    const { services } = fakeServices({ modalities })
+    const eye = new DshEye({ vision: {} })
+    eye.attach(services)
+    await assert.rejects(() => eye.prepare(EXEC), (err) => err instanceof EyeError
+      && /deepseek-official\/deepseek-flash/.test(err.message)
+      && /input: \[text, image\]/.test(err.message))
+  }
+})
+
+await asyncTest('prepare picks the effort, asks for temperature 0, and borrows the conversation route', async () => {
+  const { services, seen } = fakeServices({ efforts: [{ id: 'off', name: 'Off' }, { id: 'high', name: 'High' }] })
+  const eye = new DshEye({ vision: {} })
+  eye.attach(services)
+  const prepared = await eye.prepare(EXEC)
+  assert.equal(prepared.route.provider, 'deepseek-official')
+  assert.equal(prepared.effort, 'off')
+  assert.equal(seen.prepared[0].config.temperature, 0)
+})
+
+async function askWith(chunks, signal) {
+  const { services, seen } = fakeServices({ chunks })
+  const eye = new DshEye({ vision: {} })
+  eye.attach(services)
+  const prepared = await eye.prepare(EXEC)
+  const out = await eye.ask(prepared, { imageBase64: Buffer.from('JPEGBYTES').toString('base64'),
+    mimeType: 'image/jpeg', system: 'S', instruction: 'I', signal })
+  return { out, seen }
+}
+
+await asyncTest('a clean answer comes back, with the screenshot saved as an attachment', async () => {
+  const { out, seen } = await askWith()
+  assert.equal(out.text, '{"ok":1}')
+  assert.equal(Buffer.from(seen.saved[0].data).toString(), 'JPEGBYTES')
+  assert.equal(seen.saved[0].mediaType, 'image/jpeg')
+  const msg = seen.streamed[0].messages[0]
+  assert.deepEqual(msg.content[0], { type: 'image', attachment: { id: 'ref1' } })
+  assert.equal(seen.streamed[0].system, 'S')
+})
+
+await asyncTest('JSON followed by an error finish is NOT used', async () => {
+  await assert.rejects(() => askWith([
+    { type: 'text', text: '{"markers":{"tl":[1,1],"br":[9,9]},"target":{"found":true,"point":[5,5]}}' },
+    { type: 'finish', reason: { kind: 'error', failure: { message: 'connection reset' } } },
+  ]), (err) => err instanceof EyeError && /connection reset/.test(err.message))
+})
+
+await asyncTest('a reply with no finish chunk is NOT used (the assembler would call it a stop)', async () => {
+  await assert.rejects(() => askWith([{ type: 'text', text: '{"point":[1,2]}' }]),
+    /without a final status/)
+})
+
+await asyncTest('a truncated reply is NOT used', async () => {
+  await assert.rejects(() => askWith([
+    { type: 'text', text: '{"markers":' }, { type: 'finish', reason: { kind: 'max-tokens' } },
+  ]), /cut off/)
+})
+
+await asyncTest('an image-budget refusal says what to change', async () => {
+  await assert.rejects(() => askWith([{ type: 'finish', reason: { kind: 'error',
+    failure: { code: 'IMAGE_OFFLOAD_REQUIRED', message: 'x' } } }]), /maxWidth/)
+})
+
+await asyncTest('a cancelled call is NOT used', async () => {
+  const ac = new AbortController(); ac.abort()
+  await assert.rejects(() => askWith(undefined, ac.signal), /cancelled/)
+})
+
+test('stopIfCancelled refuses after an abort and passes otherwise', () => {
+  const ac = new AbortController()
+  stopIfCancelled(ac.signal, 'x')
+  stopIfCancelled(undefined, 'x')
+  ac.abort()
+  assert.throws(() => stopIfCancelled(ac.signal, 'clicking'), /cancelled before clicking, which was not sent/)
+})
+
+await asyncTest('an eye that cannot work refuses BEFORE the raise click and the screenshot', async () => {
+  // A window that would need raising: the old order clicked its title bar,
+  // took the screenshot, and only then discovered the eye could not work.
+  const { locator, calls } = locatorWith({
+    'device.info': { json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } } },
+    'screen.windows': (c) => (c.at(-1).args.title
+      ? { json: { window: { ...ONTOP, foreground: false } } }
+      : { json: { windows: [{ ...ONTOP, foreground: false }] } }),
+  })
+  locator.eye = new DshEye({ vision: { apiKey: 'old' } })
+  await assert.rejects(() => locator.click({ target: 'the 7 key', window: 'Calc', exec: EXEC }),
+    (err) => err instanceof LocateError && /no longer reads/.test(err.message))
+  assert.ok(!calls.some((c) => c.name === 'hid.click'), 'no raise click')
+  assert.ok(!calls.some((c) => c.name === 'hid.screenshot'), 'no capture')
+})
+
+await asyncTest('a click cancelled after locating sends nothing', async () => {
+  const { locator, calls } = locatorWith({
+    'device.info': { json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } } },
+    'hid.click': { json: { ok: true, clicked: true } },
+  })
+  const ac = new AbortController()
+  locator.point = async () => { ac.abort(); return { screen: [10, 10], source: 'x', fit: { x: { scale: 1 }, y: { scale: 1 } }, timings: { totalMs: 1 } } }
+  await assert.rejects(() => locator.click({ target: 'the 7 key', signal: ac.signal }), /cancelled/)
+  assert.equal(calls.filter((c) => c.name === 'hid.click').length, 0)
+})
+
+await asyncTest('a key press cancelled before sending sends nothing', async () => {
+  const { locator, calls } = locatorWith({
+    'device.info': { json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } } },
+  })
+  const ac = new AbortController(); ac.abort()
+  await assert.rejects(() => pressKey({ locator, config: {} }, { key: 'enter' }, { signal: ac.signal }), /cancelled/)
+  assert.equal(calls.filter((c) => c.name === 'hid.key').length, 0)
+})
+
+await asyncTest('the eye that looked is named in the result line', async () => {
+  const line = describeResult({ screen: [1, 2], source: 'window "Calc"', fit: { x: { scale: 1 }, y: { scale: 1 } },
+    timings: { totalMs: 3 }, eye: { provider: 'bailian', model: 'qwen3.8-max' }, clicked: true })
+  assert.match(line, /eye bailian\/qwen3\.8-max/)
+})
+
+
+// ── review round 3 (2026-11-14): cancel at the send, thin captures, reloads ──
+
+await asyncTest('a call cancelled while the server (re)starts is not sent', async () => {
+  const client = new McpStdioClient({ command: 'unused' })
+  const ac = new AbortController()
+  const sent = []
+  client.start = async () => { ac.abort() }          // cancelled during start
+  client._request = async (method, params) => { sent.push(params); return { content: [] } }
+  await assert.rejects(() => client.callTool('hid.key', { key: 'enter' }, { signal: ac.signal }),
+    /it was not sent/)
+  assert.equal(sent.length, 0)
+})
+
+test('a thin capture in the 0-1000 frame calibrates (1600x48: y scale ~20.8)', () => {
+  const markers = [{ id: 'tl', center: [10, 10] }, { id: 'br', center: [1590, 38] }]
+  const reported = { tl: [6.25, 208.3], br: [993.75, 791.7] }   // the same points, 0-1000
+  const fit = calibrate(markers, reported, { width: 1600, height: 48 })
+  assert.ok(Math.abs(fit.y.scale - 1000 / 48) < 0.2, `y scale ${fit.y.scale}`)
+})
+
+await asyncTest('services detached mid-look give an EyeError, not a TypeError', async () => {
+  const { services } = fakeServices()
+  const eye = new DshEye({ vision: {} })
+  eye.attach(services)
+  const prepared = await eye.prepare(EXEC)
+  const realSave = services.attachments.saveImage
+  services.attachments.saveImage = async (input) => { eye.detach(); return realSave(input) }
+  const out = await eye.ask(prepared, { imageBase64: 'AA==', mimeType: 'image/jpeg', system: 'S', instruction: 'I' })
+  assert.equal(out.text, '{"ok":1}')              // the pinned services finished the call
+  eye.detach()
+  await assert.rejects(() => eye.ask(prepared, { imageBase64: 'AA==', mimeType: 'image/jpeg', system: 'S', instruction: 'I' }),
+    (err) => err instanceof EyeError && /went away/.test(err.message))
+})
+
+await asyncTest('a cancel after the field was clicked keeps the record of that click', async () => {
+  const { locator, calls } = locatorWith({
+    'device.info': { json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } } },
+  })
+  const ac = new AbortController()
+  locator.click = async () => {
+    ac.abort()
+    return { clicked: true, screen: [5, 5], source: 'window "Calc"', fit: { x: { scale: 1 }, y: { scale: 1 } }, timings: { totalMs: 1 } }
+  }
+  await assert.rejects(() => typeText({ locator, config: {} }, { text: 'abc', target: 'the field' }, { signal: ac.signal }),
+    (err) => /clicked \(5, 5\)/.test(err.message) && /then cancelled before typing, which was not sent/.test(err.message))
+  assert.equal(calls.filter((c) => c.name === 'hid.type').length, 0)
+})
+
+await asyncTest('an eye failure after a raise click says the raise happened', async () => {
+  const { locator } = locatorWith({
+    'device.info': { json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } } },
+  })
+  locator.eye = { prepare: async () => ({ route: { provider: 'p', model: 'm' } }),
+    ask: async () => { throw new EyeError('the p/m eye failed: boom; the target was not clicked') } }
+  locator.resolveRegion = async () => ({ region: [0, 0, 10, 10], source: 'window "Calc"', raised: true })
+  locator.capture = async () => ({ meta: { markers: [], width: 10, height: 10 }, image: { data: 'AA==' } })
+  await assert.rejects(() => locator.pointMany({ targets: ['x'] }),
+    (err) => err instanceof LocateError && /target was not clicked/.test(err.message)
+      && /already been brought forward with one title-bar click/.test(err.message))
+})
+
+
+await asyncTest('a cancel INSIDE the send after a field click still reports that click', async () => {
+  for (const [fn, args] of [[typeText, { text: 'abc', target: 'f' }], [scrollWheel, { amount: -3, target: 'f' }]]) {
+    const { locator } = locatorWith({
+      'device.info': { json: { info: { connected: true }, screen: { width: 1920, height: 1080, source: 'explicit' } } },
+    })
+    locator.click = async () => ({ clicked: true, screen: [5, 5], source: 'window "Calc"',
+      fit: { x: { scale: 1 }, y: { scale: 1 } }, timings: { totalMs: 1 } })
+    locator.mcp.callTool = async (name) => {
+      if (name === 'device.info') return { json: { info: { connected: true } }, text: '', images: [], isError: false }
+      throw new Error(`cancelled before ${name} was sent; it was not sent`)   // as mcp-client throws
+    }
+    await assert.rejects(() => fn({ locator, config: {} }, args, {}),
+      (err) => /clicked \(5, 5\)/.test(err.message) && /it was not sent/.test(err.message))
+  }
+})
+
+await asyncTest('a failed screenshot store is an EyeError that says the target was not clicked', async () => {
+  const { services } = fakeServices()
+  services.attachments.saveImage = async () => { throw new Error('disk full') }
+  const eye = new DshEye({ vision: {} })
+  eye.attach(services)
+  const prepared = await eye.prepare(EXEC)
+  await assert.rejects(() => eye.ask(prepared, { imageBase64: 'AA==', mimeType: 'image/jpeg', system: 'S', instruction: 'I' }),
+    (err) => err instanceof EyeError && /disk full/.test(err.message) && /target was not clicked/.test(err.message))
+})
 
 // ── the number TESTING-macos.md tells a tester to expect ───────────────
 //

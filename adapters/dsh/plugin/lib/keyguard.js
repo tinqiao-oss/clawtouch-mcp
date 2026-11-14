@@ -105,6 +105,10 @@ function quitCombo(k, mods, platform) {
     return null
   }
   if (k === 'f4' && mods.has('alt')) return 'Alt+F4 (close window)'
+  // The window menu: its next single key closes (C), minimises (N) or moves
+  // the window, so it is Alt+F4 in two keystrokes. Seen 2026-11-14: an agent
+  // whose task window was covered pressed Alt+Space then N and minimised it.
+  if (k === 'space' && mods.has('alt') && !gui) return 'Alt+Space (window menu — its next key can close or minimise the window)'
   if (gui) return null
   if ((k === 'w' || k === 'f4') && mods.has('ctrl')) return `Ctrl+${k.toUpperCase()} (close window or tab)`
   return null

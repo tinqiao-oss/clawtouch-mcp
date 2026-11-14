@@ -132,8 +132,13 @@ export class McpStdioClient {
    * for screenshots, an image part. Splitting them here keeps every
    * caller from re-deriving the same shape.
    */
-  async callTool(name, args) {
+  async callTool(name, args, opts = {}) {
     await this.start()
+    // Checked AFTER start(): starting (or restarting) the server can take a
+    // while, and a call cancelled meanwhile must not still go out.
+    if (opts.signal?.aborted) {
+      throw new Error(`cancelled before ${name} was sent; it was not sent`)
+    }
     const result = await this._request('tools/call', {
       name, arguments: args ?? {},
     })

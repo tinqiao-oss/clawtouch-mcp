@@ -1,40 +1,78 @@
 /**
- * The "eye": one OpenAI-compatible multimodal call that answers with
- * coordinates, and nothing else.
+ * The locate prompt and reply parsing — shared by every transport — plus a
+ * direct OpenAI-compatible HTTP transport kept for DEVELOPMENT TOOLS only
+ * (probe.js, tools/vision-bench). Since 0.2.0 the plugin itself never calls
+ * `locate()`: inside dsh the eye is a dsh model route (lib/eye.js), and the
+ * plugin reads no endpoint or key of its own. Both transports send the same
+ * system prompt and instruction (`SYSTEM_PROMPT`, `buildInstruction`), so an
+ * offline benchmark measures the prompt the plugin actually uses.
  *
- * Why a second model rather than the agent's own. The models that drive a
- * tool loop well and the models that point at pixels accurately are, as of
- * this writing, not the same models. A capable text model asked to click
- * from a screenshot misses by tens to hundreds of pixels; a capable vision
- * model asked to run an agent loop emits tool calls as prose. Splitting
- * the roles — the host's model decides *what* to do, this one answers
- * *where* — lets each do the thing it is good at, and keeps screenshots
- * out of the agent's context entirely.
+ * Why the looking happens inside the tool, separate from the agent's turn:
+ * it keeps screenshots out of the agent's context entirely, and lets the
+ * eye be a different model from the one driving the loop — which, measured
+ * in 2026, still matters (a text-first model asked to point at pixels
+ * misses far more often than a model chosen for it). Since 0.2.0 WHICH
+ * model looks is the person's choice, made in dsh; the docs carry the
+ * measurements.
  *
- * Why a direct HTTP call rather than the host's LLM service. The host can
- * route this (see README: `useHostLlm`), but that path needs a provider
- * configured with the image input modality declared by hand — a
- * silent-failure footgun — and it makes the vision step untestable
- * outside a running host. A plain endpoint + key works the same on every
- * OpenAI-compatible provider and can be exercised by a unit test.
+ * Why 0.1.x used a direct HTTP call and 0.2.0 does not: the host route needs
+ * the model's image input declared in dsh's config, and an undeclared one
+ * used to fail silently. lib/eye.js now checks the declaration before
+ * anything is pressed and refuses a route that cannot see, which removes
+ * the reason for a second, plugin-owned set of credentials.
  *
  * Zero dependencies: global `fetch`, available since Node 18.
  */
 
 export class VisionError extends Error {}
 
+/**
+ * The extra request-body fields for this call: the person's `extraBody` when
+ * given (even `{}`), else DEFAULT_EXTRA_BODY for the default model on the
+ * default endpoint, else none. `model` and `messages` cannot be overridden —
+ * the body sets them after the spread.
+ */
+export function requestExtras(config, endpoint, model) {
+  const given = config.extraBody
+  if (given !== undefined && given !== null) {
+    if (typeof given !== 'object' || Array.isArray(given)) {
+      throw new VisionError('`vision.extraBody` must be an object of request-body fields')
+    }
+    return { ...given }
+  }
+  return endpoint === DEFAULT_ENDPOINT && model === DEFAULT_MODEL
+    ? { ...DEFAULT_EXTRA_BODY }
+    : {}
+}
+
 const DEFAULT_ENDPOINT =
   'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
-const DEFAULT_MODEL = 'qwen-vl-max'
+// qwen-vl-max, the original default, left DashScope's model list (it now
+// answers 404 "Model not exist", 2026-11-14). qwen3.8-max replaced it after
+// the offline grounding benchmark (tools/vision-bench, same captures and the
+// same pre-declared rule as the 2026-09-13 baseline): hit 98.2% vs 95.2%,
+// wrong click 1.8% vs 4.8%, 0 of 24 absent targets clicked (same as before),
+// median 1.9 s per locate — but ONLY with thinking switched off. Without it
+// the same model took a median 45 s and up to 159 s, so many calls would hit
+// the 60 s timeout. Hence DEFAULT_EXTRA_BODY, which goes with the default model.
+const DEFAULT_MODEL = 'qwen3.8-max'
+const DEFAULT_EXTRA_BODY = Object.freeze({ enable_thinking: false })
 const DEFAULT_TIMEOUT_MS = 60_000
 
-const SYSTEM_PROMPT = [
+export const SYSTEM_PROMPT = [
   'You are a precise UI locator. You receive one screenshot and are asked',
   'for pixel coordinates inside it.',
   '',
   'Rules:',
-  '- Coordinates are in the pixel space of the image you were given,',
-  '  origin (0,0) at the top-left, x to the right, y down.',
+  // 0-1000 rather than pixels since 0.2.0. dsh puts a line in front of every
+  // image stating its pixel size, and with it qwen3.8-max mixed frames —
+  // markers in pixels, targets 0-1000 — and hit 64% instead of 98% (offline
+  // bench with that line simulated, 2026-11-14). Pinning one normalised
+  // frame for both brought it back to 96%, qwen3-vl-plus from 86% to 95%,
+  // and left deepseek-flash level (84–86%). The markers make ANY one linear
+  // frame work; what breaks calibration is two frames in one reply.
+  '- Coordinates are normalised to 0-1000 over the image you were given:',
+  '  (0,0) is the top-left corner, (1000,1000) the bottom-right, x to the right, y down.',
   '- Point at the CENTRE of what you are asked for, not its edge or label.',
   '- If the requested element is not visible, say so with "found": false',
   '  instead of guessing a location. A wrong coordinate causes a click in',
@@ -43,46 +81,23 @@ const SYSTEM_PROMPT = [
 ].join('\n')
 
 /**
- * Ask the vision model for the two calibration markers and one or more
- * targets, in a single call.
- *
- * Calibration travels with the targets on purpose: it must describe the
- * *same* rendering of the image, and a separate calibration request would
- * double the latency and cost of every click while being no more accurate.
- *
- * Several targets travel together for the same reason plus one more.
- * Measured on a calculator: four targets in one call took 3.5s and landed
- * 2.3-5.6px from truth; the same four asked separately took 6.4s and
- * landed 3.0-5.3px — the same accuracy for half the time. The larger
- * saving is upstream: four separate clicks are also four agent round
- * trips, and those dominate a multi-step task.
- *
- * @param {object} opts
- * @param {string} opts.imageBase64
- * @param {string} opts.mimeType
- * @param {string} [opts.target]      one natural-language description
- * @param {string[]} [opts.targets]   or several, answered in order
- * @param {string} opts.markerHint    text from the screenshot metadata
- * @param {object} opts.config        { endpoint, model, apiKey, timeoutMs }
- * @param {AbortSignal} [opts.signal]
- * @returns {Promise<{markers: Record<string, [number, number]>,
- *                    target: object, targets: object[], raw: string}>}
+ * The instruction that goes with the screenshot: the marker hint from the
+ * capture's metadata, the target(s), and the exact reply shape.
+ * @param {string[]} wanted  non-empty, trimmed target descriptions
+ * @param {string} markerHint
  */
-export async function locate(opts) {
-  const { imageBase64, mimeType, markerHint, config } = opts
-  const wanted = (opts.targets ?? [opts.target])
-    .map((t) => String(t ?? '').trim())
-    .filter(Boolean)
-  if (!wanted.length) throw new VisionError('no target was described')
-  const endpoint = config.endpoint || DEFAULT_ENDPOINT
-  const model = config.model || DEFAULT_MODEL
-  if (!config.apiKey) {
-    throw new VisionError(
-      'no vision API key configured — set the plugin\'s `vision.apiKey` '
-      + 'or the DASHSCOPE_API_KEY environment variable')
-  }
+export function buildInstruction(wanted, markerHint) {
+  return [buildInstructionBody(wanted, markerHint), ONE_FRAME].join('\n')
+}
 
-  const instruction = wanted.length === 1
+// The measured wording (tools/vision-bench, frame "k"); keep it verbatim, or
+// the numbers in the README stop describing what is sent.
+const ONE_FRAME = 'Report every coordinate - both markers and every target - '
+  + 'normalised to 0-1000 over this image: (0,0) is its top-left corner and '
+  + '(1000,1000) its bottom-right. Use this one scale for everything.'
+
+function buildInstructionBody(wanted, markerHint) {
+  return wanted.length === 1
     ? [
       markerHint,
       '',
@@ -109,11 +124,75 @@ export async function locate(opts) {
       'Both marker centres are required regardless — they are what makes',
       'your coordinates usable.',
     ].join('\n')
+}
+
+/**
+ * Ask the vision model for the two calibration markers and one or more
+ * targets, in a single call.
+ *
+ * Calibration travels with the targets on purpose: it must describe the
+ * *same* rendering of the image, and a separate calibration request would
+ * double the latency and cost of every click while being no more accurate.
+ *
+ * Several targets travel together for the same reason plus one more.
+ * Measured on a calculator: four targets in one call took 3.5s and landed
+ * 2.3-5.6px from truth; the same four asked separately took 6.4s and
+ * landed 3.0-5.3px — the same accuracy for half the time. The larger
+ * saving is upstream: four separate clicks are also four agent round
+ * trips, and those dominate a multi-step task.
+ *
+ * @param {object} opts
+ * @param {string} opts.imageBase64
+ * @param {string} opts.mimeType
+ * @param {string} [opts.target]      one natural-language description
+ * @param {string[]} [opts.targets]   or several, answered in order
+ * @param {string} opts.markerHint    text from the screenshot metadata
+ * @param {object} opts.config        { endpoint, model, apiKey, timeoutMs, extraBody }
+ *   `extraBody` — fields merged into the request body (provider switches such
+ *   as DashScope's `enable_thinking`). Omitted: the default model on the
+ *   default endpoint gets DEFAULT_EXTRA_BODY; anything else gets nothing,
+ *   because another provider may reject a field it does not know.
+ * @param {AbortSignal} [opts.signal]
+ * @returns {Promise<{markers: Record<string, [number, number]>,
+ *                    target: object, targets: object[], raw: string}>}
+ */
+export async function locate(opts) {
+  const { imageBase64, mimeType, markerHint, config } = opts
+  const wanted = (opts.targets ?? [opts.target])
+    .map((t) => String(t ?? '').trim())
+    .filter(Boolean)
+  if (!wanted.length) throw new VisionError('no target was described')
+  const content = await httpAsk({
+    config,
+    system: SYSTEM_PROMPT,
+    instruction: buildInstruction(wanted, markerHint),
+    imageBase64,
+    mimeType,
+    signal: opts.signal,
+  })
+  return { ...parseAnswer(content, wanted.length), raw: content }
+}
+
+/**
+ * One OpenAI-compatible chat call with one image; returns the reply text.
+ * Development transport (probe.js, vision-bench) — see the module comment.
+ * @param {object} opts
+ * @param {object} opts.config  { endpoint, model, apiKey, timeoutMs, extraBody }
+ */
+export async function httpAsk({ config, system, instruction, imageBase64, mimeType, signal }) {
+  const endpoint = config.endpoint || DEFAULT_ENDPOINT
+  const model = config.model || DEFAULT_MODEL
+  const extraBody = requestExtras(config, endpoint, model)
+  if (!config.apiKey) {
+    throw new VisionError(
+      'no vision API key configured — pass `apiKey` (development transport)')
+  }
 
   const body = {
+    ...extraBody,
     model,
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: system },
       {
         role: 'user',
         content: [
@@ -133,7 +212,7 @@ export async function locate(opts) {
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   if (typeof timer.unref === 'function') timer.unref()
   const onOuterAbort = () => controller.abort()
-  opts.signal?.addEventListener('abort', onOuterAbort, { once: true })
+  signal?.addEventListener('abort', onOuterAbort, { once: true })
 
   let response
   try {
@@ -153,13 +232,22 @@ export async function locate(opts) {
     throw new VisionError(`vision call failed: ${err.message}`)
   } finally {
     clearTimeout(timer)
-    opts.signal?.removeEventListener('abort', onOuterAbort)
+    signal?.removeEventListener('abort', onOuterAbort)
   }
 
   if (!response.ok) {
     const detail = await safeText(response)
+    // A provider that retires a model answers 404 (DashScope said "Model not
+    // exist" for qwen-vl-max on 2026-11-14): name the setting to change.
+    const gone = response.status === 404
+      || /model[ _-]?not[ _-]?(found|exist)|does not exist/i.test(detail)
+    const hint = gone
+      ? ` — the vision model "${model}" is not served at ${endpoint}. `
+        + 'Set `vision.model` (and `vision.endpoint` if needed) to a vision '
+        + 'model that endpoint offers.'
+      : ''
     throw new VisionError(
-      `vision endpoint returned ${response.status}: ${detail.slice(0, 400)}`)
+      `vision endpoint returned ${response.status}: ${detail.slice(0, 400)}${hint}`)
   }
   const payload = await response.json()
   const text = payload?.choices?.[0]?.message?.content
@@ -168,7 +256,7 @@ export async function locate(opts) {
     throw new VisionError(
       `vision endpoint returned no text: ${JSON.stringify(payload).slice(0, 300)}`)
   }
-  return { ...parseAnswer(content, wanted.length), raw: content }
+  return content
 }
 
 async function safeText(response) {

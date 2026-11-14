@@ -18,7 +18,8 @@
  * The agent never sees an image and never sees a coordinate. It says what
  * it wants clicked; this returns what happened, in words.
  */
-import { locate, VisionError } from './vision.js'
+import { SYSTEM_PROMPT, buildInstruction, parseAnswer, VisionError } from './vision.js'
+import { EyeError } from './eye.js'
 import { calibrate, resolvePoint, CalibrationError } from './calibrate.js'
 
 export class LocateError extends Error {}
@@ -76,6 +77,27 @@ export class Locator {
     this.mcp = opts.mcp
     this.config = opts.config
     this.log = opts.log ?? (() => {})
+    // The DshEye (lib/eye.js) — or, in tests, anything with the same
+    // prepare(exec, signal) / ask(prepared, request) pair.
+    this.eye = opts.eye ?? null
+  }
+
+  /**
+   * Settle the eye before anything is pressed: config, services, route,
+   * image input. Runs ahead of the capture and of any raise click, so a
+   * setup that cannot work refuses with no input sent.
+   */
+  async prepareEye(exec, signal) {
+    if (!this.eye) {
+      throw new LocateError('no eye is available in this session (the dsh model '
+        + 'service is not mounted); nothing was pressed')
+    }
+    try {
+      return await this.eye.prepare(exec, signal)
+    } catch (err) {
+      if (err instanceof EyeError) throw new LocateError(err.message)
+      throw err
+    }
   }
 
   /**
@@ -174,7 +196,7 @@ export class Locator {
    * wide to locate anything in, so it is what you get only when nothing
    * better was available.
    */
-  async resolveRegion({ window, region }) {
+  async resolveRegion({ window, region, signal }) {
     if (Array.isArray(region) && region.length === 4) {
       return { region, source: 'explicit region' }
     }
@@ -226,9 +248,10 @@ export class Locator {
           `no visible window matching "${window}". Visible windows: `
           + `${titles.map((t) => JSON.stringify(t)).join(', ') || '(none)'}`)
       }
-      const ready = await this.ensureReachable(match)
+      const ready = await this.ensureReachable(match, signal)
       return {
         region: ready.rect,
+        raised: ready.raisedByClick === true,
         source: `window "${ready.title}"${unmeasuredNote(ready)}`,
       }
     }
@@ -241,13 +264,14 @@ export class Locator {
     const flagged = wins.find((w) => w.foreground)
     const front = flagged ?? wins[0]
     if (!front) return { region: undefined, source: 'full screen' }
-    const ready = await this.ensureReachable(front)
+    const ready = await this.ensureReachable(front, signal)
     const what = flagged
       ? `foreground window "${ready.title}"`
       : `first listed window "${ready.title}" (nothing reported itself as `
         + 'foreground)'
     return {
       region: ready.rect,
+      raised: ready.raisedByClick === true,
       source: `${what}${unmeasuredNote(ready)}`,
     }
   }
@@ -270,7 +294,7 @@ export class Locator {
    * window (raising it changes nothing) or when no safe point exists (a
    * full-screen app has no caption to grab).
    */
-  async ensureReachable(win) {
+  async ensureReachable(win, signal) {
     if (win.enabled === false) {
       assertOnTop(win)   // throws with the modal-dialog explanation
       return win
@@ -313,8 +337,9 @@ export class Locator {
       return win
     }
 
+    stopIfCancelled(signal, `raising "${win.title}"`)
     this.log('info', `raising "${win.title}" by clicking (${rx}, ${ry})`)
-    const res = await this.mcp.callTool('hid.click', { x: rx, y: ry })
+    const res = await this.mcp.callTool('hid.click', { x: rx, y: ry }, { signal })
     if (res.isError || res.json?.ok !== true || res.json?.clicked !== true) {
       throw new LocateError(
         `"${win.title}" needed to be brought to the front, and the click `
@@ -364,7 +389,9 @@ export class Locator {
         + 'that first.')
     }
     assertOnTop(fresh)
-    return fresh
+    // Remembered so a failure later in this call can say that a click DID
+    // happen (the raise), instead of implying the screen was untouched.
+    return { ...fresh, raisedByClick: true }
   }
 
   /**
@@ -418,12 +445,12 @@ export class Locator {
    *                    meta: object, answer: object, fit: object,
    *                    source: string, timings: object}>}
    */
-  async point({ target, window, region, signal }) {
+  async point({ target, window, region, signal, exec }) {
     const many = await this.pointMany({
-      targets: [target], window, region, signal,
+      targets: [target], window, region, signal, exec,
     })
     return { ...many.results[0], meta: many.meta, answer: many.answer,
-      fit: many.fit, source: many.source, timings: many.timings }
+      fit: many.fit, source: many.source, timings: many.timings, eye: many.eye }
   }
 
   /**
@@ -435,7 +462,7 @@ export class Locator {
    * where it was, clicking a conversation replaces the whole pane, and
    * only the caller knows which kind of thing it is asking for.
    */
-  async pointMany({ targets, window, region, signal }) {
+  async pointMany({ targets, window, region, signal, exec }) {
     const wanted = (targets ?? [])
       .map((t) => String(t ?? '').trim())
       .filter(Boolean)
@@ -447,22 +474,29 @@ export class Locator {
         + 'if the screen changes')
     }
     const t0 = Date.now()
-    const picked = await this.resolveRegion({ window, region })
+    // The eye first: nothing below may press anything (the raise click) for
+    // a configuration that cannot locate at all.
+    const prepared = await this.prepareEye(exec, signal)
+    const picked = await this.resolveRegion({ window, region, signal })
     const { meta, image } = await this.capture({ region: picked.region })
     const tShot = Date.now()
 
     let answer
     try {
-      answer = await locate({
+      const reply = await this.eye.ask(prepared, {
         imageBase64: image.data,
         mimeType: image.mimeType || meta.mime_type || 'image/jpeg',
-        targets: wanted,
-        markerHint: meta.marker_hint ?? '',
-        config: this.config.vision ?? {},
+        system: SYSTEM_PROMPT,
+        instruction: buildInstruction(wanted, meta.marker_hint ?? ''),
         signal,
       })
+      answer = { ...parseAnswer(reply.text, wanted.length), raw: reply.text }
     } catch (err) {
-      if (err instanceof VisionError) throw new LocateError(err.message)
+      if (err instanceof EyeError || err instanceof VisionError) {
+        throw new LocateError(err.message + (picked.raised
+          ? ` (Its window had already been brought forward with one title-bar click.)`
+          : ''))
+      }
       throw err
     }
     const tVision = Date.now()
@@ -525,6 +559,7 @@ export class Locator {
       answer,
       fit,
       source: picked.source,
+      eye: { ...prepared.route, effort: prepared.effort ?? null },
       timings: {
         captureMs: tShot - t0,
         visionMs: tVision - tShot,
@@ -534,8 +569,8 @@ export class Locator {
   }
 
   /** Locate, then actually click. */
-  async click({ target, window, region, button, double, moveMs, signal }) {
-    const located = await this.point({ target, window, region, signal })
+  async click({ target, window, region, button, double, moveMs, signal, exec }) {
+    const located = await this.point({ target, window, region, signal, exec })
     const [x, y] = located.screen
     if (this.config.dryRun) {
       return { ...located, clicked: false, dryRun: true }
@@ -561,12 +596,13 @@ export class Locator {
     // Settled BEFORE sending: a question asked after the click went out
     // could fail and report a failure for a click that happened.
     const simulated = await this.simulated()
+    stopIfCancelled(signal, `clicking ${JSON.stringify(target)}`)
     const res = await this.mcp.callTool('hid.click', {
       x, y,
       button: button || 'left',
       double: Boolean(double),
       ...(moveMs ? { move_ms: moveMs } : {}),
-    })
+    }, { signal })
     if (res.isError) {
       throw new LocateError(`located (${x}, ${y}) but the click failed: `
         + res.text.slice(0, 300))
@@ -603,8 +639,8 @@ export class Locator {
    * apart by default — back-to-back clicks with no gap get coalesced or
    * dropped by the OS while every one of them still reports success.
    */
-  async clickSequence({ targets, window, region, button, signal }) {
-    const located = await this.pointMany({ targets, window, region, signal })
+  async clickSequence({ targets, window, region, button, signal, exec }) {
+    const located = await this.pointMany({ targets, window, region, signal, exec })
     if (this.config.dryRun) {
       return { ...located, clicked: false, dryRun: true }
     }
@@ -619,6 +655,7 @@ export class Locator {
       }
     }
     const simulated = await this.simulated()
+    stopIfCancelled(signal, 'the click sequence')
     const res = await this.mcp.callTool('hid.batch', {
       ops: located.results.map((r) => ({
         type: 'click',
@@ -626,7 +663,7 @@ export class Locator {
         y: r.screen[1],
         button: button || 'left',
       })),
-    })
+    }, { signal })
     if (res.isError) {
       throw new LocateError(`the click sequence failed: ${res.text.slice(0, 400)}`)
     }
@@ -650,6 +687,20 @@ export class Locator {
       return { ...located, clicked: false, simulated: true, batch: res.json }
     }
     return { ...located, clicked: true, batch: res.json }
+  }
+}
+
+/**
+ * Refuse to send input for a call that has been cancelled. Checked right
+ * before each send: a locate can take seconds, and the agent (or the person)
+ * may have given up on the call in the meantime.
+ */
+export function stopIfCancelled(signal, what) {
+  if (signal?.aborted) {
+    // Not "nothing was pressed": a title-bar click, or a click into a field
+    // before typing, may already have happened. Only what comes next is
+    // known not to have gone out.
+    throw new LocateError(`cancelled before ${what}, which was not sent`)
   }
 }
 
@@ -870,6 +921,12 @@ export function assertOnTop(win) {
 }
 
 /** One-line human summary, which is all the agent gets back. */
+/** ", eye provider/model" for a result's bracket — which model did the
+ *  looking, so a weak default is visible in every answer it produced. */
+export function eyeNote(eye) {
+  return eye?.provider && eye?.model ? `, eye ${eye.provider}/${eye.model}` : ''
+}
+
 export function describeResult(result, verb = 'clicked') {
   const [x, y] = result.screen
   const conf = result.answer?.target?.confidence
@@ -878,7 +935,7 @@ export function describeResult(result, verb = 'clicked') {
     result.answer?.target?.label ? `— ${result.answer.target.label}` : '',
     conf !== undefined ? `(confidence ${conf})` : '',
     `[scale ${result.fit.x.scale.toFixed(3)}/${result.fit.y.scale.toFixed(3)},`,
-    `${result.timings.totalMs}ms]`,
+    `${result.timings.totalMs}ms${eyeNote(result.eye)}]`,
   ]
   const note = notPressedNote(result)
   if (note) bits.push(`— ${note}`)

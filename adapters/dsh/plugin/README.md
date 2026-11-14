@@ -64,7 +64,8 @@ must never change which window the person is looking at.
 ### Does it actually work?
 
 Five consecutive clicks, each located from a plain-language description by
-`qwen-vl-max`, driving a real calculator through a real USB HID device:
+`qwen-vl-max` (the default at the time, 2026-08), driving a real calculator
+through a real USB HID device:
 
 ```
 "the C button that clears the entry" -> clicked (294, 302)
@@ -118,6 +119,21 @@ The degradation is deliberate in one respect: a missing measurement is
 never read as "fine". Where a guard cannot run it simply is not applied,
 and nothing claims it was.
 
+### dsh versions and dsh's own Computer Use
+
+0.2.0 needs dsh 0.2.x: the eye goes through dsh's own model and attachment
+services. Verified on dsh 0.2.2-rc.1 (2026-11-14): the tools work through
+the native executor and through PTC (`run_code` calling `tools.computer_*`,
+which get structured results), and the key guard also stops calls made from
+inside a PTC program. dsh also ships an experimental Computer Use of its own. Turn on
+one or the other in a profile, not both: this plugin's key guard only sees
+its own tools.
+
+Firmware 1.2 of [clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)
+adds an absolute pointer, and on Windows `clawtouch-mcp` then puts the
+cursor on a primary-monitor pixel in one report instead of several relative
+nudges. Older firmware keeps working the old way.
+
 ### Why hardware HID
 
 Input arrives through the OS's standard USB HID driver stack, exactly like
@@ -131,10 +147,9 @@ plumbing this builds on.
 `clawtouch-mcp` is deliberately raw HID plumbing — no LLM, no agent loop.
 Three things therefore cannot live in it:
 
-- **A second model.** The model that runs a tool loop well and the model
-  that points at pixels accurately are not the same model today. This layer
-  routes "where is it" to a vision model and keeps the answer — not the
-  image — in the agent's context.
+- **A separate look.** "Where is it" is answered inside the tool, by a
+  model you choose in dsh (by default the conversation's own), and only the
+  answer — not the image — enters the agent's context.
 - **A skill**, registered at runtime, so the workflow is present because
   the plugin loaded, not because a file landed in the right one of dsh's
   five skill roots.
@@ -151,8 +166,11 @@ Three things therefore cannot live in it:
 ```bash
 pip install 'clawtouch-mcp[screenshot,window]>=0.5.0'   # HID, capture, window list
 dsh plugin --profile <your-profile> add dsh-clawtouch
-export DASHSCOPE_API_KEY=sk-...               # the vision model's key
 ```
+
+No API key goes to this plugin. The model that looks at the screen is one
+you configure in dsh — by default the one the conversation is using — see
+[Choosing the eye](#choosing-the-eye).
 
 Both extras, not just `[screenshot]`: this plugin crops to a window
 before it looks at anything, and on macOS the window list is pyobjc,
@@ -192,7 +210,7 @@ amount of prompt tuning will fix the clicks.
 
 ## Configuration
 
-Everything is optional except a vision key.
+Everything is optional.
 
 ```yaml
 - insert:
@@ -212,23 +230,104 @@ Everything is optional except a vision key.
         registerSkill: true
         mock: false                # no device: exercises the server, presses
                                    # nothing, and every result says so
-        vision:
-          model: qwen-vl-max
-          endpoint: ...            # any OpenAI-compatible vision endpoint
-          apiKey: ...              # prefer DASHSCOPE_API_KEY in the env
+        vision:                    # the eye; leave out to use the
+          provider: bailian        # conversation's own model. A dsh route
+          model: qwen3.8-max       # name and model id, set both or neither
+          effort: off              # reasoning level; default: "off" when
+                                   # the route offers it, else its lowest
           timeoutMs: 60000
 ```
 
 `config` is **replaced wholesale** by a profile's own patch layer, not deep
 merged — restate every key you want when overriding one.
 
-### Choosing the vision model
+### Choosing the eye
 
-This is the single highest-leverage setting, and newer is not better. In
-testing on the same task, `qwen-vl-max` located targets to 3–4px after
-calibration, while several newer and more expensive vision models scored
-**0 of 12** even with calibration applied. Change it only with a
-measurement, and `probe.js` is how you measure.
+The eye is the model that looks at each screenshot and says where the target
+is. It is a model route you configure in dsh, not something this plugin
+ships: with `vision` left out, the conversation's own model looks; with
+`vision.provider` and `vision.model` set, that route does. Credentials,
+gateways and limits live in your dsh model settings.
+
+The route must accept images. dsh would otherwise replace the screenshot
+with a text note and the model could still answer with made-up coordinates,
+so the plugin checks the route's declared input first and refuses — before
+anything is pressed — when `image` is not declared.
+
+**This is the setting that decides how often a click lands on the wrong
+thing.** Measured on saved captures with this plugin's prompt and
+calibration, offline, with the image delivered the way dsh delivers it
+(dsh's note in front of the image simulated; `tools/vision-bench` in the
+source repo, 2026-11-14; 165 looks per model over 3 runs; "absent" = 24
+targets that were not on screen):
+
+| Eye (through dsh) | Hit | Wrong click | Clicked an absent target | Median per look |
+|---|---|---|---|---|
+| `qwen3.8-max`, thinking off | 96.4% | 2.4% | 0 | 2.0 s |
+| `qwen3-vl-plus` | 96.4% | 3.6% | 3 | 1.8 s |
+| `deepseek-flash`, thinking off (dsh's default model) | 78.2% | 21.8% | 1 | 0.9 s |
+| Claude, GPT, others | not measured | | | |
+
+With DeepSeek as the conversation model and nothing configured, roughly one
+click in five lands on something next to the target. Every result line names
+the eye that looked (`eye provider/model`), so this is visible. When several
+targets are asked for in one look (`computer_click_sequence`), `qwen3.8-max`
+more often answers "not found" than guesses (87% of targets found, 1.8%
+wrong) — the sequence is then refused rather than half-clicked.
+End-to-end on a real board through dsh 0.2.2-rc.1 (DeepSeek driving,
+calculator 7+9 and Paint pencil + red, each run checked through UI
+Automation afterwards; small samples — the table is the measurement):
+`qwen3.8-max` 4 of 5 (in the miss, another application covered the task
+window entirely; the plugin refused to work on it), `qwen3-vl-plus` 4 of 4,
+`deepseek-flash` 3 of 5.
+
+Why "the way dsh delivers the image" matters: dsh puts a line in front of
+every image that states its pixel size, and with it `qwen3.8-max` mixed
+coordinate frames and dropped from 98% to 64% on the earlier prompt. Since
+0.2.0 the prompt pins one frame (0–1000) for the calibration markers and
+the targets alike, which brought it back.
+
+A Bailian (DashScope) route for `dsh-llm-pi-ai`, ready to paste into your
+profile's `cordis.patch.yml`. The two `compat` lines are required: without
+them DashScope rejects the request, or thinking stays on and a single look
+takes 45 s or more (measured).
+
+```yaml
+- id: llm-pi-ai
+  config:
+    providers:
+      bailian:
+        api: openai-completions
+        baseURL: https://dashscope.aliyuncs.com/compatible-mode/v1
+        apiKeyEnv: DASHSCOPE_API_KEY
+        compat:
+          thinkingFormat: qwen
+          supportsDeveloperRole: false
+        models:
+          - id: qwen3.8-max
+            input: [text, image]
+            reasoningEfforts:
+              off:
+              high: high
+- id: clawtouch
+  config:
+    vision:
+      provider: bailian
+      model: qwen3.8-max
+```
+
+Two costs to know about. Each look stores its screenshot as a dsh
+attachment, and dsh keeps attachments forever: measured window captures are
+20–70 KB, so a hundred clicks a day is a few megabytes a day. And the look
+is a separate model call whose tokens do not show in the conversation's own
+usage figures.
+
+**Coming from 0.1.x:** `vision.endpoint`, `vision.apiKey` and
+`vision.extraBody` are no longer read, and `DASHSCOPE_API_KEY` is not read by
+the plugin at all. A config that still sets any of them is refused with
+instructions (nothing is pressed) rather than quietly switching to a
+different model. Remove them, then either leave `vision` out or point it at
+a dsh route as above.
 
 ### Multi-monitor
 
@@ -275,7 +374,8 @@ This gives an agent the same reach as a person at the keyboard, with no
 undo.
 
 - **Quit combos are blocked by default.** On macOS Cmd+Q and Cmd+W; on
-  Windows and Linux desktops Alt+F4, Ctrl+W and Ctrl+F4. On a machine
+  Windows and Linux desktops Alt+F4, Ctrl+W, Ctrl+F4 and Alt+Space (the
+  window menu, whose next key can close the window). On a machine
   shared with the agent they would close the session (a browser showing the
   dsh web UI closes on Ctrl+W); set `allowQuitCombos: true` only when the
   machine being driven is not the one running dsh.
