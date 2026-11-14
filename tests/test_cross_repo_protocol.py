@@ -56,6 +56,9 @@ class TestSharedConstants:
     def test_protocol_version_string(self):
         assert mcp_proto.PROTOCOL_VERSION == ext_proto.PROTOCOL_VERSION
 
+    def test_abs_pointer_max(self):
+        assert mcp_proto.ABS_POINTER_MAX == ext_proto.ABS_POINTER_MAX
+
 
 class TestEnumValueParity:
     """The Python class identities differ (separate module imports),
@@ -110,6 +113,12 @@ class TestBuilderByteEquality:
         _both(
             lambda: mcp_proto.build_mouse_move(100, 200, relative=False, seq_id=8),
             lambda: ext_proto.build_mouse_move(100, 200, relative=False, seq_id=8),
+        )
+
+    def test_mouse_move_abs(self):
+        _both(
+            lambda: mcp_proto.build_mouse_move_abs(16387, 1, seq_id=12),
+            lambda: ext_proto.build_mouse_move_abs(16387, 1, seq_id=12),
         )
 
     def test_mouse_move_negative_delta(self):

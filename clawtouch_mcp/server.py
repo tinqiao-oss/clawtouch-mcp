@@ -35,6 +35,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from . import __version__
 from .bridge import SerialHidBridge, auto_detect_ports, check_typeable, list_pico_ports
+from .protocol import ABS_POINTER_MAX
 from . import cursor as _cursor_mod
 from . import screen as _screen
 from .cursor import (
@@ -135,8 +136,8 @@ MOVE_TOLERANCE = 5
 # diverges.
 #
 # The fix stays deliberately thin — no per-magnitude ballistics table and
-# no 300-iteration budget (that belongs to the closed-source product, not
-# to this layer): divide the commanded delta by a gain measured from the
+# no 300-iteration budget (this layer is plumbing, not a motion model):
+# divide the commanded delta by a gain measured from the
 # previous pass. It self-tunes to whatever the host does, needs no
 # platform knowledge, and costs two floats of state.
 GAIN_MIN = 0.25
@@ -149,6 +150,17 @@ GAIN_MIN_SAMPLE_PX = 12
 GAIN_HEALTHY_PROGRESS = 0.3
 MOVE_MAX_ITERS = 10
 MOVE_SETTLE_MS = 20
+
+# Absolute-pointer hop (firmware 1.2+). Windows maps an absolute HID mouse
+# onto the PRIMARY monitor only (measured 2026-11-14 on a 5120x1440 primary
+# + 2560x1440 secondary: logical 0..32767 spans x 0..5119, the secondary is
+# unreachable) and ignores a report of exactly (0, 0). Other platforms are
+# unmeasured, so the hop is Windows-only until someone measures them.
+# A hop that lands further than this from where the mapping predicts means
+# the mapping is not what was measured (a different OS setting, a remote
+# session...): hops are switched off for the rest of the server's life and
+# relative moves carry on alone.
+ABS_HOP_TRUST_PX = 8
 # Death-spiral guard for the move loops (_converge_to_target /
 # _stepped_move_to_absolute / _stepped_relative_move). A dead or unplugged
 # device never ACKs a mouse report, and each un-ACKed report blocks the
@@ -338,6 +350,10 @@ class ServerConfig:
     # _idle_watch 多久醒来检查一次; 0 = auto (基于 idle_close_after 算).
     # 默认 auto: max(1, min(5, idle_close_after/6)) — 平衡精度跟 CPU 开销.
     idle_check_interval: float = 0.0
+    # Windows + firmware 1.2+: start each snap move with one absolute-
+    # pointer report, then let the converge loop finish. False = relative
+    # moves only (the pre-1.2 behaviour).
+    abs_pointer: bool = True
 
 
 @dataclass
@@ -391,6 +407,12 @@ class MockBridge:
                 _seed_fake_cursor(960, 540)
         _update_fake_cursor(x, y, relative=relative)
         return True
+
+    async def mouse_move_absolute(self, x: int, y: int) -> str:
+        # The fake cursor has no absolute-pointer mapping to imitate, so
+        # --mock answers like pre-1.2 firmware and stays on relative moves.
+        self._calls.append(("move_abs", {"x": x, "y": y}))
+        return "unsupported"
 
     async def mouse_click(self, button: str = "left", *, double: bool = False) -> bool:
         self._calls.append(("click", {"button": button, "double": double}))
@@ -547,6 +569,9 @@ class UnavailableBridge:
 
     async def mouse_move(self, x: int, y: int, *, relative: bool = False) -> bool:
         return await self._try_or_fail("mouse_move", x, y, relative=relative)
+
+    async def mouse_move_absolute(self, x: int, y: int) -> str:
+        return await self._try_or_fail("mouse_move_absolute", x, y)
 
     async def mouse_click(self, button: str = "left", *, double: bool = False) -> bool:
         return await self._try_or_fail("mouse_click", button, double=double)
@@ -749,6 +774,17 @@ class ClawTouchMcpServer:
         # back. Every pass still re-measures and the value is clamped, so a
         # stale estimate costs at most one pass to correct.
         self._pointer_gain: float = 1.0
+        # Why absolute-pointer hops were switched off (None = still on).
+        # See _abs_hop: a single hop that misses the predicted pixel is
+        # enough, because the mapping is a property of the host, not of
+        # any one move.
+        self._abs_hop_off: str | None = (
+            None if config.abs_pointer else "disabled by --no-abs-pointer")
+        # Mouse buttons this server may have left pressed (see _press /
+        # _release). While any is held, moves skip the absolute hop: a drag's
+        # second leg keeps the relative path it has always used, which is the
+        # only one measured with a button down.
+        self._buttons_held: set[str] = set()
         self.rate = RateLimiter(config.ops_per_sec)
         self.tools: dict[str, Tool] = {}
         self._initialized = False
@@ -1902,17 +1938,119 @@ class ClawTouchMcpServer:
             )
         return result
 
+    @staticmethod
+    def _button_key(button: Any) -> str:
+        # The bridge resolves names case-insensitively ("LEFT" == "left").
+        return str(button).strip().lower()
+
+    async def _press(self, button: str) -> bool:
+        # Counted as held even when the ACK is missing: the report may still
+        # have gone out, and "held" only ever costs a hop. Only names the
+        # bridge accepts are recorded — anything else raises there before a
+        # report is built.
+        name = self._button_key(button)
+        if name in ("left", "right", "middle"):
+            self._buttons_held.add(name)
+        return await self.bridge.mouse_button_down(button=button)
+
+    async def _release(self, button: str) -> bool:
+        ok = await self.bridge.mouse_button_up(button=button)
+        if ok:
+            self._buttons_held.discard(self._button_key(button))
+        return ok
+
+    async def _click(self, button: str, double: bool) -> bool:
+        ok = await self.bridge.mouse_click(button=button, double=double)
+        if ok:
+            # MOUSE_CLICK presses and releases: a button held before it is up.
+            self._buttons_held.discard(self._button_key(button))
+        return ok
+
+    async def _release_everything(self) -> bool:
+        ok = await self.bridge.release_all()
+        if ok:
+            self._buttons_held.clear()
+        return ok
+
+    async def _abs_hop(self, target_x: int, target_y: int) -> bool:
+        """Put the cursor on (target_x, target_y) with ONE absolute-pointer
+        report, before the converge loop runs. Returns True when the hop
+        landed within ABS_HOP_TRUST_PX of the target.
+
+        Never decides the outcome of a move: the converge loop that follows
+        reads the cursor and corrects whatever is left (or confirms it in
+        zero iterations). The hop only replaces the long first relative
+        leg — the one Windows pointer acceleration amplifies ~2.5x.
+
+        Skipped (returns False, nothing sent) when: hops are off; not
+        Windows (other platforms' mapping is unmeasured); the bridge has
+        no absolute pointer (pre-1.2 firmware answers UNKNOWN_COMMAND once
+        per connection, then the bridge stops asking); or the target is
+        off the primary monitor, which is all Windows maps it to.
+        """
+        if self._abs_hop_off is not None or sys.platform != "win32":
+            return False
+        if self._buttons_held:
+            return False
+        hop = getattr(self.bridge, "mouse_move_absolute", None)
+        if hop is None:
+            return False
+        primary = _detect_screen()  # live: the primary can change mid-run
+        if primary is None:
+            return False
+        pw, ph = primary
+        if not (0 <= target_x < pw and 0 <= target_y < ph):
+            return False
+        if pw >= ABS_POINTER_MAX + 1 or ph >= ABS_POINTER_MAX + 1:
+            # At 32768 px one unit is one pixel and the forced minimum of 1
+            # below lands on pixel 1, not 0 — no exact mapping to promise.
+            return False
+        # Aim at the pixel's centre; Windows floors the scaled value. Never
+        # 0: Windows drops an absolute report of exactly (0, 0), and 1 still
+        # lands on pixel 0 for every width below 32768 (checked for every
+        # pixel of every width 1..4096 and the common wide ones).
+        nx = max(1, min(ABS_POINTER_MAX,
+                        round((target_x + 0.5) * (ABS_POINTER_MAX + 1) / pw)))
+        ny = max(1, min(ABS_POINTER_MAX,
+                        round((target_y + 0.5) * (ABS_POINTER_MAX + 1) / ph)))
+        status = await hop(nx, ny)
+        if status != "ok":
+            # "unsupported" is remembered by the bridge; "failed" (no ACK)
+            # is left to the relative path, whose death-spiral guard and
+            # device_nonresponsive flag already handle a dead device.
+            return False
+        await asyncio.sleep(MOVE_SETTLE_MS / 1000.0)
+        cur = get_cursor_position()
+        if cur is None:
+            return False
+        miss = max(abs(cur[0] - target_x), abs(cur[1] - target_y))
+        if miss > ABS_HOP_TRUST_PX:
+            self._abs_hop_off = (
+                f"an absolute hop to ({target_x}, {target_y}) on a {pw}x{ph} "
+                f"primary landed at ({cur[0]}, {cur[1]}), {miss} px off; this "
+                "host maps the absolute pointer differently from what was "
+                "measured, so moves use relative reports only from now on")
+            logger.warning("absolute pointer switched off: %s", self._abs_hop_off)
+            return False
+        return True
+
     async def _move_to_absolute(self, target_x: int, target_y: int) -> dict[str, Any]:
         """Snap-to absolute move (default, ``move_ms=0``). Clamps to
-        screen, then closed-loop converges via _converge_to_target.
+        screen, makes one absolute-pointer hop where the firmware and the
+        OS allow it (see _abs_hop), then closed-loop converges via
+        _converge_to_target — which reads the cursor either way, so the
+        hop can shorten a move but never vouch for one.
 
         If ``"error"`` is in the returned dict the caller should
         propagate it as the tool error without continuing."""
         note = self._clamp_note(target_x, target_y)
         target_x, target_y = self._clamp(target_x, target_y)
+        hopped = await self._abs_hop(target_x, target_y)
         result = await self._converge_to_target(
             target_x, target_y, max_iters=MOVE_MAX_ITERS,
         )
+        if hopped and "error" not in result:
+            result = {**result, "abs_hop": True}
         if note:
             # Reported, not failed. `ok` stays whatever the converge
             # decided: the cursor really did reach the clamped point, and
@@ -2122,10 +2260,8 @@ class ClawTouchMcpServer:
         # so the agent sees the reason (and so a click ACK can't mask it).
         if self._move_failed(result):
             return result
-        click_ok = await self.bridge.mouse_click(
-            button=kw.get("button", "left"),
-            double=bool(kw.get("double", False)),
-        )
+        click_ok = await self._click(
+            kw.get("button", "left"), bool(kw.get("double", False)))
         result["ok"] = click_ok
         result["clicked"] = click_ok
         return result
@@ -2260,7 +2396,7 @@ class ClawTouchMcpServer:
         return {"ok": ok}
 
     async def _tool_release_all(self, **_kw) -> dict:
-        ok = await self.bridge.release_all()
+        ok = await self._release_everything()
         return {"ok": ok}
 
     # ── v1.1 tool handlers ──
@@ -2268,13 +2404,13 @@ class ClawTouchMcpServer:
     async def _tool_mouse_button_down(self, **kw) -> dict:
         self.rate.check()
         button = str(kw.get("button", "left"))
-        ok = await self.bridge.mouse_button_down(button=button)
+        ok = await self._press(button)
         return {"ok": ok, "button": button, "state": "down"}
 
     async def _tool_mouse_button_up(self, **kw) -> dict:
         self.rate.check()
         button = str(kw.get("button", "left"))
-        ok = await self.bridge.mouse_button_up(button=button)
+        ok = await self._release(button)
         return {"ok": ok, "button": button, "state": "up"}
 
     async def _tool_drag(self, **kw) -> dict:
@@ -2329,7 +2465,7 @@ class ClawTouchMcpServer:
             }
 
         # Step 2: press the button.
-        down_ok = await self.bridge.mouse_button_down(button=button)
+        down_ok = await self._press(button)
 
         # Step 3: glided move to destination — with try/finally so a
         # mid-drag exception still releases the button (button-stuck
@@ -2362,7 +2498,7 @@ class ClawTouchMcpServer:
         finally:
             # Step 4: release. Idempotent on the firmware side — safe to
             # call even if step 3 raised before any movement.
-            up_ok = await self.bridge.mouse_button_up(button=button)
+            up_ok = await self._release(button)
 
         # Combine all sub-call ACKs. ``ok`` is set LAST so a stray ``ok``
         # spread in from ``dest_info`` (e.g. stepped-relative result) can't
@@ -2391,6 +2527,11 @@ class ClawTouchMcpServer:
         key = str(kw.get("key") or "")
         modifiers = [m.lower() for m in (kw.get("modifiers") or [])]
         ok = await self.bridge.key_release(key, modifiers)
+        if ok and not key:
+            # An empty key sends KEY_RELEASE(0, 0) whatever the modifiers say
+            # (bridge.key_release): the panic stop, which releases mouse
+            # buttons too.
+            self._buttons_held.clear()
         return {"ok": ok, "key": key or "<all>", "modifiers": modifiers, "state": "up"}
 
     async def _tool_hold_key(self, **kw) -> dict:
@@ -2506,22 +2647,20 @@ class ClawTouchMcpServer:
                     # Positioning failed — do NOT click somewhere we never
                     # confirmed reaching; surface the move failure.
                     return {**base, **r, "ok": False}
-                click_ok = await self.bridge.mouse_click(
-                    button=str(op.get("button", "left")),
-                    double=bool(op.get("double", False)),
-                )
+                click_ok = await self._click(
+                    str(op.get("button", "left")), bool(op.get("double", False)))
                 r["clicked"] = click_ok
                 r["ok"] = click_ok
             return {**base, **r}
 
         if t == "button_down":
             button = str(op.get("button", "left"))
-            ok = await self.bridge.mouse_button_down(button=button)
+            ok = await self._press(button)
             return {**base, "ok": ok, "button": button, "state": "down"}
 
         if t == "button_up":
             button = str(op.get("button", "left"))
-            ok = await self.bridge.mouse_button_up(button=button)
+            ok = await self._release(button)
             return {**base, "ok": ok, "button": button, "state": "up"}
 
         if t == "key":
@@ -2667,8 +2806,10 @@ class ClawTouchMcpServer:
             if pressed_something and (stopped_early or failed_index is not None):
                 cleanup_attempted = True
                 try:
-                    await self.bridge.release_all()     # rate-exempt panic stop
-                    released = True
+                    # rate-exempt panic stop. Its ACK decides `released`: a
+                    # release_all that was not ACKed used to be reported as
+                    # released_all=True with no cleanup_error.
+                    released = bool(await self._release_everything())
                 except Exception as e:
                     cleanup_error = f"{type(e).__name__}: {e}"
                     logger.warning(

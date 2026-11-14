@@ -12,7 +12,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "clawtouch-mcp"
-version = "0.5.2"
+version = "0.6.0"
 description = "MCP stdio server exposing HID mouse/keyboard tools backed by ClawTouch Pico hardware."
 readme = "README.md"
 # PEP 639 SPDX expression form (modern packaging). Avoid the deprecated
@@ -116,7 +116,8 @@ select = ["E4", "E7", "E9", "F"]
 asyncio_mode = "auto"
 # importlib import mode so the combined monorepo run
 # (`pytest oss/clawtouch-mcp/tests oss/clawtouch-hid/tests`) doesn't hit an
-# "import file mismatch" on the identically-named tests/__init__.py and
-# tests/test_protocol.py shared with clawtouch-hid. Single-package runs were
-# always fine; this also future-proofs against further same-name collisions.
+# "import file mismatch" on the identically-named tests/__init__.py. It does
+# NOT make same-named test modules safe: with a tests/test_protocol.py in both
+# packages the combined run collected this package's twice and clawtouch-hid's
+# never (fixed 2026-11-14 by renaming theirs). Keep test file names distinct.
 addopts = "--import-mode=importlib"

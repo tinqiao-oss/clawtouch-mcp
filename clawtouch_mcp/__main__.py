@@ -42,6 +42,10 @@ def main() -> int:
                              "processes (e.g. ClawTouch desktop) acquire the same "
                              "board without manual kill. Next tool call lazy-"
                              "reconnects (~50-200ms overhead).")
+    parser.add_argument("--no-abs-pointer", action="store_true",
+                        help="Never use the firmware 1.2+ absolute pointer; "
+                             "move with relative reports only, as older "
+                             "firmware does.")
     parser.add_argument("--log-level", default="WARNING",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
@@ -74,6 +78,7 @@ def main() -> int:
         allow_screenshot=args.allow_screenshot,
         screenshot_backend=args.screenshot_backend,
         idle_close_after=args.idle_close_after,
+        abs_pointer=not args.no_abs_pointer,
     )
     if args.screen:
         # --screen used to crash on "1920x" (int("") raises outside the

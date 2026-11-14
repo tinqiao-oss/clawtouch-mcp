@@ -293,7 +293,11 @@ Seventeen tools register: **fourteen always-on `hid.*` input tools**, plus
 **Coordinates & behavior.** Click / move / hover are **absolute by default**:
 the server queries the OS cursor position (Win32 / CoreGraphics / X11), computes
 the offset to your target, and sends a **relative delta** to the firmware — so
-`{"x": 640, "y": 360}` lands at that screen pixel. Pass `relative=true` to skip
+`{"x": 640, "y": 360}` lands at that screen pixel. On Windows with clawtouch-hid
+firmware 1.2+, a target on the primary monitor is first reached with one
+absolute-pointer report (measured: ~30 ms instead of ~200 ms, on the pixel);
+the cursor is still read back before anything is clicked, older firmware keeps
+the relative path, and `--no-abs-pointer` turns it off. Pass `relative=true` to skip
 the OS query and send a raw pixel delta instead. Where the OS cursor can't be
 read (Wayland, or any OS-query failure) the call returns an **explicit error** —
 it never silently guesses and clicks the wrong place. `hid.drag` composes

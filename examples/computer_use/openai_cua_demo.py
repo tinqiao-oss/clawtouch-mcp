@@ -314,7 +314,7 @@ async def run(task: str, bridge: Any, screen_w: int, screen_h: int,
                               if hasattr(call.action, "model_dump")
                               else dict(call.action),
                               screen_w, screen_h)
-            except Exception as e:
+            except Exception:
                 logger.exception("execute failed")
 
             # Always reply with a fresh screenshot — CUA expects it

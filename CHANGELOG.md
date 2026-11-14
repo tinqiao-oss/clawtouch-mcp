@@ -7,6 +7,40 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-11-14 — one-report moves with firmware 1.2's absolute pointer (Windows) · batch cleanup no longer reports a failed release as done
+
+### Added — one-report moves with firmware 1.2's absolute pointer (Windows)
+
+A snap move (`hid.move` / `hid.click` / `hid.hover` / drag ends / `hid.batch`
+moves without `move_ms`) now starts with one `MOUSE_MOVE_ABS` report when the
+board runs clawtouch-hid firmware 1.2+, then runs the converge loop exactly
+as before — it reads the cursor either way, so the hop can shorten a move but
+never vouch for one. Measured on a Pico 2, Windows 11, 14 points on a
+5120x1440 primary: median 204 ms / 4.3 converge passes / up to 5 px off
+before → 30 ms / 0 passes / 0 px after; points on the secondary monitor still
+move the relative way.
+
+- Windows only: the mapping was measured there (primary monitor only, `(0, 0)`
+  dropped); other platforms keep relative moves until someone measures them.
+- Older firmware answers the opcode as unknown once per connection; the
+  bridge remembers that and stops asking (`SerialHidBridge.mouse_move_absolute`
+  returns `"ok"` / `"unsupported"` / `"failed"`). `--mock` stays relative.
+- A hop that lands more than 8 px from where the mapping predicts switches
+  hops off for the rest of the server's life (logged), and the move still
+  completes the relative way.
+- No hop while a mouse button may be held (a drag's second leg, `hid.mouse_button_down`,
+  `hid.batch` button ops): those moves keep the relative path, the only one measured with a
+  button down. A button counts as held from the press until an ACKed release / release-all.
+- No hop when the primary monitor is 32768 px or wider on an axis (no exact pixel mapping there).
+- `--no-abs-pointer` turns it off.
+
+### Fixed — `hid.batch` cleanup reported a failed release as done
+
+When a batch stopped with a button possibly held, its cleanup `release_all`
+returning False (not ACKed, no exception) still produced `released_all: true` and
+no `cleanup_error`. It now reports `released_all: false` and
+`cleanup_error: "release_all failed"`.
+
 ## [0.5.2] — 2026-09-15 — no console fallback for a busy board · untypeable text is refused whole · dsh-clawtouch 0.1.2
 
 ### Fixed — with the board busy, the server opened its REPL console and wrote protocol frames into it
@@ -2471,7 +2505,8 @@ under the working name `openclaw-mcp` but were never published. The
   for this OSS release.
 - No multi-touch HID profile yet — only mouse and keyboard.
 
-[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/tinqiao-oss/clawtouch-mcp/compare/v0.4.6...v0.5.0
