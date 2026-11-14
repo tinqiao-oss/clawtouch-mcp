@@ -7,6 +7,48 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### dsh-clawtouch 0.2.0 — the eye is a model you pick in dsh (needs dsh 0.2.x)
+
+The plugin no longer ships a model or reads an API key. The model that looks
+at each screenshot is a dsh model route: by default the current
+conversation's model, or `vision.provider` + `vision.model` to name another
+route configured in dsh. Its 0.1.x default, `qwen-vl-max`, was retired by
+DashScope on 2026-10-10 and has answered 404 since — 0.1.2 cannot locate
+anything with its default config.
+
+- **Breaking:** `vision.endpoint`, `vision.apiKey` and `vision.extraBody` are
+  no longer read, and `DASHSCOPE_API_KEY` is not read by the plugin. A config
+  that still sets any of them is refused with migration instructions before
+  anything is pressed, rather than silently looking with a different model.
+- Before anything is pressed (and before a title-bar click that brings a
+  window forward) the eye is checked: config, dsh's `llm`/`attachments`
+  services, and that the route declares image input — a text-only route
+  would be shown a placeholder and could still answer with coordinates.
+- A reply is used only if its stream finished cleanly: an error, a
+  truncation, a cancellation, a timeout, or a stream with no final status is
+  refused even when it printed JSON first.
+- Cancellation is checked again right before every input goes out, including
+  after a server (re)start inside the send. Failure messages no longer say
+  "nothing was pressed" once a raise click or a click into a field has
+  already happened; they say what did.
+- The prompt pins one coordinate frame (0–1000) for the calibration markers
+  and the targets. dsh puts a line in front of every image stating its pixel
+  size, and with the 0.1.x prompt `qwen3.8-max` mixed frames (offline: 98% →
+  64% hit). With the new prompt and dsh's line simulated, 3 runs × 165 looks:
+  `qwen3.8-max` 96.4% hit / 2.4% wrong, `qwen3-vl-plus` 96.4 / 3.6,
+  `deepseek-flash` (thinking off) 78.2 / 21.8. The calibration's scale ceiling
+  now follows the capture size, so thin captures in that frame still fit.
+- Each result names the eye that looked (`eye provider/model`).
+- Alt+Space is refused with the quit combos on Windows/Linux: the window menu
+  it opens closes or minimises the window on the next key (seen in a test run).
+- README: "Choosing the eye" with the measurements, a ready-to-paste Bailian
+  route (`thinkingFormat: qwen` and `supportsDeveloperRole: false` are
+  required), and the costs (each look stores its screenshot as a dsh
+  attachment, never deleted; 20–70 KB measured).
+- Verified on dsh 0.2.2-rc.1 with a Pico 2 (calculator and Paint tasks, each
+  run checked through UI Automation): `qwen3.8-max` 4 of 5, `qwen3-vl-plus`
+  4 of 4, `deepseek-flash` 3 of 5.
+
 ## [0.6.0] — 2026-11-14 — one-report moves with firmware 1.2's absolute pointer (Windows) · batch cleanup no longer reports a failed release as done
 
 ### Added — one-report moves with firmware 1.2's absolute pointer (Windows)

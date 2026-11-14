@@ -1,7 +1,7 @@
 {
   "name": "dsh-clawtouch",
-  "version": "0.1.2",
-  "description": "Real mouse and keyboard for a DeepSeek Harness agent: describe what to click in words, a vision model finds it, a USB HID device clicks it.",
+  "version": "0.2.0",
+  "description": "Real mouse and keyboard for a DeepSeek Harness agent: describe what to click in words, a model you pick in dsh finds it, a USB HID device clicks it.",
   "type": "module",
   "main": "index.js",
   "dsh": {

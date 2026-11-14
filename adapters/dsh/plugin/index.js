@@ -44,13 +44,17 @@
 // import resolves to the host's own copy. The requirement is documented in
 // the README instead, where it cannot break resolution.
 import { defineTool } from '@deepseek-ai/dsh-tools'
+// Also host-provided, same reasoning as above. Handed to lib/eye.js rather
+// than imported there, so the lib/ modules stay testable with no host.
+import { BlockAssembler } from '@deepseek-ai/dsh-llm'
 
 import { McpStdioClient } from './lib/mcp-client.js'
 import {
   Locator, describeResult, LocateError, TargetNotFound,
-  renderWindowLine, notPressedNote,
+  renderWindowLine, notPressedNote, eyeNote,
 } from './lib/locator.js'
 import { refusedCombo } from './lib/keyguard.js'
+import { DshEye } from './lib/eye.js'
 import { clickVerb, typeText, pressKey, scrollWheel } from './lib/actions.js'
 
 export const name = 'clawtouch'
@@ -83,7 +87,18 @@ export function apply(ctx, userConfig = {}) {
     cwd: config.cwd,
     log,
   })
-  const locator = new Locator({ mcp, config, log })
+  // The eye is a dsh model route (lib/eye.js). `llm` and `attachments` are
+  // probed, not injected, for the same reason as `skills`: the tools that
+  // need no looking (keys, typing without a target, the window list) must
+  // still mount on a profile without them.
+  const eye = new DshEye({ vision: config.vision, log })
+  ctx.inject(['llm', 'attachments'], (inner) => {
+    inner.effect(() => {
+      eye.attach({ llm: inner.llm, attachments: inner.attachments, BlockAssembler })
+      return () => eye.detach()
+    })
+  })
+  const locator = new Locator({ mcp, config, log, eye })
 
   // The device is not opened at boot. A Pico that is unplugged when the
   // profile starts is normal — the agent may plug it in mid-session, and
@@ -129,15 +144,12 @@ function normalize(raw) {
     // machine being driven is not the one the agent runs on.
     allowFocusSwitchCombos: Boolean(raw.allowFocusSwitchCombos),
     registerSkill: raw.registerSkill !== false,
-    vision: {
-      endpoint: vision.endpoint,
-      model: vision.model,
-      // An env var is the default so a key never has to be written into a
-      // profile file that gets committed by accident.
-      apiKey: vision.apiKey || process.env.DASHSCOPE_API_KEY
-        || process.env.CLAWTOUCH_VISION_API_KEY,
-      timeoutMs: positive(vision.timeoutMs, 0) || undefined,
-    },
+    // Which dsh model route looks (lib/eye.js). Unset = the conversation's
+    // own model. The 0.1.x keys (endpoint, apiKey, extraBody) are passed
+    // through untouched so the eye can refuse them by name — an old profile
+    // must not silently start using a different model. Environment
+    // variables are not read: a stray DASHSCOPE_API_KEY decides nothing.
+    vision: { ...vision },
   }
 }
 
@@ -218,12 +230,14 @@ function registerTools(ctx, locator, config, log) {
       },
       render: (_args, value) => [{ type: 'text', text: value.summary }],
     },
-    execute: (args) => run(async () => {
+    execute: (args, exec) => run(async () => {
       const result = await locator.click({
         target: args.target,
         window: args.window,
         button: args.button,
         double: args.double,
+        signal: exec?.signal,
+        exec,
       })
       const verb = clickVerb(result)
       const summary = describeResult(result, verb)
@@ -278,11 +292,13 @@ function registerTools(ctx, locator, config, log) {
       },
       render: (_args, value) => [{ type: 'text', text: value.summary }],
     },
-    execute: (args) => run(async () => {
+    execute: (args, exec) => run(async () => {
       const result = await locator.clickSequence({
         targets: args.targets,
         window: args.window,
         button: args.button,
+        signal: exec?.signal,
+        exec,
       })
       const verb = result.clicked ? 'clicked' : 'would click'
       const where = result.results
@@ -290,7 +306,7 @@ function registerTools(ctx, locator, config, log) {
         .join(' -> ')
       const note = notPressedNote(result)
       const summary = `${verb} ${result.results.length} in ${result.source}: `
-        + `${where} [${result.timings.totalMs}ms for the look]`
+        + `${where} [${result.timings.totalMs}ms for the look${eyeNote(result.eye)}]`
         + (note ? ` — ${note}` : '')
       log('info', summary)
       return {
@@ -327,11 +343,12 @@ function registerTools(ctx, locator, config, log) {
       },
       render: (_args, value) => [{ type: 'text', text: value.summary }],
     },
-    execute: (args) => run(async () => {
+    execute: (args, exec) => run(async () => {
       let result
       try {
         result = await locator.point({
           target: args.target, window: args.window,
+          signal: exec?.signal, exec,
         })
       } catch (err) {
         // "Not on screen" is this tool's whole purpose — an answer, not a
@@ -466,7 +483,7 @@ function registerTools(ctx, locator, config, log) {
       render: (_args, value) => [{ type: 'text', text: value.summary }],
     },
     // In lib/actions.js, with key and scroll, so the tests reach them.
-    execute: (args) => run(() => typeText({ locator, config }, args)),
+    execute: (args, exec) => run(() => typeText({ locator, config }, args, exec)),
   }))
 
   ctx.tools.register(defineTool({
@@ -494,7 +511,7 @@ function registerTools(ctx, locator, config, log) {
       },
       render: (_args, value) => [{ type: 'text', text: value.summary }],
     },
-    execute: (args) => run(() => pressKey({ locator, config }, args)),
+    execute: (args, exec) => run(() => pressKey({ locator, config }, args, exec)),
   }))
 
   ctx.tools.register(defineTool({
@@ -524,7 +541,7 @@ function registerTools(ctx, locator, config, log) {
       },
       render: (_args, value) => [{ type: 'text', text: value.summary }],
     },
-    execute: (args) => run(() => scrollWheel({ locator, config }, args)),
+    execute: (args, exec) => run(() => scrollWheel({ locator, config }, args, exec)),
   }))
 }
 
@@ -636,7 +653,7 @@ colour, by the text on it, by what it sits next to.
 - A reply that says "would click" or "nothing was pressed" means no input
   happened (a dry run, or a server with no device). Do not carry on as if
   it had.
-- Quit combos (Cmd+Q, Alt+F4, Cmd+W) are blocked by default — on a shared
+- Quit combos (Cmd+Q, Alt+F4, Cmd+W, Alt+Space) are blocked by default — on a shared
   machine they would close this session.
 - So are window-switching combos (Alt+Tab, the Windows key, Cmd+Tab). They
   move focus away and every later keystroke follows it. To reach another

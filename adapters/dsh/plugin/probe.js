@@ -28,6 +28,7 @@ import { join } from 'node:path'
 import { McpStdioClient } from './lib/mcp-client.js'
 import { Locator, describeResult } from './lib/locator.js'
 import { calibrate, toScreenPoint } from './lib/calibrate.js'
+import { httpAsk } from './lib/vision.js'
 
 const argv = process.argv.slice(2)
 const flag = (n) => argv.includes(`--${n}`)
@@ -51,11 +52,21 @@ const config = {
   maxWidth: Number(opt('max-width', 1600)),
   imageFormat: flag('png') ? 'png' : 'jpeg',
   dryRun: !flag('click'),
-  vision: {
-    endpoint: opt('endpoint'),
-    model: opt('model', 'qwen-vl-max'),
-    apiKey: process.env.DASHSCOPE_API_KEY
-      || process.env.CLAWTOUCH_VISION_API_KEY,
+}
+// Outside dsh there is no model route to borrow, so the probe looks through
+// the development HTTP transport (an OpenAI-compatible endpoint + key) with
+// the plugin's own prompt. The plugin itself only ever uses dsh routes.
+const visionHttp = {
+  endpoint: opt('endpoint'),
+  model: opt('model', 'qwen3.8-max'),
+  apiKey: process.env.DASHSCOPE_API_KEY || process.env.CLAWTOUCH_VISION_API_KEY,
+}
+const httpEye = {
+  async prepare() {
+    return { route: { provider: 'http', model: visionHttp.model }, effort: null }
+  },
+  async ask(prepared, request) {
+    return { text: await httpAsk({ config: visionHttp, ...request }), route: prepared.route }
   },
 }
 if (flag('mock')) config.args.push('--mock')
@@ -75,7 +86,7 @@ const log = (level, msg) => {
 const mcp = new McpStdioClient({
   command: config.command, args: config.args, log,
 })
-const locator = new Locator({ mcp, config, log })
+const locator = new Locator({ mcp, config, log, eye: httpEye })
 
 async function main() {
   if (flag('windows')) return showWindows()

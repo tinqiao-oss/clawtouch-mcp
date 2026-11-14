@@ -10,7 +10,7 @@
  * happened, and invite the agent to send it twice.
  */
 import {
-  describeResult, LocateError, SIMULATED_NOTE, DRY_RUN_NOTE,
+  describeResult, LocateError, SIMULATED_NOTE, DRY_RUN_NOTE, stopIfCancelled,
 } from './locator.js'
 import { untypableChars, untypableMessage } from './typing.js'
 
@@ -23,8 +23,8 @@ import { untypableChars, untypableMessage } from './typing.js'
  * Physical input either happened or it did not, and the agent has no other
  * way to find out.
  */
-export async function mcpCall(locator, tool, args) {
-  const res = await locator.mcp.callTool(tool, args)
+export async function mcpCall(locator, tool, args, signal) {
+  const res = await locator.mcp.callTool(tool, args, { signal })
   if (res.isError) throw new Error(`${tool} failed: ${res.text.slice(0, 300)}`)
   if (!res.json || res.json.ok !== true) {
     throw new Error(`${tool} did not confirm it ran: `
@@ -39,27 +39,48 @@ export function clickVerb(result) {
   return result && result.clicked ? 'clicked' : 'would click'
 }
 
-/** Click `target` first when one was given; the summary line it produced. */
-async function clickFirst(locator, args) {
+/** Run what follows a target click so that ANY failure in it — a cancel
+ *  before the send, a cancel inside it (the server restarting), the send
+ *  itself — still carries the record of the click that already happened.
+ *  Otherwise "cancelled before typing" would read as no input at all. */
+async function afterClick(prefix, fn) {
+  try {
+    return await fn()
+  } catch (err) {
+    if (prefix.length) throw new LocateError(`${prefix.join('; ')}; then ${err.message}`)
+    throw err
+  }
+}
+
+/** Click `target` first when one was given; the summary line it produced.
+ *  `exec` is the tool call's execution context: its signal cancels, and its
+ *  agent says which conversation model the eye borrows. */
+async function clickFirst(locator, args, exec) {
   if (!args.target) return []
-  const clicked = await locator.click({ target: args.target, window: args.window })
+  const clicked = await locator.click({
+    target: args.target, window: args.window, signal: exec?.signal, exec,
+  })
   return [describeResult(clicked, clickVerb(clicked))]
 }
 
 /** computer_type. */
-export async function typeText({ locator, config }, args) {
+export async function typeText({ locator, config }, args, exec) {
   // Before the target click as well as before the typing: text that cannot
   // be typed makes the whole call pointless, and a field clicked for nothing
   // is still a change on screen.
   const untypable = untypableChars(args.text)
   if (untypable.length) throw new LocateError(untypableMessage(untypable))
-  const prefix = await clickFirst(locator, args)
+  const prefix = await clickFirst(locator, args, exec)
   const length = args.text.length   // ASCII from here on: units are characters
   if (config.dryRun) {
     return { summary: [...prefix, `would type ${length} characters — ${DRY_RUN_NOTE}`].join('; ') }
   }
-  const simulated = await locator.simulated()
-  const res = await mcpCall(locator, 'hid.type', { text: args.text })
+  const res = await afterClick(prefix, async () => {
+    const simulated = await locator.simulated()
+    stopIfCancelled(exec?.signal, 'typing')
+    return { ...(await mcpCall(locator, 'hid.type', { text: args.text }, exec?.signal)), simulated }
+  })
+  const simulated = res.simulated
   const sent = Number.isInteger(res.chars) ? res.chars : length
   // The server drops control characters on purpose (a stray newline must not
   // submit a chat draft). Say so, or "typed 11 characters" for a 12-character
@@ -76,28 +97,33 @@ export async function typeText({ locator, config }, args) {
 }
 
 /** computer_key. */
-export async function pressKey({ locator, config }, args) {
+export async function pressKey({ locator, config }, args, exec) {
   const mods = Array.isArray(args.modifiers) ? args.modifiers : []
   const combo = [...mods, args.key].join('+')
   if (config.dryRun) return { summary: `would press ${combo} — ${DRY_RUN_NOTE}` }
   const simulated = await locator.simulated()
-  await mcpCall(locator, 'hid.key', { key: args.key, modifiers: mods })
+  stopIfCancelled(exec?.signal, `pressing ${combo}`)
+  await mcpCall(locator, 'hid.key', { key: args.key, modifiers: mods }, exec?.signal)
   return {
     summary: simulated ? `would press ${combo} — ${SIMULATED_NOTE}` : `pressed ${combo}`,
   }
 }
 
 /** computer_scroll. */
-export async function scrollWheel({ locator, config }, args) {
-  const prefix = await clickFirst(locator, args)
+export async function scrollWheel({ locator, config }, args, exec) {
+  const prefix = await clickFirst(locator, args, exec)
   if (config.dryRun) {
     return { summary: [...prefix, `would scroll ${args.amount} — ${DRY_RUN_NOTE}`].join('; ') }
   }
-  const simulated = await locator.simulated()
-  // The wire argument is `delta`, not `amount`. Naming it `amount` at the
-  // agent-facing edge is fine; passing that name through was not — the
-  // server rejected every call with a KeyError.
-  await mcpCall(locator, 'hid.scroll', { delta: args.amount })
+  const simulated = await afterClick(prefix, async () => {
+    const sim = await locator.simulated()
+    stopIfCancelled(exec?.signal, 'scrolling')
+    // The wire argument is `delta`, not `amount`. Naming it `amount` at the
+    // agent-facing edge is fine; passing that name through was not — the
+    // server rejected every call with a KeyError.
+    await mcpCall(locator, 'hid.scroll', { delta: args.amount }, exec?.signal)
+    return sim
+  })
   const line = simulated
     ? `would scroll ${args.amount} — ${SIMULATED_NOTE}`
     : `scrolled ${args.amount}`

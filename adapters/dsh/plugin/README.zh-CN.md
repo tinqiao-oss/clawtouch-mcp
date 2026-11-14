@@ -48,13 +48,12 @@ pip install 'clawtouch-mcp[screenshot,window]>=0.5.1'
 **两个 extra 都要,不能只写 `[screenshot]`** —— 后者只有 mss + Pillow,
 不含 pyobjc。macOS 上少了它,窗口列表功能直接不可用。
 
-### 3. 视觉模型的 API key (必须,除非只做硬件自检)
+### 3. 一个能看图的模型 (在 dsh 里配置, 不在本插件里)
 
-```bash
-export DASHSCOPE_API_KEY=sk-...
-```
-
-默认用阿里云百炼的 `qwen-vl-max`。换别的模型见下面「配置」。
+本插件**不带模型、不读任何 API key**。负责「看截图、说目标在哪」的模型(下称「眼睛」)
+就是你在 dsh 里配好的模型: 不做任何配置时, 用**当前对话正在用的模型**; 也可以在插件配置里
+用 `vision.provider` + `vision.model` 指定 dsh 里的另一条模型路由。这个模型必须声明能看图,
+否则插件会在按下任何东西之前拒绝。不同模型点得准不准差别很大, 见下面「怎么选眼睛」。
 
 ---
 
@@ -63,7 +62,6 @@ export DASHSCOPE_API_KEY=sk-...
 ```bash
 pip install 'clawtouch-mcp[screenshot,window]>=0.5.1'
 dsh plugin --profile <你的 profile> add dsh-clawtouch
-export DASHSCOPE_API_KEY=sk-...
 ```
 
 `@deepseek-ai/dsh-tools` 由宿主提供,插件刻意**不**声明这个 peer 依赖:
@@ -105,6 +103,81 @@ node probe.js --windows --screen 7680x1440
 
 ---
 
+## dsh 版本、dsh 自带的 Computer Use
+
+0.2.0 需要 dsh 0.2.x(眼睛走 dsh 自己的模型服务和附件服务)。2026-11-14 在 dsh 0.2.2-rc.1 上验证过: 工具走原生执行器和 PTC(模型在 `run_code`
+里调用 `tools.computer_*`, 拿到结构化结果)都能用, 组合键拦截对 PTC 程序里的调用
+同样生效。dsh 自己也带一个实验性的 Computer Use —— 一个 profile 里**两者只开一个**:
+本插件的组合键拦截只管得到它自己的工具。
+
+[clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid) 固件 1.2 加了绝对坐标
+指针: 在 Windows 上 `clawtouch-mcp` 会一步把光标放到主屏的目标像素上, 不再反复
+小步挪动。旧固件照旧能用, 只是走原来的方式。
+
+---
+
+## 怎么选眼睛
+
+眼睛就是看每张截图、说出目标在哪的那个模型。**它决定了点错的频率**,是最要紧的一项设置。
+离线实测, 按 dsh 实际递图的方式(模拟了 dsh 插在图片前的那行说明), 用插件自己的提示词和标定方法(源码仓 `tools/vision-bench`,
+2026-11-14; 每个模型 3 轮共 165 次;「不存在的目标」共 24 个, 是屏幕上没有、本该说找不到的目标):
+
+| 眼睛(经 dsh) | 命中 | 点错 | 不存在的目标也去点 | 单次中位 |
+|---|---|---|---|---|
+| `qwen3.8-max`(关思考) | 96.4% | 2.4% | 0 | 2.0 秒 |
+| `qwen3-vl-plus` | 96.4% | 3.6% | 3 | 1.8 秒 |
+| `deepseek-flash`(关思考, dsh 默认模型) | 78.2% | 21.8% | 1 | 0.9 秒 |
+| Claude、GPT 等 | 未测 | | | |
+
+用 DeepSeek 对话、又什么都不配时, 大约每 5 次点击就有 1 次点到目标旁边的东西。每条结果都会
+写明这次是哪个眼睛看的(`eye 路由/模型`), 方便发现。一次看多个目标时(`computer_click_sequence`),
+`qwen3.8-max` 更常回答「找不到」而不是乱猜(87% 的目标找到, 点错 1.8%), 这时整串点击会被拒绝,
+不会只点一半。真机端到端(经 dsh 0.2.2-rc.1, DeepSeek 当手, 计算器 7+9 与画图「铅笔 + 红色」,
+每轮结束后用 UI Automation 独立核对; 样本少, 以上表为准): `qwen3.8-max` 5 次成功 4 次(失败那次任务窗口
+被别的程序完全挡住, 插件拒绝在它上面操作), `qwen3-vl-plus` 4 次全成功, `deepseek-flash` 5 次成功 3 次。
+
+为什么强调「按 dsh 实际递图的方式」: dsh 会在每张图片前插一行文字说明它的像素尺寸, 旧提示词下
+`qwen3.8-max` 因此把两套坐标系混着用, 命中从 98% 掉到 64%。0.2.0 起提示词让标定块和目标统一用
+0–1000 坐标, 准确率回来了。
+
+在 dsh 里接阿里云百炼的配置(用 `dsh-llm-pi-ai`), 可直接贴进 profile 的 `cordis.patch.yml`。
+**两行 `compat` 必须写**: 不写的话百炼直接拒绝请求, 或者不关思考、看一次要 45 秒以上(实测):
+
+```yaml
+- id: llm-pi-ai
+  config:
+    providers:
+      bailian:
+        api: openai-completions
+        baseURL: https://dashscope.aliyuncs.com/compatible-mode/v1
+        apiKeyEnv: DASHSCOPE_API_KEY
+        compat:
+          thinkingFormat: qwen
+          supportsDeveloperRole: false
+        models:
+          - id: qwen3.8-max
+            input: [text, image]
+            reasoningEfforts:
+              off:
+              high: high
+- id: clawtouch
+  config:
+    vision:
+      provider: bailian
+      model: qwen3.8-max
+```
+
+两个成本要知道: 每次看图, 截图都会存成 dsh 的附件, 而 dsh 的附件永不删除 —— 实测窗口截图
+每张 20–70 KB, 每天点 100 次大约多几 MB; 另外看图是一次单独的模型调用, 它的 token 不计入
+对话本身的用量统计。
+
+**从 0.1.x 升级:** `vision.endpoint`、`vision.apiKey`、`vision.extraBody` 不再读取,
+插件也不再读 `DASHSCOPE_API_KEY`。配置里还留着这些键时, 看图类工具会直接拒绝并说明怎么改
+(什么都不按), 不会悄悄换成别的模型。删掉它们, 然后要么不写 `vision`(用当前对话的模型),
+要么照上面指向 dsh 里的一条路由。
+
+---
+
 ## 工具
 
 | 工具 | 作用 |
@@ -143,7 +216,7 @@ Linux 没有窗口列表,只能截整个桌面 —— 实测在多显示器下�
 - **键盘输入进的是当前有焦点的窗口。** 先点输入框,或者给 `computer_type`
   传 `target` 让它替你点。
 - **退出类组合键默认被拦截**:macOS 上 Cmd+Q / Cmd+W;Windows 与 Linux 桌面上
-  Alt+F4 / Ctrl+W / Ctrl+F4。一次真实的 HID 按键落在拥有焦点的任何窗口上 ——
+  Alt+F4 / Ctrl+W / Ctrl+F4 / Alt+空格(窗口菜单, 下一个键就能关窗口)。一次真实的 HID 按键落在拥有焦点的任何窗口上 ——
   如果那是 agent 自己的窗口(包括浏览器里的 dsh 网页,Ctrl+W 就关掉它),会话当场
   结束。确实要放开就在配置里 `allowQuitCombos: true`。
 - **切换窗口的组合键也默认被拦截**:Windows 与 Linux 桌面上 Alt+Tab、Alt+Esc、

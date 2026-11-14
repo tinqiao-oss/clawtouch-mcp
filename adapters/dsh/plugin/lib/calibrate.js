@@ -60,7 +60,7 @@ export class CalibrationError extends Error {}
  * Fit `model = scale * image + offset` on one axis from two point pairs.
  * @returns {{scale: number, offset: number}}
  */
-function fitAxis(imageA, imageB, modelA, modelB, axisName) {
+function fitAxis(imageA, imageB, modelA, modelB, axisName, extent) {
   const dImage = imageB - imageA
   const dModel = modelB - modelA
   if (Math.abs(dImage) < 1e-6) {
@@ -81,7 +81,11 @@ function fitAxis(imageA, imageB, modelA, modelB, axisName) {
       + 'calibration markers in the wrong order, so every coordinate from '
       + 'it would be mirrored')
   }
-  if (scale < MIN_SCALE || scale > MAX_SCALE) {
+  // Since 0.2.0 the prompt asks for 0-1000 coordinates, so a legitimate
+  // scale is about 1000 / extent — past 20 for a capture under 50 px on that
+  // axis (a 1600x48 strip). The ceiling follows the capture, with headroom.
+  const maxScale = Number(extent) > 0 ? Math.max(MAX_SCALE, (1000 / extent) * 1.5) : MAX_SCALE
+  if (scale < MIN_SCALE || scale > maxScale) {
     throw new CalibrationError(
       `implausible ${axisName} scale ${scale.toFixed(3)} — the model `
       + 'probably did not find both calibration markers')
@@ -111,9 +115,9 @@ export function calibrate(markers, reported, imageSize) {
   const [a, b] = pts
 
   const x = fitAxis(a.marker.center[0], b.marker.center[0],
-    a.pt[0], b.pt[0], 'x')
+    a.pt[0], b.pt[0], 'x', imageSize?.width)
   const y = fitAxis(a.marker.center[1], b.marker.center[1],
-    a.pt[1], b.pt[1], 'y')
+    a.pt[1], b.pt[1], 'y', imageSize?.height)
 
   const skew = plausibilitySkew(x.scale, y.scale, imageSize)
   if (skew > MAX_MODEL_SKEW) {
