@@ -39,7 +39,9 @@ const disposers = []
 
 const ctx = {
   logger: () => ({ info() {}, warn() {}, error() {}, debug() {} }),
-  on(event, fn) { if (event === 'dispose') disposers.push(fn) },
+  // Cordis 4: cleanup is the function an effect returns (there is no
+  // 'dispose' event to listen for).
+  effect(fn) { const cleanup = fn(); if (typeof cleanup === 'function') disposers.push(cleanup); return cleanup },
   tools: {
     register(definition) {
       // Mirrors ToolRuntime.register()'s own preconditions.
@@ -267,5 +269,23 @@ check(`allowFocusSwitchCombos alone still refuses ${QUIT.name}, and lets ${SWITC
 })
 
 await pendingAsync
+
+// ── disposal: once the host disposes the plugin, no tool presses anything ──
+// (Cordis 4 runs the cleanup an effect returned; the first apply() above
+// registered one.)
+{
+  assert.ok(disposers.length >= 1, 'apply() registered no cleanup effect')
+  for (const cleanup of disposers.splice(0)) await cleanup()
+  let refused
+  try {
+    await registered.get('computer_key').execute({ key: 'a' }, {})
+  } catch (err) {
+    refused = err
+  }
+  check('after disposal a tool call is refused before anything is pressed', () => {
+    assert.match(String(refused?.message), /reloading.*refused before anything was pressed/)
+  })
+}
+
 console.log(failed === 0 ? '\nsmoke ok' : `\n${failed} smoke failures`)
 process.exit(failed === 0 ? 0 : 1)

@@ -9,6 +9,7 @@ own scheduling and orchestration.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -473,6 +474,40 @@ class SerialHidBridge:
     async def ping(self) -> bool:
         resp = await self._send_raw(build_ping(self._next_seq()))
         return resp is not None and resp.cmd_type in (CommandType.PONG, CommandType.ACK)
+
+    async def firmware_status(self) -> Optional[dict[str, Any]]:
+        """Ask the firmware what it is: STATUS_REQUEST, answered with a JSON
+        object (``fw_ver``, ``board``, ``uptime_ms``; firmware 1.2+ adds
+        ``caps``). The board sends no HID report for it — nothing is pressed
+        or moved.
+
+        Built here rather than as a protocol builder: the frame is a bare
+        opcode, and a new public builder would have to be mirrored in
+        clawtouch-hid-protocol (test_cross_repo_protocol) for no gain.
+
+        Returns the parsed object, or None when the board did not answer
+        with one (reason in ``last_error_detail``).
+        """
+        resp = await self._send_raw(
+            HidCommand(CommandType.STATUS_REQUEST, b"", self._next_seq())
+        )
+        if resp is None:
+            return None
+        if resp.cmd_type != CommandType.STATUS_RESPONSE:
+            if self._last_error_detail is None:
+                self._last_error_detail = (
+                    f"expected STATUS_RESPONSE, got {resp.cmd_type.name}"
+                )
+            return None
+        try:
+            info = json.loads(resp.payload.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as e:
+            self._last_error_detail = f"STATUS_RESPONSE is not JSON: {e}"
+            return None
+        if not isinstance(info, dict):
+            self._last_error_detail = "STATUS_RESPONSE is not a JSON object"
+            return None
+        return info
 
     async def mouse_move(self, x: int, y: int, *, relative: bool = False) -> bool:
         resp = await self._send_raw(

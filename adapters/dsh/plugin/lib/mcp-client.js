@@ -34,6 +34,9 @@ const DEFAULT_CALL_TIMEOUT_MS = 30_000
 
 export class McpProcessError extends Error {}
 
+const CLOSED = 'the plugin was reloaded or shut down, so this call to clawtouch-mcp '
+  + 'was not sent'
+
 export class McpStdioClient {
   /**
    * @param {object} opts
@@ -53,6 +56,8 @@ export class McpStdioClient {
     this.callTimeoutMs = opts.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS
     this.child = null
     this.tools = []
+    this.serverInfo = null
+    this.closed = false
     this._nextId = 1
     this._pending = new Map()
     this._buffer = ''
@@ -66,15 +71,50 @@ export class McpStdioClient {
     return this.child !== null && this.child.exitCode === null
   }
 
-  /** Idempotent, and safe to call concurrently: callers share one start. */
+  /** A request is in flight: the server answers one at a time, so anything
+   *  sent now waits behind it. */
+  get busy() {
+    return this._pending.size > 0 || this._starting !== null
+  }
+
+  /**
+   * Idempotent, and safe to call concurrently: callers share one start.
+   *
+   * The shared start is checked BEFORE `running`: `_start` sets `child`
+   * before the handshake finishes, so a second caller that looked at
+   * `running` first went on with an empty tool list and no server version
+   * (and the settings page took a fresh server for one too old to report
+   * the board).
+   */
   async start() {
-    if (this.running) return
+    if (this.closed) throw new McpProcessError(CLOSED)
     if (this._starting) return this._starting
-    this._starting = this._start().finally(() => { this._starting = null })
+    if (this.running) return
+    this._starting = this._start()
+      .catch(async (err) => {
+        // A child that started but failed its handshake still holds the
+        // serial port; nobody else can be using it (they all share this
+        // start), so it goes.
+        await this.stop().catch(() => {})
+        throw err
+      })
+      .finally(() => { this._starting = null })
     return this._starting
   }
 
+  /**
+   * Stop for good: the plugin instance that owns this client is gone. A
+   * call still in progress there (one waiting on the vision model, say)
+   * must not start a new server afterwards and press with old settings.
+   */
+  async close() {
+    this.closed = true
+    await this.stop()
+  }
+
   async _start() {
+    this.tools = []
+    this.serverInfo = null
     const child = spawn(this.command, this.args, {
       cwd: this.cwd,
       env: this.env ? { ...process.env, ...this.env } : process.env,
@@ -114,6 +154,9 @@ export class McpStdioClient {
       capabilities: {},
       clientInfo: { name: 'dsh-clawtouch', version: '0.0.0' },
     })
+    // What the settings page shows as the clawtouch-mcp version — the one
+    // way to tell a server too old for device.status from a broken one.
+    this.serverInfo = init?.serverInfo ?? null
     this._notify('notifications/initialized', {})
     const listed = await this._request('tools/list', {})
     this.tools = listed?.tools ?? []
@@ -135,7 +178,9 @@ export class McpStdioClient {
   async callTool(name, args, opts = {}) {
     await this.start()
     // Checked AFTER start(): starting (or restarting) the server can take a
-    // while, and a call cancelled meanwhile must not still go out.
+    // while, and a call cancelled (or a client closed) meanwhile must not
+    // still go out.
+    if (this.closed) throw new McpProcessError(CLOSED)
     if (opts.signal?.aborted) {
       throw new Error(`cancelled before ${name} was sent; it was not sent`)
     }

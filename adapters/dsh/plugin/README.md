@@ -186,8 +186,8 @@ install fail against the very version that works. Any dsh that can load
 plugins already provides it.
 
 You also need the hardware: a Raspberry Pi Pico 2 (about ¥55 / $8) running
-the open [ClawTouch HID firmware](https://github.com/tinqiao-oss/clawtouch-hid),
-or any turnkey [ClawTouch device](https://clawtouch.cn). Every click and
+the open [ClawTouch HID firmware](https://github.com/tinqiao-oss/clawtouch-hid).
+Every click and
 keystroke this plugin makes goes out through that board, so without one it
 can look but cannot press anything. Looking is still worth checking first:
 `dryRun: true` locates and reports without pressing anything, and needs no
@@ -209,6 +209,30 @@ amount of prompt tuning will fix the clicks.
 ---
 
 ## Configuration
+
+### The settings page
+
+In dsh, open **Plugins → dsh-clawtouch**. Below the description:
+
+- **Status**, checked when the page opens and again on request, pressing
+  nothing: which model looks at the screen (and, for a configured route,
+  whether dsh says it accepts images), whether `clawtouch-mcp` runs and which
+  version, whether the board answers, its firmware, and whether moves use the
+  absolute pointer. The board check needs `clawtouch-mcp` 0.6.1 or later.
+- **The eye**: the conversation's model, or any route in dsh that declares
+  image input, with the measured hit rate beside the models we measured.
+- **Look, don't press** (`dryRun`), and under **Advanced** the capture width
+  (`maxWidth`) and the path to `clawtouch-mcp` (`command`).
+- A leftover 0.1.x `vision.endpoint` / `apiKey` / `extraBody` is named (its
+  value is never shown) with a button that removes exactly those keys.
+
+Saving reloads the plugin, so it is refused while the agent is in the middle
+of a click or typing, and a call that starts while the save is written is
+refused before anything is pressed. A save keeps every other key of the row
+as it is. Everything below that the page does not show — the key guards
+among them, on purpose — is set in YAML.
+
+### In YAML
 
 Everything is optional.
 
@@ -246,8 +270,9 @@ merged — restate every key you want when overriding one.
 The eye is the model that looks at each screenshot and says where the target
 is. It is a model route you configure in dsh, not something this plugin
 ships: with `vision` left out, the conversation's own model looks; with
-`vision.provider` and `vision.model` set, that route does. Credentials,
-gateways and limits live in your dsh model settings.
+`vision.provider` and `vision.model` set, that route does (the settings page
+offers every route that declares image input). Credentials, gateways and
+limits live in your dsh model settings.
 
 The route must accept images. dsh would otherwise replace the screenshot
 with a text note and the model could still answer with made-up coordinates,
@@ -408,11 +433,12 @@ undo.
 ## Development
 
 ```bash
-node test.js     # coordinate maths and reply parsing
-node smoke.js    # mounts the plugin against dsh's real schema compiler
+node test.js                # coordinate maths, reply parsing, guards, the page's routes
+node --test client.test.js  # the settings page, rendered against a React stand-in
+node smoke.js               # mounts the plugin against dsh's real schema compiler
 ```
 
-`smoke.js` needs `@deepseek-ai/dsh-tools` resolvable. Neither test needs
+`smoke.js` needs `@deepseek-ai/dsh-tools` resolvable. None of them needs
 hardware or a key.
 
 ## License

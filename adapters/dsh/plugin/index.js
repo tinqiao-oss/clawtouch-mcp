@@ -56,6 +56,8 @@ import {
 import { refusedCombo } from './lib/keyguard.js'
 import { DshEye } from './lib/eye.js'
 import { clickVerb, typeText, pressKey, scrollWheel } from './lib/actions.js'
+import { settingsRoute, statusRoute, modelsRoute } from './lib/routes.js'
+import { ActivityGate } from './lib/activity.js'
 
 export const name = 'clawtouch'
 
@@ -100,15 +102,71 @@ export function apply(ctx, userConfig = {}) {
   })
   const locator = new Locator({ mcp, config, log, eye })
 
+  // Tool executions under way, and whether new ones may start (lib/activity.js):
+  // a settings save and the page's device check both wait for none to run.
+  const activity = new ActivityGate()
+
   // The device is not opened at boot. A Pico that is unplugged when the
   // profile starts is normal — the agent may plug it in mid-session, and
   // failing to mount over it would take the whole plugin (skill included)
   // down for a cable.
-  ctx.on('dispose', () => { mcp.stop().catch(() => {}) })
+  //
+  // Disposal (a reload after a settings save, or dsh shutting down) closes
+  // both for good: an execution of this instance still waiting on the eye
+  // must not restart clawtouch-mcp afterwards and press with old settings.
+  //
+  // An effect, not `ctx.on('dispose')`: Cordis 4 (dsh 0.2) has no dispose
+  // event, so that listener never ran — every reload left the old
+  // clawtouch-mcp holding the serial port (seen on dsh 0.2.2-rc.1: two
+  // servers side by side after one save, the new one told the port was busy).
+  ctx.effect(() => () => {
+    activity.closeForGood('reloading')
+    mcp.close().catch(() => {})
+  }, 'dsh-clawtouch: stop clawtouch-mcp')
 
-  registerTools(ctx, locator, config, log)
+  registerTools(ctx, locator, config, log, activity)
   registerGuard(ctx, config)
   registerSkill(ctx, config, log)
+  registerPageRoutes(ctx, { config: userConfig, command: config.command, mcp, eye, activity })
+}
+
+// ───────────────────────────── settings page ─────────────────────────────
+
+// The bundle patch's row id: the one row that serves the page's routes.
+const PAGE_ROW = 'clawtouch'
+
+/**
+ * The routes client.js calls (lib/routes.js). dsh's web server is optional (a
+ * headless dsh has none) and may mount late, hence the probe. Only the
+ * bundle's own row serves them: a second row of this package would otherwise
+ * claim the same paths (dsh refuses a second claim) or, claiming them first,
+ * have the page save ITS config. A row whose id cannot be told serves them.
+ */
+function registerPageRoutes(ctx, { config, command, mcp, eye, activity }) {
+  const fiber = ctx.fiber
+  // `entry.id` is scoped by the tree that holds the row; the row's own id,
+  // the one the patch names, is `options.id`.
+  const rowId = fiber?.entry?.options?.id
+  ctx.inject(['connection'], (inner) => {
+    if (rowId !== undefined && rowId !== PAGE_ROW) return
+    if (typeof inner.connection?.fetch?.register !== 'function') return
+    const editor = () => inner.get('configEditor')
+    const llm = () => eye.services?.llm
+    for (const route of [
+      settingsRoute({ editor, fiber, config, activity }),
+      statusRoute({ editor, fiber, config, llm, mcp, command, activity }),
+      modelsRoute({ llm }),
+    ]) {
+      inner.effect(() => {
+        try {
+          return inner.connection.fetch.register(route)
+        } catch {
+          // a row of the same id in a nested include claimed the path first
+          return () => {}
+        }
+      })
+    }
+  })
 }
 
 // ───────────────────────────── config ─────────────────────────────
@@ -181,10 +239,10 @@ const WINDOW_PARAM = {
     + 'computer_windows first if unsure of the title.',
 }
 
-function registerTools(ctx, locator, config, log) {
+function registerTools(ctx, locator, config, log, activity) {
   const run = async (fn) => {
     try {
-      return await fn()
+      return await activity.run(fn)
     } catch (err) {
       // A LocateError is an expected outcome (target not on screen, the
       // model refused, the device is unplugged) and reads better to the

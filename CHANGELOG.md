@@ -7,6 +7,72 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-11-14 — `device.status` · dsh-clawtouch 0.3.0 (a settings page) · dsh-clawtouch 0.2.0
+
+### Added — `device.status`: what the board is, asked without pressing anything
+
+One call answers "is there a board, what firmware, will moves use the
+absolute pointer": it opens the port if the idle release closed it, sends one
+`STATUS_REQUEST` (the firmware has always answered it; nothing exposed it),
+and reports `firmware.version` / `board` / `caps`, plus `abs_pointer`
+`{firmware, enabled, reason}` — `enabled` false with the reason when the
+firmware predates 1.2, `--no-abs-pointer` is set, the host is not Windows, or
+a hop missed and switched hops off. No HID report is sent. "No board",
+"board busy", "board silent" and "unplugged mid-call" come back as answers,
+not tool errors. Checked on a Pico 2 with firmware 1.2.0.
+
+- `SerialHidBridge.firmware_status()` builds the frame itself rather than
+  adding a protocol builder, so `clawtouch-hid-protocol` needs no release.
+- `UnavailableBridge.failure_message()` gives the "why not" text without
+  raising; `_fail()` raises it as before.
+
+### dsh-clawtouch 0.3.0 — a settings page in dsh's Plugins page
+
+The package's page in dsh (Plugins → dsh-clawtouch; not the sidebar) now has
+a status card and the settings people change, instead of only hand-edited
+YAML.
+
+- **Status**, checked when the page opens and on request, pressing nothing:
+  which model looks (and, for a configured route, whether dsh says it takes
+  images), whether clawtouch-mcp runs and its version, whether the board
+  answers, its firmware, and the absolute pointer. An older clawtouch-mcp
+  is named as too old to report the board (it gets `device.info`, which also
+  starts its idle release of the port).
+- **Settings**: the eye (the conversation's model, or any dsh route that
+  declares image input, with the measured hit rate next to the three models
+  measured, and their conditions), "look, don't press", and under Advanced
+  the capture width and the path to clawtouch-mcp. Everything else stays in
+  YAML, the key guards on purpose. A save keeps every other key of the row,
+  writes only what differs from the defaults, and refuses to overwrite an
+  edit made elsewhere since the page loaded.
+- A 0.1.x `vision.apiKey` / `endpoint` / `extraBody` is named (never shown)
+  with a button that removes exactly those keys — and a `vision.model` left
+  without a provider, the 0.1.x way of naming the model, after which the eye
+  follows the conversation.
+- **No save while the agent is working the computer**: a save reloads the
+  plugin, and a call of the old instance still waiting on the eye could
+  otherwise go on to press with the old settings. A save closes admission
+  before it writes; a call that starts meanwhile is refused before anything
+  is pressed. The page's device check is skipped while a call runs, so it
+  never lands between a capture and its click.
+- Failures reach the page as codes. dsh's YAML errors quote the lines around
+  the fault, which can be a 0.1.x API key, so no message from reading the
+  profile is passed on.
+
+### Fixed — dsh-clawtouch: every reload left the old clawtouch-mcp holding the port
+
+The plugin stopped its clawtouch-mcp on `ctx.on('dispose')`, an event Cordis
+4 (dsh 0.2) does not have, so the listener never ran: after a reload the old
+server kept running and kept the serial port until its 30-second idle release,
+and the new one found the board busy meanwhile. Seen on dsh 0.2.2-rc.1
+after a settings save: two servers side by side. Cleanup is now an effect, and
+it closes the old instance for good — a call still in progress there cannot
+start a new server afterwards.
+
+Also fixed in the MCP client: a second caller during startup went on before
+the handshake finished (an empty tool list, no server version), and a server
+that failed its handshake was left running with the port open.
+
 ### dsh-clawtouch 0.2.0 — the eye is a model you pick in dsh (needs dsh 0.2.x)
 
 The plugin no longer ships a model or reads an API key. The model that looks
