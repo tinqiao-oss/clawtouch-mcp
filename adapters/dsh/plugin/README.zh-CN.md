@@ -26,12 +26,9 @@ computer_click({ target: "那个蓝色的发送按钮" })
 发给一块单片机,由**那块硬件**输出标准 USB HID 报告。目标机看到的是一套真实
 插上的键鼠,走的是和任何外设完全相同的驱动通路。
 
-两种来源,协议完全一致,插件不区分:
-
-| 来源 | 说明 |
-|---|---|
-| **成品 ClawTouch 设备** | 开箱即用。咨询/订购 → [clawtouch.cn](https://clawtouch.cn) |
-| **自己烧一块** | 树莓派官方 **Pico 2** (约 ¥55) + 开源固件 [clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)。按那个仓库的说明把固件拖进 BOOTSEL 盘即可 |
+硬件是树莓派官方 **Pico 2** (约 ¥55) + 开源固件
+[clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)。按那个仓库的说明把固件拖进
+BOOTSEL 盘即可。
 
 > **能不能不用硬件?** 目前不能:插件的每一次点击和按键都经这块板子发出,
 > 没有它就只能看、按不了任何东西。不过「看得准不准」可以先验:配置里开
@@ -52,7 +49,7 @@ pip install 'clawtouch-mcp[screenshot,window]>=0.5.1'
 
 本插件**不带模型、不读任何 API key**。负责「看截图、说目标在哪」的模型(下称「眼睛」)
 就是你在 dsh 里配好的模型: 不做任何配置时, 用**当前对话正在用的模型**; 也可以在插件配置里
-用 `vision.provider` + `vision.model` 指定 dsh 里的另一条模型路由。这个模型必须声明能看图,
+用 `vision.provider` + `vision.model` 指定 dsh 里的另一条模型路由(在插件的设置页里直接选也行)。这个模型必须声明能看图,
 否则插件会在按下任何东西之前拒绝。不同模型点得准不准差别很大, 见下面「怎么选眼睛」。
 
 ---
@@ -113,6 +110,25 @@ node probe.js --windows --screen 7680x1440
 [clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid) 固件 1.2 加了绝对坐标
 指针: 在 Windows 上 `clawtouch-mcp` 会一步把光标放到主屏的目标像素上, 不再反复
 小步挪动。旧固件照旧能用, 只是走原来的方式。
+
+---
+
+## 设置页
+
+在 dsh 里打开 **插件 → dsh-clawtouch**,说明下面就是:
+
+- **状态**:打开页面时查一次,也可以点「重新检查」,不按任何东西。显示现在用哪个模型看图
+  (指定了模型的话,还会显示 dsh 说它能不能看图)、`clawtouch-mcp` 在不在运行和版本、板子
+  回不回话、固件版本、移动有没有用上绝对坐标。查板子要 `clawtouch-mcp` 0.6.1 或更新。
+- **看图模型**:跟随当前对话的模型,或者 dsh 里任何声明了能看图的模型;实测过的模型旁边标了命中率。
+- **只看不按**(`dryRun`),以及「高级」里的截图最大宽度(`maxWidth`)和 `clawtouch-mcp`
+  的路径(`command`)。
+- 配置里还留着 0.1.x 的 `vision.endpoint` / `apiKey` / `extraBody` 时,页面只写出键名
+  (不显示值),并有一个按钮只删这几项。
+
+保存会让插件重新加载,所以 AI 正在点击或打字时不让保存;保存写入期间新开始的操作会在按下任何东西
+之前被拒绝。保存只改页面上这几项,这一行配置里的其他键原样保留。页面上没有的设置(包括按键拦截,
+这是有意不放的)仍在 profile 的 `cordis.patch.yml` 里改。
 
 ---
 

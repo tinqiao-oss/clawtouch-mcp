@@ -2083,6 +2083,500 @@ await asyncTest('a failed screenshot store is an EyeError that says the target w
     (err) => err instanceof EyeError && /disk full/.test(err.message) && /target was not clicked/.test(err.message))
 })
 
+// ── the settings page's config view (lib/settings.js) ─────────────────
+
+const settingsMod = await import('./lib/settings.js')
+
+// What the bundle patch (cordis.patch.yml) gives the row before any profile
+// override: the layer a save compares against.
+const BUNDLE = { command: 'clawtouch-mcp', maxWidth: 1600, dryRun: false }
+const SAVE = (over = {}) => ({
+  revision: 'r', eye: { mode: 'conversation' }, dryRun: false, maxWidth: 1600,
+  command: 'clawtouch-mcp', ...over,
+})
+
+test('settings: nothing configured reads as the defaults, eye follows the conversation', () => {
+  assert.deepEqual(settingsMod.editableSettings({}), {
+    eye: { mode: 'conversation' }, dryRun: false, maxWidth: 1600, command: 'clawtouch-mcp',
+  })
+  assert.deepEqual(settingsMod.editableSettings(BUNDLE), settingsMod.editableSettings({}))
+})
+
+test('settings: a route needs both halves; one alone reads as incomplete', () => {
+  assert.deepEqual(settingsMod.editableSettings({ vision: { provider: 'bailian', model: 'qwen3.8-max' } }).eye,
+    { mode: 'route', provider: 'bailian', model: 'qwen3.8-max' })
+  assert.deepEqual(settingsMod.editableSettings({ vision: { model: 'qwen3.8-max' } }).eye,
+    { mode: 'incomplete', provider: '', model: 'qwen3.8-max' })
+})
+
+test('settings: the 0.1.x API key is reported by name, never by value', () => {
+  const raw = { vision: { endpoint: 'https://x', apiKey: 'sk-SECRET-123', extraBody: {} } }
+  const shown = settingsMod.describeSettings(raw, { entryFound: true })
+  assert.deepEqual(shown.legacy, ['endpoint', 'apiKey', 'extraBody'])
+  assert.ok(!JSON.stringify(shown).includes('sk-SECRET-123'))
+  assert.ok(!JSON.stringify(shown).includes('https://x'))
+})
+
+test('settings: a !!js expression anywhere the page reads makes it read-only', () => {
+  for (const raw of [
+    { __jsExpr: 'x' },
+    { dryRun: { __jsExpr: 'x' } },
+    { maxWidth: { __jsExpr: 'x' } },
+    { command: { __jsExpr: 'x' } },
+    { vision: { __jsExpr: 'x' } },
+    { vision: { model: { __jsExpr: 'x' } } },
+  ]) {
+    const shown = settingsMod.describeSettings(raw, { entryFound: true })
+    assert.equal(shown.editable, false, JSON.stringify(raw))
+    assert.equal(shown.readOnly, 'expression')
+  }
+  // an expression in a key the page does not touch is not its business
+  assert.equal(settingsMod.describeSettings({ env: { __jsExpr: 'x' } }, { entryFound: true }).editable, true)
+})
+
+test('settings: without its own row the page is read-only', () => {
+  const shown = settingsMod.describeSettings(BUNDLE, { entryFound: false })
+  assert.equal(shown.editable, false)
+  assert.equal(shown.readOnly, 'editor')
+})
+
+test('settings: a save body is checked field by field', () => {
+  const bad = (over) => settingsMod.parseSave(SAVE(over))
+  assert.equal(settingsMod.parseSave(null), 'body')
+  assert.equal(bad({ revision: 1 }), 'revision')
+  assert.equal(bad({ eye: { mode: 'route', provider: '', model: 'm' } }), 'eye.provider')
+  assert.equal(bad({ eye: { mode: 'route', provider: 'p', model: ' m' } }), 'eye.model')
+  assert.equal(bad({ eye: { mode: 'incomplete' } }), 'eye.mode')
+  assert.equal(bad({ dryRun: 'yes' }), 'dryRun')
+  assert.equal(bad({ maxWidth: 100 }), 'maxWidth')
+  assert.equal(bad({ maxWidth: 1600.5 }), 'maxWidth')
+  assert.equal(bad({ command: '   ' }), 'command')
+  assert.equal(bad({ command: 'a\nb' }), 'command')
+  assert.equal(bad({ dropLegacy: 'yes' }), 'dropLegacy')
+  assert.deepEqual(bad({ command: '  C:\\venv\\Scripts\\clawtouch-mcp.exe ' }).command,
+    'C:\\venv\\Scripts\\clawtouch-mcp.exe')
+})
+
+test('settings: saving the defaults over the bundle row drops the override', () => {
+  const next = settingsMod.parseSave(SAVE())
+  const out = settingsMod.withSettings(BUNDLE, next, BUNDLE)
+  assert.deepEqual(out, BUNDLE)
+  assert.notEqual(out, BUNDLE) // a copy, not the inherited object itself
+})
+
+test('settings: a change writes only what differs from the defaults', () => {
+  const next = settingsMod.parseSave(SAVE({ dryRun: true, eye: { mode: 'route', provider: 'bailian', model: 'qwen3.8-max' } }))
+  assert.deepEqual(settingsMod.withSettings(BUNDLE, next, BUNDLE), {
+    dryRun: true, vision: { provider: 'bailian', model: 'qwen3.8-max' },
+  })
+})
+
+test('settings: keys the page does not edit survive a save', () => {
+  const current = {
+    dryRun: true, port: 'COM7', args: ['--no-abs-pointer'], allowFocusSwitchCombos: true,
+    vision: { provider: 'bailian', model: 'qwen3.8-max', effort: 'high', timeoutMs: 90000 },
+  }
+  const next = settingsMod.parseSave(SAVE({ dryRun: false }))
+  assert.deepEqual(settingsMod.withSettings(current, next, BUNDLE), {
+    port: 'COM7', args: ['--no-abs-pointer'], allowFocusSwitchCombos: true,
+    vision: { effort: 'high', timeoutMs: 90000 },
+  })
+})
+
+test('settings: an ordinary save keeps the 0.1.x keys; only dropLegacy removes them', () => {
+  const current = { vision: { endpoint: 'https://x', apiKey: 'sk-1', extraBody: { a: 1 } } }
+  const keep = settingsMod.withSettings(current, settingsMod.parseSave(SAVE()), BUNDLE)
+  assert.deepEqual(keep.vision, current.vision)
+  const drop = settingsMod.withSettings(current, settingsMod.parseSave(SAVE({ dropLegacy: true })), BUNDLE)
+  assert.deepEqual(drop, BUNDLE)
+})
+
+test('settings: a typical 0.1.x vision block (model alone + endpoint + key) cleans up to nothing', () => {
+  const current = { vision: { endpoint: 'https://x/v1', apiKey: 'sk-1', model: 'qwen-vl-max' } }
+  assert.equal(settingsMod.editableSettings(current).eye.mode, 'incomplete')
+  const next = settingsMod.parseSave(SAVE({ dropLegacy: true }))
+  assert.deepEqual(settingsMod.withSettings(current, next, BUNDLE), BUNDLE)
+})
+
+test('settings: the revision covers the vision block and the three settings, and reveals none of it', () => {
+  const r = settingsMod.revisionOf
+  const base = { dryRun: true, vision: { provider: 'p', model: 'm', apiKey: 'sk-one' } }
+  assert.notEqual(r(base), r({ ...base, vision: { ...base.vision, apiKey: 'sk-two' } }))
+  assert.notEqual(r(base), r({ ...base, vision: { ...base.vision, effort: 'high' } }))
+  assert.notEqual(r(base), r({ ...base, maxWidth: 1200 }))
+  // key order is not a change; keys the page does not rewrite are not in it
+  assert.equal(r(base), r({ vision: { apiKey: 'sk-one', model: 'm', provider: 'p' }, dryRun: true }))
+  assert.equal(r(base), r({ ...base, env: { A: '1' }, port: 'COM7' }))
+  assert.match(r(base), /^[A-Za-z0-9_-]{43}$/)
+  assert.ok(!r(base).includes('sk-one'))
+})
+
+test('settings: the row is found by its fiber in both of dsh\'s shapes, and only if unique', () => {
+  const fiber = {}
+  const wrapped = Object.create(fiber)
+  wrapped.ctx = { fiber }
+  const editor = (rows) => ({ entries: () => rows })
+  assert.equal(settingsMod.ownEntry(editor([{ fiber }]), fiber)?.fiber, fiber)
+  assert.equal(settingsMod.ownEntry(editor([{ fiber: wrapped }]), fiber)?.fiber, wrapped)
+  assert.equal(settingsMod.ownEntry(editor([{ fiber }, { fiber: wrapped }]), fiber), undefined)
+  assert.equal(settingsMod.ownEntry(editor([{ fiber: {} }]), fiber), undefined)
+  assert.equal(settingsMod.ownEntry({ entries: () => { throw new Error('x') } }, fiber), undefined)
+})
+
+test('settings: only routes that declare image input are offered', () => {
+  assert.deepEqual(settingsMod.imageRoutes([
+    { provider: 'bailian', id: 'qwen3.8-max', name: 'Qwen 3.8 Max', inputModalities: ['text', 'image'] },
+    { provider: 'deepseek', id: 'deepseek-pro', name: '', inputModalities: ['text'] },
+    { provider: 'x', id: 'unknown' },
+  ]), [{ provider: 'bailian', model: 'qwen3.8-max', name: 'Qwen 3.8 Max' }])
+})
+
+// ── the activity gate (lib/activity.js) ───────────────────────────────
+
+const { ActivityGate } = await import('./lib/activity.js')
+
+await asyncTest('gate: a save cannot close it while a tool runs, and a closed gate refuses tools', async () => {
+  const gate = new ActivityGate()
+  let release
+  const running = gate.run(() => new Promise((r) => { release = r }))
+  assert.equal(gate.active, 1)
+  assert.equal(gate.closeIfIdle('saving'), null)
+  release('done')
+  assert.equal(await running, 'done')
+  const reopen = gate.closeIfIdle('saving its settings')
+  assert.equal(typeof reopen, 'function')
+  await assert.rejects(gate.run(async () => 'pressed'), /saving its settings.*refused before anything was pressed/)
+  reopen()
+  assert.equal(await gate.run(async () => 'pressed'), 'pressed')
+})
+
+await asyncTest('gate: closed for good stays closed, whatever reopens it', async () => {
+  const gate = new ActivityGate()
+  const reopen = gate.closeIfIdle('saving')
+  gate.closeForGood('reloading')
+  reopen()
+  assert.equal(gate.idle, false)
+  await assert.rejects(gate.run(async () => 1), /reloading/)
+})
+
+// ── the page's routes (lib/routes.js) ─────────────────────────────────
+
+const routesMod = await import('./lib/routes.js')
+
+function pageFixture({ config = {}, inherited = { command: 'clawtouch-mcp', maxWidth: 1600, dryRun: false }, edit } = {}) {
+  const fiber = {}
+  const row = { fiber, options: { config } }
+  const writes = []
+  const editor = {
+    entries: () => [row],
+    edit: edit ?? (async (entry, fn) => {
+      const next = fn(entry.options.config, inherited)
+      writes.push(next)
+      entry.options.config = next
+    }),
+  }
+  const activity = new ActivityGate()
+  const route = routesMod.settingsRoute({ editor: () => editor, fiber, config, activity, graceMs: 20 })
+  const get = async () => (await route.fetch(new Request('http://dsh/api', { method: 'GET' }))).json()
+  const post = async (body) => {
+    const res = await route.fetch(new Request('http://dsh/api', { method: 'POST', body: JSON.stringify(body) }))
+    return { status: res.status, body: await res.json() }
+  }
+  return { row, writes, activity, get, post }
+}
+const FORM = { eye: { mode: 'conversation' }, dryRun: false, maxWidth: 1600, command: 'clawtouch-mcp' }
+
+await asyncTest('routes: GET names the 0.1.x keys and never their values', async () => {
+  const page = pageFixture({ config: { vision: { endpoint: 'https://old', apiKey: 'sk-SECRET' } } })
+  const shown = await page.get()
+  assert.deepEqual(shown.legacy, ['endpoint', 'apiKey'])
+  assert.equal(shown.editable, true)
+  assert.ok(!JSON.stringify(shown).includes('sk-SECRET'))
+  assert.ok(!JSON.stringify(shown).includes('https://old'))
+})
+
+await asyncTest('routes: a save writes, then keeps tools out until the reload (or the grace period) is over', async () => {
+  const page = pageFixture()
+  const { revision } = await page.get()
+  const res = await page.post({ ...FORM, dryRun: true, revision })
+  assert.deepEqual(res, { status: 200, body: { ok: true } })
+  // only what differs from the plugin's defaults is written
+  assert.deepEqual(page.writes, [{ dryRun: true }])
+  assert.equal(page.activity.idle, false)
+  await new Promise((r) => setTimeout(r, 40))
+  assert.equal(page.activity.idle, true)
+})
+
+await asyncTest('routes: no save while a tool runs; nothing is written', async () => {
+  const page = pageFixture()
+  const { revision } = await page.get()
+  let release
+  const tool = page.activity.run(() => new Promise((r) => { release = r }))
+  const res = await page.post({ ...FORM, dryRun: true, revision })
+  assert.deepEqual(res, { status: 409, body: { ok: false, error: 'busy' } })
+  assert.deepEqual(page.writes, [])
+  release()
+  await tool
+})
+
+await asyncTest('routes: a tool that starts while a save is being written is refused', async () => {
+  let finish
+  const page = pageFixture({ edit: (entry, fn) => new Promise((r) => { finish = () => { fn(entry.options.config, {}); r() } }) })
+  const { revision } = await page.get()
+  const saving = page.post({ ...FORM, dryRun: true, revision })
+  await new Promise((r) => setTimeout(r, 5))
+  await assert.rejects(page.activity.run(async () => 'pressed'), /refused before anything was pressed/)
+  finish()
+  assert.equal((await saving).status, 200)
+})
+
+await asyncTest('routes: a stale revision is refused and the gate opens again at once', async () => {
+  const page = pageFixture()
+  const { revision } = await page.get()
+  page.row.options.config = { dryRun: true } // edited by hand meanwhile
+  const res = await page.post({ ...FORM, revision })
+  assert.deepEqual(res, { status: 409, body: { ok: false, error: 'stale' } })
+  assert.equal(page.activity.idle, true)
+})
+
+await asyncTest('routes: an editor failure is a code, never its message (YAML errors quote the profile)', async () => {
+  const page = pageFixture({ edit: async () => { throw new Error('bad indentation:\n vision: {apiKey: sk-LEAK}\n') } })
+  const { revision } = await page.get()
+  const res = await page.post({ ...FORM, revision })
+  assert.deepEqual(res, { status: 500, body: { ok: false, error: 'failed' } })
+  const over = pageFixture({ edit: async () => { throw new Error('value is overridden by a home patch (sk-LEAK)') } })
+  const r2 = await over.post({ ...FORM, revision: (await over.get()).revision })
+  assert.deepEqual(r2, { status: 409, body: { ok: false, error: 'overridden' } })
+})
+
+await asyncTest('routes: a bad body is refused by field before anything else', async () => {
+  const page = pageFixture()
+  const res = await page.post({ ...FORM, maxWidth: 'wide', revision: 'x' })
+  assert.deepEqual(res, { status: 400, body: { ok: false, error: 'invalid', field: 'maxWidth' } })
+  assert.equal(page.activity.idle, true)
+})
+
+await asyncTest('routes: the eye check reads dsh\'s model info and reports failures as codes', async () => {
+  const route = { vision: { provider: 'bailian', model: 'qwen3.8-max' } }
+  assert.deepEqual(await routesMod.checkEye({}, undefined), { mode: 'conversation', legacy: [] })
+  const seeing = { resolveModelInfo: async () => ({ inputModalities: ['text', 'image'] }) }
+  assert.equal((await routesMod.checkEye(route, seeing)).image, true)
+  const blind = { resolveModelInfo: async () => ({ inputModalities: ['text'] }) }
+  assert.equal((await routesMod.checkEye(route, blind)).image, false)
+  const leaky = { resolveModelInfo: async () => { throw new Error('no provider bailian (key sk-LEAK)') } }
+  const failed = await routesMod.checkEye(route, leaky)
+  assert.deepEqual([failed.image, failed.problem], [null, 'failed'])
+  assert.ok(!JSON.stringify(failed).includes('sk-LEAK'))
+  let aborted = false
+  const slow = { resolveModelInfo: (p, m, signal) => new Promise(() => { signal.addEventListener('abort', () => { aborted = true }) }) }
+  const late = await routesMod.checkEye(route, slow, 10)
+  assert.deepEqual([late.image, late.problem, aborted], [null, 'timeout', true])
+})
+
+function fakeMcp({ tools = ['device.status', 'device.info'], answers = {}, startError, version = '0.6.1' } = {}) {
+  const calls = []
+  return {
+    calls,
+    running: false,
+    serverInfo: null,
+    async start() {
+      if (startError) throw new Error(startError)
+      this.running = true
+      this.serverInfo = { name: 'clawtouch-mcp', version }
+    },
+    hasTool: (name) => tools.includes(name),
+    async callTool(name) {
+      calls.push(name)
+      const a = answers[name]
+      if (typeof a === 'function') return a()
+      return { isError: false, text: JSON.stringify(a ?? {}), json: a ?? {} }
+    },
+  }
+}
+
+await asyncTest('routes: the device check is skipped, not queued, while a tool runs', async () => {
+  const gate = new ActivityGate()
+  let release
+  const tool = gate.run(() => new Promise((r) => { release = r }))
+  const mcp = fakeMcp()
+  const out = await routesMod.checkDevice(mcp, 'clawtouch-mcp', gate)
+  assert.equal(out.board.state, 'busy')
+  assert.deepEqual(mcp.calls, [])
+  release()
+  await tool
+})
+
+await asyncTest('routes: a tool that starts while the server does means the check is not sent', async () => {
+  const gate = new ActivityGate()
+  const mcp = fakeMcp()
+  let release
+  let tool
+  const realStart = mcp.start.bind(mcp)
+  mcp.start = async () => {
+    tool = gate.run(() => new Promise((r) => { release = r })) // the agent begins meanwhile
+    await realStart()
+  }
+  const out = await routesMod.checkDevice(mcp, 'c', gate)
+  assert.equal(out.board.state, 'busy')
+  assert.deepEqual(mcp.calls, [])
+  release()
+  await tool
+})
+
+await asyncTest('routes: a start that outlasts the check still gets its idle release armed', async () => {
+  const gate = new ActivityGate()
+  const mcp = fakeMcp()
+  let finish
+  mcp.start = () => new Promise((r) => { finish = () => { mcp.running = true; r() } })
+  const out = await routesMod.checkDevice(mcp, 'c', gate, 10)
+  assert.equal(out.board.state, 'no-answer')
+  assert.deepEqual(mcp.calls, [])
+  finish()
+  await new Promise((r) => setTimeout(r, 5))
+  assert.deepEqual(mcp.calls, ['device.info'])
+})
+
+await asyncTest('routes: a connected board is reported with its firmware and pointer', async () => {
+  const mcp = fakeMcp({ answers: { 'device.status': {
+    mode: 'serial', connected: true, responding: true, port: 'COM22',
+    firmware: { version: '1.2.0', board: 'pico2', caps: ['abs'] },
+    abs_pointer: { firmware: true, enabled: true, reason: null },
+  } } })
+  const out = await routesMod.checkDevice(mcp, 'clawtouch-mcp', new ActivityGate())
+  assert.deepEqual(out, {
+    mcp: { found: true, command: 'clawtouch-mcp', version: '0.6.1' },
+    board: { state: 'connected', port: 'COM22', firmware: '1.2.0', board: 'pico2', abs: { enabled: true, reason: null } },
+  })
+})
+
+await asyncTest('routes: no board, mock and a silent board each say so', async () => {
+  const gate = new ActivityGate()
+  const absent = await routesMod.checkDevice(fakeMcp({ answers: { 'device.status': {
+    mode: 'serial', connected: false, detail: 'No ClawTouch HID board was found', tried_ports: [] } } }), 'c', gate)
+  assert.equal(absent.board.state, 'absent')
+  const mock = await routesMod.checkDevice(fakeMcp({ answers: { 'device.status': { mode: 'mock' } } }), 'c', gate)
+  assert.equal(mock.board.state, 'mock')
+  const silent = await routesMod.checkDevice(fakeMcp({ answers: { 'device.status': {
+    mode: 'serial', connected: true, responding: false, port: 'COM3', detail: 'ACK timeout' } } }), 'c', gate)
+  assert.deepEqual(silent.board, { state: 'silent', port: 'COM3', detail: 'ACK timeout' })
+})
+
+await asyncTest('routes: a server that cannot be run is "not found", with the reason', async () => {
+  const out = await routesMod.checkDevice(fakeMcp({ startError: 'could not run "clawtouch-mcp": spawn clawtouch-mcp ENOENT' }),
+    'clawtouch-mcp', new ActivityGate())
+  assert.equal(out.mcp.found, false)
+  assert.match(out.mcp.detail, /ENOENT/)
+})
+
+await asyncTest('routes: an older clawtouch-mcp gets device.info, which arms its idle release', async () => {
+  const mcp = fakeMcp({ tools: ['device.info'], version: '0.6.0',
+    answers: { 'device.info': { info: { port: 'COM22', connected: true } } } })
+  const out = await routesMod.checkDevice(mcp, 'clawtouch-mcp', new ActivityGate())
+  assert.deepEqual(mcp.calls, ['device.info'])
+  assert.deepEqual(out.board, { state: 'old-server', port: 'COM22' })
+  assert.equal(out.mcp.version, '0.6.0')
+})
+
+await asyncTest('routes: a device that never answers is reported, and the client is left alone', async () => {
+  const mcp = fakeMcp({ answers: { 'device.status': () => new Promise(() => {}) } })
+  const out = await routesMod.checkDevice(mcp, 'c', new ActivityGate(), 10)
+  assert.equal(out.board.state, 'no-answer')
+})
+
+await asyncTest('routes: two status requests at once make one check', async () => {
+  let release
+  const mcp = fakeMcp({ answers: { 'device.status': () => new Promise((r) => {
+    release = () => r({ isError: false, json: { mode: 'mock' } })
+  }) } })
+  const route = routesMod.statusRoute({ editor: () => undefined, fiber: {}, config: {}, llm: () => undefined,
+    mcp, command: 'c', activity: new ActivityGate() })
+  const a = route.fetch()
+  const b = route.fetch()
+  await new Promise((r) => setTimeout(r, 5))
+  release()
+  const [ra, rb] = await Promise.all([a, b])
+  assert.equal((await ra.json()).board.state, 'mock')
+  assert.equal((await rb.json()).board.state, 'mock')
+  assert.deepEqual(mcp.calls, ['device.status'])
+})
+
+await asyncTest('routes: models are listed per provider, image routes only, a slow provider named', async () => {
+  const llm = {
+    listProviders: () => [{ id: 'bailian', name: 'Bailian' }, { id: 'slow', name: 'Slow' }, { id: 'deepseek', name: '' }],
+    listModels: async (id) => {
+      if (id === 'slow') return new Promise(() => {})
+      if (id === 'bailian') return [{ provider: 'bailian', id: 'qwen3.8-max', name: 'Qwen', inputModalities: ['text', 'image'] }]
+      return [{ provider: 'deepseek', id: 'deepseek-flash', name: 'Flash', inputModalities: ['text'] }]
+    },
+  }
+  const out = await routesMod.listImageRoutes(llm, 10)
+  assert.deepEqual(out, {
+    routes: [{ provider: 'bailian', model: 'qwen3.8-max', name: 'Qwen', providerName: 'Bailian' }],
+    failed: ['slow'],
+    available: true,
+  })
+})
+
+test('routes: every route declares a buffered body (dsh answers 400 to a GET without one)', () => {
+  const deps = { editor: () => undefined, fiber: {}, config: {}, llm: () => undefined, mcp: fakeMcp(),
+    command: 'c', activity: new ActivityGate() }
+  for (const route of [routesMod.settingsRoute(deps), routesMod.statusRoute(deps), routesMod.modelsRoute(deps)]) {
+    assert.equal(route.requestBody, 'buffered', route.path)
+    assert.match(route.path, /^\/api\/clawtouch\//)
+  }
+})
+
+await asyncTest('routes: the model list is shared while fresh', async () => {
+  let asked = 0
+  const llm = { listProviders: () => [{ id: 'p', name: 'P' }], listModels: async () => { asked += 1; return [] } }
+  const route = routesMod.modelsRoute({ llm: () => llm, freshMs: 60_000 })
+  await Promise.all([route.fetch(), route.fetch()])
+  await route.fetch()
+  assert.equal(asked, 1)
+})
+
+// ── the MCP client's lifecycle ─────────────────────────────────────────
+
+await asyncTest('mcp client: a second caller waits for the handshake, not just the spawn', async () => {
+  const client = new McpStdioClient({ command: 'nothing' })
+  let finish
+  client._start = async () => {
+    client.child = { exitCode: null } // spawned: `running` is already true
+    await new Promise((r) => { finish = r })
+    client.tools = [{ name: 'device.status' }]
+  }
+  const first = client.start()
+  let secondDone = false
+  const second = client.start().then(() => { secondDone = true })
+  await new Promise((r) => setTimeout(r, 5))
+  assert.equal(secondDone, false)
+  finish()
+  await Promise.all([first, second])
+  assert.equal(client.hasTool('device.status'), true)
+})
+
+await asyncTest('mcp client: a failed handshake does not leave the server holding the port', async () => {
+  const client = new McpStdioClient({ command: 'nothing' })
+  let stopped = 0
+  client._start = async () => {
+    client.child = { exitCode: null }
+    throw new Error('initialize timed out after 30000ms')
+  }
+  client.stop = async () => { stopped += 1; client.child = null }
+  await assert.rejects(client.start(), /initialize timed out/)
+  assert.equal(stopped, 1)
+})
+
+await asyncTest('mcp client: once closed it starts nothing and sends nothing', async () => {
+  const client = new McpStdioClient({ command: 'nothing' })
+  let spawned = 0
+  client._start = async () => { spawned += 1 }
+  await client.close()
+  await assert.rejects(client.start(), /reloaded or shut down/)
+  await assert.rejects(client.callTool('hid.click', {}), /reloaded or shut down/)
+  assert.equal(spawned, 0)
+})
+
 // ── the number TESTING-macos.md tells a tester to expect ───────────────
 //
 // It drifted three times in one change, and a stale one is worse than

@@ -35,7 +35,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from . import __version__
 from .bridge import SerialHidBridge, auto_detect_ports, check_typeable, list_pico_ports
-from .protocol import ABS_POINTER_MAX
+from .protocol import ABS_POINTER_MAX, PROTOCOL_VERSION
 from . import cursor as _cursor_mod
 from . import screen as _screen
 from .cursor import (
@@ -530,11 +530,15 @@ class UnavailableBridge:
         return False
 
     def _fail(self) -> None:
+        raise HidUnavailableError(self.failure_message())
+
+    def failure_message(self) -> str:
+        """Why the last reconnect found nothing to use, and what to do."""
         # Two different situations, and the remedy for one is wrong for the
         # other: telling someone with no board to "close the program using
         # it" sends them looking for a program that does not exist.
         if not self._tried_ports:
-            raise HidUnavailableError(
+            return (
                 "No ClawTouch HID board was found: no USB serial port with "
                 "the Raspberry Pi vendor ID is present, so nothing can be "
                 "pressed. Plug in the board (a Raspberry Pi Pico 2 running the "
@@ -545,13 +549,13 @@ class UnavailableBridge:
         if self._detected == []:
             # Only the --port was tried, and detection found no board at all:
             # the port may simply not exist.
-            raise HidUnavailableError(
+            return (
                 f"Could not open {self._tried_ports[0]} (given with --port), "
                 "and no ClawTouch HID board was detected. Check that the "
                 "board is plugged in and the port name is right; if another "
                 "program holds that port, close it. Then retry this tool call."
             )
-        raise HidUnavailableError(
+        return (
             f"HID hardware is unavailable: tried port(s) {self._tried_ports}, "
             f"all busy or absent. Most likely another program is using the "
             f"Pico board exclusively (e.g. ClawTouch desktop client, Arduino "
@@ -1557,6 +1561,17 @@ class ClawTouchMcpServer:
             description="Active bridge's connection + sequence info.",
             input_schema={"type": "object", "properties": {}},
             handler=self._tool_device_info,
+        ))
+        self._register(Tool(
+            name="device.status",
+            description=(
+                "Ask the board what it is: firmware version, board name, "
+                "whether it has the absolute pointer and whether this server "
+                "uses it. Connects to the board first if it is not connected. "
+                "Sends no HID report: nothing is pressed or moved."
+            ),
+            input_schema={"type": "object", "properties": {}},
+            handler=self._tool_device_status,
         ))
         if self.config.allow_screenshot:
             self._register(Tool(
@@ -2847,6 +2862,102 @@ class ClawTouchMcpServer:
             },
             "mcp_version": __version__,
         }
+
+    async def _tool_device_status(self, **_kw) -> dict:
+        """What a settings page or a person debugging a setup needs in one
+        call: is there a board, what firmware, and will moves use the
+        absolute pointer. Unlike device.info this does I/O — it opens the
+        port if it is closed (the idle release then closes it again) and
+        sends one STATUS_REQUEST — but never a HID report.
+
+        Every outcome is an answer, not an error: "no board" and "the board
+        did not answer" are exactly what the caller asked about.
+        """
+        out: dict[str, Any] = {
+            "mcp_version": __version__,
+            "protocol_version": PROTOCOL_VERSION,
+            "platform": sys.platform,
+            "screen": {
+                "width": self.config.screen_w,
+                "height": self.config.screen_h,
+                "source": self._screen_source,
+            },
+        }
+        if self.config.mock:
+            out.update(mode="mock", connected=False,
+                       abs_pointer={"firmware": False, "enabled": False,
+                                    "reason": "--mock: there is no board"})
+            return out
+        out["mode"] = "serial"
+        bridge = self.bridge
+        if isinstance(bridge, UnavailableBridge):
+            try:
+                promoted = await bridge._try_promote()
+            except Exception as e:  # port enumeration itself failed
+                out.update(connected=False,
+                           detail=f"could not list serial ports: {type(e).__name__}: {e}",
+                           abs_pointer={"firmware": False, "enabled": False,
+                                        "reason": "no board connected"})
+                return out
+            if not promoted:
+                out.update(connected=False, detail=bridge.failure_message(),
+                           tried_ports=list(bridge._tried_ports),
+                           abs_pointer={"firmware": False, "enabled": False,
+                                        "reason": "no board connected"})
+                return out
+            bridge = self.bridge
+        if not isinstance(bridge, SerialHidBridge):
+            out.update(connected=False,
+                       detail="the server has no serial bridge (not started)",
+                       abs_pointer={"firmware": False, "enabled": False,
+                                    "reason": "no board connected"})
+            return out
+        out.update(connected=True, port=bridge.port)
+        try:
+            info = await bridge.firmware_status()
+            detail = bridge.last_error_detail
+        except Exception as e:  # unplugged mid-call: serial write/read fails
+            info, detail = None, f"{type(e).__name__}: {e}"
+        if info is None:
+            out.update(responding=False,
+                       detail=detail or "the board did not answer STATUS",
+                       abs_pointer={"firmware": False, "enabled": False,
+                                    "reason": "the board did not answer"})
+            return out
+        caps = info.get("caps")
+        caps = [str(c) for c in caps] if isinstance(caps, list) else []
+        out.update(responding=True, firmware={
+            "version": None if info.get("fw_ver") is None else str(info.get("fw_ver")),
+            "board": None if info.get("board") is None else str(info.get("board")),
+            "caps": caps,
+        })
+        out["abs_pointer"] = self._abs_pointer_state("abs" in caps)
+        return out
+
+    def _abs_pointer_state(self, firmware_has_abs: bool) -> dict:
+        """Whether moves start with an absolute hop (see _abs_hop), and if
+        not, why — in the order _abs_hop itself checks."""
+        reason: str | None = None
+        if self._abs_hop_off is not None:
+            reason = self._abs_hop_off
+        elif sys.platform != "win32":
+            reason = ("only used on Windows, the one platform whose mapping "
+                      "has been measured")
+        elif not firmware_has_abs:
+            reason = ("the firmware has no absolute pointer (firmware 1.2 or "
+                      "later, with its boot.py, adds it)")
+        elif getattr(self.bridge, "_abs_unsupported", False):
+            reason = ("the firmware answered the absolute-move command as "
+                      "unknown on this connection")
+        else:
+            primary = _detect_screen()
+            if primary is None:
+                reason = "the primary monitor's size could not be read"
+            elif primary[0] >= ABS_POINTER_MAX + 1 or primary[1] >= ABS_POINTER_MAX + 1:
+                reason = ("the primary monitor is 32768 px or more across, "
+                          "where the mapping has no exact pixel")
+        return {"firmware": firmware_has_abs, "enabled": reason is None,
+                "reason": reason}
 
     def _probe_pillow(self):
         """Import PIL.Image and force its native ``_imaging`` extension to

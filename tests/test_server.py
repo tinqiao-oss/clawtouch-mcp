@@ -3,7 +3,7 @@
 """ClawTouchMcpServer dispatch / tool registry / safety tests.
 
 Uses MockBridge so no hardware is touched. Covers:
-- 9 baseline tools registered (10 if --allow-screenshot)
+- 17 baseline tools registered (screen tools only with --allow-screenshot)
 - JSON-RPC dispatch: initialize / tools/list / tools/call / unknown method
 - Coordinate clamping when --screen given
 - Type length cap
@@ -55,11 +55,11 @@ def _run(coro):
 
 
 class TestToolRegistry:
-    def test_baseline_16_tools(self, server):
-        # 14 HID + 2 device = 16 default tools (7 v1.0 HID + 6 v1.1 HID +
-        # hid.batch + device.list + device.info). hid.screenshot is the 1
-        # opt-in tool gated by --allow-screenshot and tested separately.
-        # Total tool surface = 14 + 2 + 1 = 17.
+    def test_baseline_17_tools(self, server):
+        # 14 HID + 3 device = 17 default tools (7 v1.0 HID + 6 v1.1 HID +
+        # hid.batch + device.list + device.info + device.status). The
+        # screen tools are opt-in behind --allow-screenshot and tested
+        # separately.
         names = set(server.tools.keys())
         expected = {
             # v1.0
@@ -71,6 +71,8 @@ class TestToolRegistry:
             "hid.key_press", "hid.key_release", "hid.hold_key",
             # v0.4.0 — pre-planned action sequencing
             "hid.batch",
+            # v0.6.1 — firmware STATUS, read-only
+            "device.status",
         }
         assert names == expected
 
@@ -94,8 +96,9 @@ class TestDispatch:
             "jsonrpc": "2.0", "id": 2, "method": "tools/list",
         }))
         tools = result["result"]["tools"]
-        # 9 v1.0 + 6 v1.1 + hid.batch = 16 (screenshot excluded — opt-in)
-        assert len(tools) == 16
+        # 9 v1.0 + 6 v1.1 + hid.batch + device.status = 17 (screen tools
+        # excluded — opt-in)
+        assert len(tools) == 17
         for t in tools:
             assert {"name", "description", "inputSchema"} <= set(t.keys())
 

@@ -100,6 +100,11 @@ jobs:
       - name: Unit tests (no host, no hardware, no API key)
         working-directory: adapters/dsh/plugin
         run: node test.js
+      - name: Settings page (React stand-in, no browser)
+        working-directory: adapters/dsh/plugin
+        # A component that throws blanks its slot in dsh with only a console
+        # line, so the page is rendered and driven here.
+        run: node --test client.test.js
       - name: Manifest declares the bundle patch
         working-directory: adapters/dsh/plugin
         # A dsh plugin missing `dsh.bundle.patch` installs cleanly, mounts

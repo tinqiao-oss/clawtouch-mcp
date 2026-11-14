@@ -130,8 +130,8 @@ clawtouch-mcp --mock --log-level INFO
 }
 ```
 
-重启 Claude Desktop,在 MCP server 列表里能看到 `clawtouch`,带 16 个可用
-工具 (14 个 HID + 2 个 device; 传 `--allow-screenshot` 再 +1)。试一下:
+重启 Claude Desktop,在 MCP server 列表里能看到 `clawtouch`,带 17 个可用
+工具 (14 个 HID + 3 个 device; 传 `--allow-screenshot` 再 +2)。试一下:
 
 > 帮我截屏,找到搜索框,点一下并输入 "hello world"。
 
@@ -223,11 +223,11 @@ MIT 协议,不构成任何担保或注意义务,亦不将责任转移给亭桥;M
 
 ## 工具清单
 
-共注册 18 个工具:**14 个常驻 `hid.*` 输入工具**,外加 **2 个只读 `device.*`
+共 19 个工具:**14 个常驻 `hid.*` 输入工具**,外加 **3 个不发输入的 `device.*`
 诊断工具**,再加 **2 个 opt-in 的屏幕工具** (`hid.screenshot` 与
-`screen.windows`,不传 `--allow-screenshot` 时默认关闭)。这与启动日志那行
-`14 HID tools + 2 device tools + 0 screen tools registered` 一致
-(`--allow-screenshot` 会在此之上再加那 2 个,凑满 18 个)。
+`screen.windows`,不传 `--allow-screenshot` 时默认关闭)。不传这个参数时启动日志那行是
+`14 HID tools + 3 device tools + 0 screen tools registered`;传了是
+`15 HID tools + 3 device tools + 1 screen tools`(`hid.screenshot` 按 `hid.` 前缀算进 HID)。
 
 | 工具 | 起始版本 | 用途 |
 |------|----------|------|
@@ -249,6 +249,7 @@ MIT 协议,不构成任何担保或注意义务,亦不将责任转移给亭桥;M
 | `screen.windows` | v0.5.0 | 列出可见顶层窗口的标题与屏幕矩形,好把截图裁到单个窗口。**Windows 上**每个还带 `visible_fraction` —— 它有多少比例真的在最上层, 因为按被遮挡窗口的矩形截图, 截到的是遮挡它的那个窗口 —— 另有 `enabled` 与 `raise_point`。这三个字段在**测不到时直接不出现** (macOS, 或矩形小到无法采样): 字段缺失表示「没测」, 绝不表示「测了没问题」(默认关闭,需 `--allow-screenshot`;Windows + macOS) |
 | `device.list` | v1.0 | 列出候选 HID 板串口 |
 | `device.info` | v1.0 | 当前连接信息 |
+| `device.status` | v0.6.1 | 问板子自己是什么：固件版本、板子名称、移动有没有用上绝对坐标（没用上的话为什么）。串口关着会先打开；不发任何 HID 报告，不按也不动鼠标。「没有板子」「板子不回话」都作为结果返回，不当错误 |
 
 **坐标与行为。**click / move / hover **默认走绝对坐标**:server 先查询 OS 当前
 光标位置(Win32 / CoreGraphics / X11),算出到目标点的偏移,再向固件发出一个
@@ -284,7 +285,7 @@ Cline,或你自己的循环)都用最朴素的 MCP `tools/call` 经 stdio 通信
 $ clawtouch-mcp --port COM7
 [INFO] 连接 Pico 2 (COM7, serial: E660ABCD12345678)
 [INFO] 自动探测屏幕: 2560x1440 (Windows SM_CXSCREEN/SM_CYSCREEN)
-[INFO] 注册 14 个 HID 工具 + 2 个 device 工具, 监听 stdio
+[INFO] 注册 14 个 HID 工具 + 3 个 device 工具 + 0 个 screen 工具, 监听 stdio
 
 # 客户端 → server : 先一次点击, 再输入一段字符串
 #                   (光标和按键是真的在动)
@@ -419,7 +420,7 @@ MIT © 北京亭桥科技有限公司 — 见 [LICENSE](LICENSE) (英文版, 法
 ```mermaid
 flowchart LR
     A["<b>LLM Agent</b><br/><sub>Claude Desktop / Cline /<br/>Cursor / OpenClaw / Hermes / ...</sub>"]
-        -->|"stdio<br/>JSON-RPC<br/>MCP 2024-11-05"| B["<b>clawtouch-mcp</b><br/><sub><i>本仓库</i><br/>MCP server + 14 HID + 2 device 工具</sub>"]
+        -->|"stdio<br/>JSON-RPC<br/>MCP 2024-11-05"| B["<b>clawtouch-mcp</b><br/><sub><i>本仓库</i><br/>MCP server + 14 HID + 3 device 工具</sub>"]
     B -->|"USB-CDC<br/>v1.0 带帧字节"| C["<b>Pico 2</b><br/><sub>+ ClawTouch HID 固件<br/>(RP2350 / CircuitPython)</sub>"]
     C -->|"USB HID<br/>报告"| D["<b>目标 OS</b><br/><sub>Windows / macOS / Linux<br/>标准 HID 驱动栈</sub>"]
     classDef this fill:#fef3c7,stroke:#d97706,stroke-width:3px,color:#78350f;

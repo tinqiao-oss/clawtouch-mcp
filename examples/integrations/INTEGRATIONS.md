@@ -24,7 +24,7 @@ Every client config boils down to the same four facts:
    on every launch.
 
 After reloading or restarting, ask: *"List the MCP tools you have available."*
-You should see 16 tools by default (14 HID + 2 device), or 18 with
+You should see 17 tools by default (14 HID + 3 device), or 19 with
 `--allow-screenshot` (which adds `hid.screenshot` and `screen.windows`):
 
 - **v1.0 baseline (frozen)**: `hid.click`, `hid.move`, `hid.hover`,
@@ -37,8 +37,10 @@ You should see 16 tools by default (14 HID + 2 device), or 18 with
 - **v0.4.0 addition**: `hid.batch` — run a pre-planned sequence of ≤10
   HID actions in one call (strict order; a transport convenience for
   known action lists, not a control-flow layer)
-- **Opt-in**: `hid.screenshot` (only registered when `--allow-screenshot`
-  is passed)
+- **v0.6.1 addition**: `device.status` — ask the board its firmware version
+  and whether moves use the absolute pointer; sends no HID report
+- **Opt-in**: `hid.screenshot` and `screen.windows` (only registered when
+  `--allow-screenshot` is passed)
 
 ## Known footgun: self-interrupt on a shared machine
 

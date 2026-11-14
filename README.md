@@ -149,7 +149,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`
 ```
 
 Restart Claude Desktop. You should see `clawtouch` show up in the MCP server
-list with 16 tools available (14 HID + 2 device; +2 if you pass
+list with 17 tools available (14 HID + 3 device; +2 if you pass
 `--allow-screenshot`, which enables `hid.screenshot` and `screen.windows`). Try:
 
 > Take a screenshot of my screen, find the search box, click it, and type
@@ -263,11 +263,13 @@ those end users of these risks and obtain their consent.
 
 ## Tools
 
-Seventeen tools register: **fourteen always-on `hid.*` input tools**, plus
-**`hid.screenshot`** (opt-in — off unless you pass `--allow-screenshot`), plus
-**two read-only `device.*` diagnostics**. That matches the startup log line
-`14 HID tools + 2 device tools registered` (the `--allow-screenshot` flag adds
-`hid.screenshot` on top, for 17).
+Nineteen tools in all: **fourteen always-on `hid.*` input tools**, **three
+`device.*` diagnostics** that send no input, and **two opt-in screen tools**
+(`hid.screenshot` and `screen.windows`, off unless you pass
+`--allow-screenshot`). Without the flag the startup log reads
+`14 HID tools + 3 device tools + 0 screen tools registered`; with it,
+`15 HID tools + 3 device tools + 1 screen tools` (`hid.screenshot` is counted
+under its `hid.` prefix).
 
 | Tool | Since | Purpose |
 |------|-------|---------|
@@ -289,6 +291,7 @@ Seventeen tools register: **fourteen always-on `hid.*` input tools**, plus
 | `screen.windows` | v0.5.0 | List visible top-level windows with titles and screen rectangles, so a capture can be cropped to one window. On Windows each entry also carries `visible_fraction` — how much of it is actually on top, because a capture of a covered window's rectangle is a capture of whatever covers it — plus `enabled` and a `raise_point`. Those three are **absent** where they could not be measured (macOS, or a rectangle too small to sample). `foreground` is measured on both platforms but follows the same rule — absent on the rare occasion the OS could not be asked at all — and `minimized` is measured on Windows only. Absent means not measured, never measured-and-fine (opt-in, requires `--allow-screenshot`; Windows + macOS) |
 | `device.list` | v1.0 | List candidate HID board ports |
 | `device.info` | v1.0 | Active connection info |
+| `device.status` | v0.6.1 | Ask the board what it is: firmware version, board name, and whether moves use the absolute pointer (and if not, why). Opens the port if it is closed; sends no HID report, so nothing is pressed or moved. "No board" and "board silent" come back as answers, not errors |
 
 **Coordinates & behavior.** Click / move / hover are **absolute by default**:
 the server queries the OS cursor position (Win32 / CoreGraphics / X11), computes
@@ -343,7 +346,7 @@ nothing synthetic.
 $ clawtouch-mcp --port COM7
 [INFO] connected to Pico 2 on COM7 (serial: E660ABCD12345678)
 [INFO] screen auto-detected: 2560x1440 (Windows SM_CXSCREEN/SM_CYSCREEN)
-[INFO] 14 HID tools + 2 device tools registered; listening on stdio
+[INFO] 14 HID tools + 3 device tools + 0 screen tools registered; listening on stdio
 
 # client → server : one click, then one typed string
 #                   (the cursor and keys actually move)
@@ -482,7 +485,7 @@ Questions: `support@tinqiao.com`.
 ```mermaid
 flowchart LR
     A["<b>LLM Agent</b><br/><sub>Claude Desktop / Cline /<br/>Cursor / OpenClaw / Hermes / ...</sub>"]
-        -->|"stdio<br/>JSON-RPC<br/>MCP 2024-11-05"| B["<b>clawtouch-mcp</b><br/><sub><i>this repo</i><br/>MCP server + 14 HID + 2 device tools</sub>"]
+        -->|"stdio<br/>JSON-RPC<br/>MCP 2024-11-05"| B["<b>clawtouch-mcp</b><br/><sub><i>this repo</i><br/>MCP server + 14 HID + 3 device tools</sub>"]
     B -->|"USB-CDC<br/>v1.0 framed bytes"| C["<b>Pico 2</b><br/><sub>+ ClawTouch HID firmware<br/>(RP2350 / CircuitPython)</sub>"]
     C -->|"USB HID<br/>reports"| D["<b>Target OS</b><br/><sub>Windows / macOS / Linux<br/>standard HID driver stack</sub>"]
     classDef this fill:#fef3c7,stroke:#d97706,stroke-width:3px,color:#78350f;
