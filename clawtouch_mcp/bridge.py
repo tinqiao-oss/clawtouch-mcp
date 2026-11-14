@@ -36,6 +36,7 @@ from .protocol import (
     build_mouse_button_up,
     build_mouse_click,
     build_mouse_move,
+    build_mouse_move_abs,
     build_mouse_scroll,
     build_ping,
     build_type_string,
@@ -294,6 +295,11 @@ class SerialHidBridge:
         # Progress of the most recent type_text (see there).
         self.last_type_confirmed = 0
         self.last_type_unconfirmed = 0
+        # The firmware answered MOUSE_MOVE_ABS with UNKNOWN_COMMAND on this
+        # connection (pre-1.2 firmware, or 1.2 code under a pre-1.2 boot.py).
+        # Remembered so the probe costs one round trip, and reset on connect:
+        # a replug may bring different firmware.
+        self._abs_unsupported = False
 
     # ── Lifecycle ──
 
@@ -323,6 +329,7 @@ class SerialHidBridge:
         # added wrap-skip-0 + seq_id verify on the wire; this resets the
         # source so the wire-level defenses see a clean counter.
         self._seq = 0
+        self._abs_unsupported = False
         # Drain any residual bytes
         await asyncio.sleep(0.1)
         if self._serial.in_waiting:
@@ -472,6 +479,34 @@ class SerialHidBridge:
             build_mouse_move(x, y, relative=relative, seq_id=self._next_seq())
         )
         return resp is not None and resp.cmd_type == CommandType.ACK
+
+    async def mouse_move_absolute(self, x: int, y: int) -> str:
+        """Firmware 1.2+ ``MOUSE_MOVE_ABS``: put the pointer at (x, y) in
+        0..ABS_POINTER_MAX units of the area the OS maps the absolute
+        pointer to. Converting from pixels is the caller's job.
+
+        Returns ``"ok"`` (ACKed), ``"unsupported"`` (the firmware does not
+        know the opcode — remembered for this connection), or ``"failed"``
+        (no ACK / any other error; detail in ``last_error_detail``).
+        """
+        if self._abs_unsupported:
+            return "unsupported"
+        resp = await self._send_raw(
+            build_mouse_move_abs(x, y, seq_id=self._next_seq())
+        )
+        if resp is None:
+            return "failed"
+        if resp.cmd_type == CommandType.ACK:
+            return "ok"
+        if (resp.cmd_type == CommandType.ERROR and resp.payload
+                and resp.payload[0] == ErrorCode.UNKNOWN_COMMAND):
+            self._abs_unsupported = True
+            # Not a failure of the device: an older firmware answering as
+            # documented. Clear the detail so nothing downstream reads it
+            # as the reason a later relative move failed.
+            self._last_error_detail = None
+            return "unsupported"
+        return "failed"
 
     async def mouse_click(self, button: str = "left", *, double: bool = False) -> bool:
         btn = {

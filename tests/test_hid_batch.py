@@ -506,3 +506,20 @@ def test_explicit_zero_delay_disables_settle_gap(server, monkeypatch):
     result = _run(server._tool_batch(ops=ops))
     assert result["ok"] is True
     assert sleeps == []   # no gap inserted
+
+
+def test_cleanup_release_all_not_acked_is_not_reported_released(server):
+    """REGRESSION (2026-11-14 review): a release_all that returned False
+    without raising used to set released_all=True with no cleanup_error —
+    a button possibly still held, reported as released."""
+    async def nack_release():
+        return False
+
+    server.bridge.release_all = nack_release
+    ops = [
+        {"type": "button_down", "button": "left"},
+        {"type": "type", "text": "x" * (MAX_TYPE_LEN + 1)},   # fails → stop
+    ]
+    result = _run(server._tool_batch(ops=ops, stop_on_error=True))
+    assert result["released_all"] is False
+    assert result["cleanup_error"] == "release_all failed"
