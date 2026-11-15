@@ -2577,6 +2577,390 @@ await asyncTest('mcp client: once closed it starts nothing and sends nothing', a
   assert.equal(spawned, 0)
 })
 
+// ── installing clawtouch-mcp (lib/installer.js) ───────────────────────
+
+const inst = await import('./lib/installer.js')
+
+test('installer: Windows candidates — launcher, python.org folders, PATH — never WindowsApps', () => {
+  const files = new Set([
+    'C:\\Windows\\py.exe',
+    'C:\\Users\\u\\AppData\\Local\\Programs\\Python\\Python312\\python.exe',
+    'C:\\Users\\u\\AppData\\Local\\Programs\\Python\\Python310\\python.exe',
+    'C:\\Users\\u\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe',
+    'C:\\tools\\conda\\python.exe',
+  ])
+  const dirs = { 'C:\\Users\\u\\AppData\\Local\\Programs\\Python': ['Python310', 'Python312', 'Launcher'] }
+  const out = inst.candidates({
+    platform: 'win32',
+    env: { SystemRoot: 'C:\\Windows', LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local',
+      PATH: 'C:\\Users\\u\\AppData\\Local\\Microsoft\\WindowsApps;C:\\tools\\conda' },
+    exists: (p) => files.has(p),
+    list: (d) => dirs[d] ?? [],
+  })
+  assert.deepEqual(out.map((c) => [c.command, c.args.join(' ')]), [
+    ['C:\\Windows\\py.exe', '-3'],
+    ['C:\\Users\\u\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', ''],
+    ['C:\\Users\\u\\AppData\\Local\\Programs\\Python\\Python310\\python.exe', ''],
+    ['C:\\tools\\conda\\python.exe', ''],
+  ])
+})
+
+test('installer: macOS runs /usr/bin/python3 only when the active developer directory has a Python', () => {
+  const run = (developerDir) => inst.candidates({
+    platform: 'darwin', env: { PATH: '/usr/bin:/opt/homebrew/bin' }, developerDir,
+    exists: (p) => p === '/usr/bin/python3' || p === '/opt/homebrew/bin/python3'
+      || p === '/Applications/Xcode.app/Contents/Developer/usr/bin/python3',
+    list: () => [],
+  }).map((c) => c.command)
+  assert.deepEqual(run(null), ['/opt/homebrew/bin/python3'])
+  assert.deepEqual(run('/Library/Developer/CommandLineTools'), ['/opt/homebrew/bin/python3'])
+  assert.deepEqual(run('/Applications/Xcode.app/Contents/Developer'), ['/opt/homebrew/bin/python3', '/usr/bin/python3'])
+})
+
+function probeAnswer(info) {
+  return { code: 0, out: `${JSON.stringify({ venv: true, invenv: false, pip: true, mss: false, quartz: false,
+    mcp: null, scripts: [], ...info })}\n`, err: '', timedOut: false, cancelled: false }
+}
+
+await asyncTest('installer: detect keeps 3.10+, runs the probed interpreter (not the launcher), reports found and too-old', async () => {
+  const answers = {
+    'C:\\Windows\\py.exe': probeAnswer({ version: [3, 12, 4], executable: 'C:\\Py312\\python.exe' }),
+    'C:\\Py312\\python.exe': probeAnswer({ version: [3, 12, 4], executable: 'C:\\Py312\\python.exe' }),
+    'C:\\old\\python.exe': probeAnswer({ version: [3, 9, 1], executable: 'C:\\old\\python.exe' }),
+    'C:\\conda\\python.exe': probeAnswer({ version: [3, 13, 0], executable: 'C:\\conda\\python.exe',
+      mcp: '0.6.1', mss: true, scripts: ['C:\\conda\\Scripts\\clawtouch-mcp.exe'] }),
+  }
+  const calls = []
+  const runner = async (cmd, args, opts) => { calls.push({ cmd, args, cwd: opts.cwd }); return answers[cmd] ?? { code: 1, out: '', err: '' } }
+  const files = new Set(['C:\\Windows\\py.exe', 'C:\\Py312\\python.exe', 'C:\\old\\python.exe', 'C:\\conda\\python.exe'])
+  const out = await inst.detect({
+    runner, platform: 'win32', home: 'C:\\h\\.dsh', mkdir: () => {},
+    env: { SystemRoot: 'C:\\Windows', PATH: 'C:\\Py312;C:\\old;C:\\conda' },
+    exists: (p) => files.has(p), list: () => [],
+  })
+  assert.deepEqual(out.pythons.map((p) => [p.id, p.command, p.version]),
+    [[0, 'C:\\Py312\\python.exe', '3.12.4'], [1, 'C:\\conda\\python.exe', '3.13.0']])
+  assert.deepEqual(out.found, [{ path: 'C:\\conda\\Scripts\\clawtouch-mcp.exe', version: '0.6.1',
+    python: 'C:\\conda\\python.exe', screenshot: true }])
+  assert.deepEqual(out.tooOld, [{ executable: 'C:\\old\\python.exe', version: '3.9.1' }])
+  assert.equal(out.managed, null)
+  assert.deepEqual(calls[0].args.slice(0, 5), ['-3', '-X', 'utf8', '-E', '-c'])
+  for (const c of calls) assert.equal(c.cwd, 'C:\\h\\.dsh\\clawtouch-mcp\\probe')
+})
+
+await asyncTest('installer: an interpreter that fails or prints junk is skipped, not fatal', async () => {
+  const runner = async (cmd) => (cmd.endsWith('a.exe') ? { code: 9009, out: 'Python was not found', err: '' }
+    : { code: 0, out: 'not json', err: '' })
+  const out = await inst.detect({ runner, platform: 'win32', home: 'C:\\h', mkdir: () => {},
+    env: { PATH: 'C:\\x' }, exists: (p) => p.endsWith('python.exe'), list: () => [] })
+  assert.deepEqual(out.pythons, [])
+})
+
+test('installer: credentials never reach the page, even split across output chunks', () => {
+  assert.equal(inst.redact('via http://alice:s3cret@proxy:7890/ ...'), 'via http://***@proxy:7890/ ...')
+  assert.equal(inst.redact('https://tok3n@repo.example/simple'), 'https://***@repo.example/simple')
+  assert.equal(inst.redact('GET /simple?token=abc&x=1'), 'GET /simple?token=***&x=1')
+  assert.equal(inst.redact('https://alice:p@ss@proxy.example/x'), 'https://***@proxy.example/x')
+  assert.equal(inst.redact('GET /f?api_key=abc123&X-Amz-Signature=s1g&ok=1'), 'GET /f?api_key=***&X-Amz-Signature=***&ok=1')
+  assert.equal(inst.redact('https://pypi.org/simple/'), 'https://pypi.org/simple/')
+  const seen = []
+  const split = inst.lineSplitter((l) => seen.push(l))
+  split.push('Looking in https://alice:sec')
+  split.push('ret@proxy.example/ now\nnext')
+  split.end()
+  assert.deepEqual(seen, ['Looking in https://***@proxy.example/ now', 'next'])
+})
+
+test('installer: the child environment drops what could redirect pip or Python, keeps proxies', () => {
+  const env = inst.childEnv({ PIP_TARGET: '/x', PIP_EXTRA_INDEX_URL: 'https://evil', PYTHONPATH: '/p', PYTHONHOME: '/h',
+    VIRTUAL_ENV: '/v', HTTPS_PROXY: 'http://127.0.0.1:7890', PATH: '/bin' }, 'linux')
+  assert.deepEqual(Object.keys(env).sort(),
+    ['HTTPS_PROXY', 'PATH', 'PIP_CONFIG_FILE', 'PIP_DISABLE_PIP_VERSION_CHECK', 'PIP_NO_INPUT'])
+  // no pip configuration file at all: not the user's, the global one, or the venv's
+  assert.equal(env.PIP_CONFIG_FILE, '/dev/null')
+  assert.equal(inst.childEnv({}, 'win32').PIP_CONFIG_FILE, 'nul')
+})
+
+test('installer: versions compare as PEP 440 releases, pre-releases before them', () => {
+  assert.equal(inst.compareVersions('0.6.10', '0.6.9'), 1)
+  assert.equal(inst.compareVersions('0.6.1', '0.6.1'), 0)
+  assert.equal(inst.compareVersions('0.6.0', '0.6.1'), -1)
+  assert.equal(inst.compareVersions('0.6.1rc1', '0.6.1'), -1)
+  assert.equal(inst.compareVersions('0.6.1.dev1', '0.6.1'), -1)
+  assert.equal(inst.compareVersions('0.6.1.post1', '0.6.1'), 1)
+  assert.equal(inst.compareVersions('3.10', '3.9.9'), 1)
+})
+
+/** A fake world for one install: which files exist, and what each command answers. */
+function installWorld({ pip = [0], venv = 'none', verify = {}, marker = true, lockHeld = false, linked = false,
+  pipTimedOut = [] } = {}) {
+  const root = '/h/clawtouch-mcp'
+  const files = new Set(marker ? [`${root}/.dsh-clawtouch`] : [])
+  if (venv !== 'none') {
+    files.add(`${root}/venv`)
+    files.add(`${root}/venv/bin/python`)
+    if (venv === 'healthy') files.add(`${root}/venv/pyvenv.cfg`)
+  }
+  if (lockHeld) files.add(`${root}/install.lock`)
+  const calls = []
+  const envs = []
+  const pipAnswers = [...pip]
+  const pipTimeouts = [...pipTimedOut]
+  const runner = async (cmd, args, opts) => {
+    calls.push([cmd, ...args].join(' '))
+    envs.push(opts.env)
+    opts.onLine?.('working')
+    if (args.includes('venv') && args.includes('-m')) {
+      files.add(`${root}/venv`); files.add(`${root}/venv/bin/python`); files.add(`${root}/venv/pyvenv.cfg`)
+      return { code: 0, out: '', err: '' }
+    }
+    if (args.includes('pip')) {
+      if (pipTimeouts.shift()) return { code: null, out: '', err: '', timedOut: true }
+      const code = pipAnswers.shift() ?? 1
+      if (code === 0) files.add(`${root}/venv/bin/clawtouch-mcp`)
+      return { code, out: '', err: code ? 'Could not fetch URL' : '' }
+    }
+    // the probe, for health and for verification
+    const installed = files.has(`${root}/venv/bin/clawtouch-mcp`)
+    return probeAnswer({ version: [3, 12, 0], executable: `${root}/venv/bin/python`, invenv: true,
+      mcp: installed ? '0.6.1' : null, mss: installed, ...verify })
+  }
+  const fs = {
+    exists: (p) => files.has(p),
+    mkdir: () => {},
+    writeFile: (p) => files.add(p),
+    lstat: () => ({ isSymbolicLink: () => linked }),
+    open: (p) => { if (files.has(p)) throw Object.assign(new Error('exists'), { code: 'EEXIST' }); files.add(p); return 1 },
+    write: () => {},
+    close: () => {},
+    stat: () => ({ mtimeMs: Date.now() }),
+    unlink: (p) => files.delete(p),
+    rm: () => {},
+  }
+  const installer = new inst.Installer({ runner, home: '/h', platform: 'linux', fs })
+  return { installer, calls, files, envs }
+}
+
+const PY3 = { command: '/usr/bin/python3' }
+const finished = (installer) => new Promise((resolve) => {
+  const tick = () => (installer.running ? setTimeout(tick, 1) : resolve(installer.state()))
+  tick()
+})
+
+await asyncTest('installer: a fresh install makes the venv, installs the pinned spec with its extras, isolated, and checks it', async () => {
+  const { installer, calls, files } = installWorld({ marker: false })
+  let ended = 0
+  assert.equal(installer.start(PY3, () => { ended += 1 }), true)
+  assert.equal(installer.start(PY3), false) // one at a time
+  const state = await finished(installer)
+  assert.deepEqual([state.phase, state.source, state.path], ['done', 'pypi', '/h/clawtouch-mcp/venv/bin/clawtouch-mcp'])
+  assert.equal(ended, 1)
+  assert.ok(files.has('/h/clawtouch-mcp/.dsh-clawtouch')) // the folder is marked as ours
+  assert.ok(!files.has('/h/clawtouch-mcp/install.lock')) // and the lock released
+  assert.ok(calls.some((c) => c === '/usr/bin/python3 -X utf8 -E -m venv /h/clawtouch-mcp/venv'))
+  const pip = calls.find((c) => c.includes(' pip '))
+  assert.ok(pip.includes('--isolated') && pip.includes('-i https://pypi.org/simple')
+    && pip.endsWith(`clawtouch-mcp[screenshot,window]==${inst.MCP_VERSION}`), pip)
+})
+
+await asyncTest('installer: pip runs unbuffered, without a cache, with temp files in its own folder', async () => {
+  const { installer, calls, envs } = installWorld()
+  installer.start(PY3)
+  await finished(installer)
+  const i = calls.findIndex((c) => c.includes(' pip '))
+  assert.ok(calls[i].includes('-u -m pip') && calls[i].includes('--no-cache-dir'), calls[i])
+  assert.deepEqual([envs[i].TEMP, envs[i].TMP, envs[i].TMPDIR], Array(3).fill('/h/clawtouch-mcp/tmp'))
+})
+
+await asyncTest('installer: PyPI not answering in time gives way to the mirror', async () => {
+  const { installer, calls } = installWorld({ pip: [0], pipTimedOut: [true] })
+  installer.start(PY3)
+  const state = await finished(installer)
+  assert.deepEqual([state.phase, state.source], ['done', 'tuna'])
+  assert.ok(state.lines.some((l) => l.includes('no answer from https://pypi.org/simple')))
+  assert.equal(calls.filter((c) => c.includes(' pip ')).length, 2)
+})
+
+await asyncTest('installer: PyPI failing falls back to the mirror once', async () => {
+  const { installer, calls } = installWorld({ pip: [1, 0] })
+  installer.start(PY3)
+  const state = await finished(installer)
+  assert.deepEqual([state.phase, state.source], ['done', 'tuna'])
+  assert.ok(calls.some((c) => c.includes(`-i ${inst.MIRROR}`)))
+})
+
+await asyncTest('installer: both failing is a failure with the output kept', async () => {
+  const { installer } = installWorld({ pip: [1, 1] })
+  installer.start(PY3)
+  const state = await finished(installer)
+  assert.deepEqual([state.phase, state.error], ['failed', 'pip'])
+  assert.ok(state.lines.length > 0)
+})
+
+await asyncTest('installer: a healthy venv is reused; a half-built one is rebuilt with --clear', async () => {
+  const reuse = installWorld({ venv: 'healthy' })
+  reuse.installer.start(PY3)
+  assert.equal((await finished(reuse.installer)).phase, 'done')
+  assert.ok(!reuse.calls.some((c) => c.includes('-m venv')))
+  const half = installWorld({ venv: 'half' }) // python there, no pyvenv.cfg
+  half.installer.start(PY3)
+  assert.equal((await finished(half.installer)).phase, 'done')
+  assert.ok(half.calls.some((c) => c.includes('-m venv --clear')))
+})
+
+await asyncTest('installer: a venv folder not marked as ours, or a link, is never cleared', async () => {
+  const foreign = installWorld({ venv: 'half', marker: false })
+  foreign.installer.start(PY3)
+  assert.equal((await finished(foreign.installer)).error, 'not-ours')
+  const link = installWorld({ venv: 'half', linked: true })
+  link.installer.start(PY3)
+  assert.equal((await finished(link.installer)).error, 'not-ours')
+  assert.ok(!link.calls.some((c) => c.includes('--clear')))
+})
+
+await asyncTest('installer: a healthy-looking venv that is a link is refused before pip runs', async () => {
+  const { installer, calls } = installWorld({ venv: 'healthy', linked: true })
+  installer.start(PY3)
+  assert.equal((await finished(installer)).error, 'not-ours')
+  assert.ok(!calls.some((c) => c.includes(' pip ')))
+})
+
+await asyncTest('installer: a lock file that cannot be written is not left behind', async () => {
+  const w = installWorld()
+  let unlinked = 0
+  const fs = { ...w.installer.fs, write: () => { throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }) },
+    unlink: () => { unlinked += 1 } }
+  const installer = new inst.Installer({ runner: async () => ({ code: 0, out: '', err: '' }), home: '/h', platform: 'linux', fs })
+  installer.start(PY3)
+  assert.equal((await finished(installer)).error, 'locked')
+  assert.ok(unlinked >= 1)
+})
+
+await asyncTest('installer: the managed install is reported with its screenshot readiness', async () => {
+  const runner = async () => probeAnswer({ version: [3, 12, 0], executable: '/h/clawtouch-mcp/venv/bin/python',
+    invenv: true, mcp: '0.6.1', mss: false })
+  const out = await inst.detect({ runner, platform: 'linux', home: '/h', mkdir: () => {}, env: { PATH: '' },
+    exists: (p) => p === '/h/clawtouch-mcp/venv/bin/python' || p === '/h/clawtouch-mcp/venv/bin/clawtouch-mcp',
+    list: () => [] })
+  assert.deepEqual(out.managed, { path: '/h/clawtouch-mcp/venv/bin/clawtouch-mcp', version: '0.6.1', screenshot: false })
+})
+
+await asyncTest('installer: another install holding the folder lock is respected', async () => {
+  const { installer, calls } = installWorld({ lockHeld: true })
+  installer.start(PY3)
+  assert.equal((await finished(installer)).error, 'locked')
+  assert.deepEqual(calls, [])
+})
+
+await asyncTest('installer: missing screenshot support fails the check', async () => {
+  const { installer } = installWorld({ verify: { mss: false } })
+  installer.start(PY3)
+  assert.equal((await finished(installer)).error, 'verify')
+})
+
+await asyncTest('installer: close() cancels a running job and refuses new ones', async () => {
+  const runner = (cmd, args, opts) => new Promise((resolve) => {
+    opts.signal?.addEventListener('abort', () => resolve({ code: null, out: '', err: '', cancelled: true }))
+  })
+  const w = installWorld()
+  const installer = new inst.Installer({ runner, home: '/h', platform: 'linux', fs: { ...w.installer.fs } })
+  installer.start(PY3)
+  await new Promise((r) => setTimeout(r, 5))
+  installer.close()
+  const state = await finished(installer)
+  assert.deepEqual([state.phase, state.error], ['failed', 'cancelled'])
+  assert.equal(installer.start(PY3), false)
+})
+
+test('settings: switching to the clawtouch-mcp program drops a leftover `-m clawtouch_mcp`', () => {
+  const current = { command: 'python', args: ['-m', 'clawtouch_mcp', '--port', 'COM7'] }
+  const next = settingsMod.parseSave(SAVE({ command: 'C:\\h\\.dsh\\clawtouch-mcp\\venv\\Scripts\\clawtouch-mcp.exe' }))
+  assert.deepEqual(settingsMod.withSettings(current, next, BUNDLE).args, ['--port', 'COM7'])
+  const keep = settingsMod.withSettings(current, settingsMod.parseSave(SAVE({ command: 'python3' })), BUNDLE)
+  assert.deepEqual(keep.args, ['-m', 'clawtouch_mcp', '--port', 'COM7'])
+})
+
+// ── the install routes ────────────────────────────────────────────────
+
+function setupFixture({ detectResult } = {}) {
+  const activity = new ActivityGate()
+  let stopped = 0
+  let onStop = async () => {}
+  const mcp = { stop: async () => { stopped += 1; await onStop() } }
+  const det = detectResult ?? { root: '/h/clawtouch-mcp', pythons: [{ id: 0, command: '/usr/bin/python3',
+    executable: '/usr/bin/python3', version: '3.12.1', venv: true }], found: [], managed: null, tooOld: [] }
+  let detects = 0
+  const ins = { running: false, closed: false, started: null, state: () => null,
+    start(py, onEnd) { if (this.closed) return false; this.started = py; this.onEnd = onEnd; this.running = true; return true } }
+  const [setup, install] = routesMod.setupRoutes({ installer: ins, detect: async () => { detects += 1; return det },
+    mcp, activity, required: '0.6.1' })
+  const get = async (route) => (await route.fetch(new Request('http://dsh/api'))).json()
+  const post = async (body) => {
+    const res = await install.fetch(new Request('http://dsh/api', { method: 'POST', body: JSON.stringify(body) }))
+    return { status: res.status, body: await res.json() }
+  }
+  return { setup, install, get, post, activity, ins, stopped: () => stopped, detects: () => detects,
+    whileStopping: (fn) => { onStop = fn } }
+}
+
+await asyncTest('routes: setup lists Pythons without launch details, with a generation, and caches briefly', async () => {
+  const f = setupFixture()
+  const a = await f.get(f.setup)
+  assert.deepEqual(a.pythons, [{ id: 0, executable: '/usr/bin/python3', version: '3.12.1', venv: true }])
+  assert.equal(a.required, '0.6.1')
+  // unique to this plugin instance: a reload starts a different sequence
+  assert.match(a.generation, /^[0-9a-f]{8,}-1$/)
+  const other = setupFixture()
+  assert.notEqual(a.generation, (await other.get(other.setup)).generation)
+  await f.get(f.setup)
+  assert.equal(f.detects(), 1)
+})
+
+await asyncTest('routes: install takes a Python from the generation shown, closes the gate, stops the old server', async () => {
+  const f = setupFixture()
+  assert.equal((await f.post({ python: 0, generation: 'x-1' })).body.error, 'stale') // nothing shown yet
+  const { generation } = await f.get(f.setup)
+  assert.equal((await f.post({ python: 0, generation: `${generation}0` })).body.error, 'stale')
+  const res = await f.post({ python: 0, generation })
+  assert.equal(res.status, 202)
+  assert.equal(f.ins.started.command, '/usr/bin/python3')
+  assert.equal(f.stopped(), 1)
+  await assert.rejects(f.activity.run(async () => 'pressed'), /installing clawtouch-mcp/)
+  f.ins.onEnd()
+  assert.equal(f.activity.idle, true)
+  assert.deepEqual((await f.post({ python: 'C:\\evil.exe', generation })).body, { ok: false, error: 'invalid', field: 'python' })
+})
+
+await asyncTest('routes: a plugin disposed while the old server stops starts no install', async () => {
+  const f = setupFixture()
+  const { generation } = await f.get(f.setup)
+  f.whileStopping(async () => { f.ins.closed = true; f.activity.closeForGood('reloading') })
+  const res = await f.post({ python: 0, generation })
+  assert.deepEqual([res.status, res.body.error], [409, 'reloading'])
+  assert.equal(f.ins.started, null)
+})
+
+await asyncTest('routes: no install while a tool runs, nor a second one', async () => {
+  const f = setupFixture()
+  const { generation } = await f.get(f.setup)
+  let release
+  const tool = f.activity.run(() => new Promise((r) => { release = r }))
+  assert.equal((await f.post({ python: 0, generation })).body.error, 'busy')
+  release()
+  await tool
+  f.ins.running = true
+  assert.equal((await f.post({ python: 0, generation })).body.error, 'installing')
+})
+
+await asyncTest('routes: a save during an install is refused as installing', async () => {
+  const fiber = {}
+  const editor = { entries: () => [{ fiber, options: { config: {} } }], edit: async () => {} }
+  const route = routesMod.settingsRoute({ editor: () => editor, fiber, config: {}, activity: new ActivityGate(),
+    installer: { running: true } })
+  const res = await route.fetch(new Request('http://dsh/api', { method: 'POST', body: '{}' }))
+  assert.deepEqual([res.status, (await res.json()).error], [409, 'installing'])
+})
+
 // ── the number TESTING-macos.md tells a tester to expect ───────────────
 //
 // It drifted three times in one change, and a stale one is worse than

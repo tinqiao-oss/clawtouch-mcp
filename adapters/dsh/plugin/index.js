@@ -56,7 +56,8 @@ import {
 import { refusedCombo } from './lib/keyguard.js'
 import { DshEye } from './lib/eye.js'
 import { clickVerb, typeText, pressKey, scrollWheel } from './lib/actions.js'
-import { settingsRoute, statusRoute, modelsRoute } from './lib/routes.js'
+import { settingsRoute, statusRoute, modelsRoute, setupRoutes } from './lib/routes.js'
+import { Installer, detect, MCP_VERSION } from './lib/installer.js'
 import { ActivityGate } from './lib/activity.js'
 
 export const name = 'clawtouch'
@@ -105,6 +106,9 @@ export function apply(ctx, userConfig = {}) {
   // Tool executions under way, and whether new ones may start (lib/activity.js):
   // a settings save and the page's device check both wait for none to run.
   const activity = new ActivityGate()
+  // Installing clawtouch-mcp from the settings page (lib/installer.js); only
+  // ever started by a click there.
+  const installer = new Installer()
 
   // The device is not opened at boot. A Pico that is unplugged when the
   // profile starts is normal — the agent may plug it in mid-session, and
@@ -121,13 +125,14 @@ export function apply(ctx, userConfig = {}) {
   // servers side by side after one save, the new one told the port was busy).
   ctx.effect(() => () => {
     activity.closeForGood('reloading')
+    installer.close()
     mcp.close().catch(() => {})
   }, 'dsh-clawtouch: stop clawtouch-mcp')
 
   registerTools(ctx, locator, config, log, activity)
   registerGuard(ctx, config)
   registerSkill(ctx, config, log)
-  registerPageRoutes(ctx, { config: userConfig, command: config.command, mcp, eye, activity })
+  registerPageRoutes(ctx, { config: userConfig, command: config.command, mcp, eye, activity, installer })
 }
 
 // ───────────────────────────── settings page ─────────────────────────────
@@ -142,7 +147,7 @@ const PAGE_ROW = 'clawtouch'
  * claim the same paths (dsh refuses a second claim) or, claiming them first,
  * have the page save ITS config. A row whose id cannot be told serves them.
  */
-function registerPageRoutes(ctx, { config, command, mcp, eye, activity }) {
+function registerPageRoutes(ctx, { config, command, mcp, eye, activity, installer }) {
   const fiber = ctx.fiber
   // `entry.id` is scoped by the tree that holds the row; the row's own id,
   // the one the patch names, is `options.id`.
@@ -153,9 +158,10 @@ function registerPageRoutes(ctx, { config, command, mcp, eye, activity }) {
     const editor = () => inner.get('configEditor')
     const llm = () => eye.services?.llm
     for (const route of [
-      settingsRoute({ editor, fiber, config, activity }),
-      statusRoute({ editor, fiber, config, llm, mcp, command, activity }),
+      settingsRoute({ editor, fiber, config, activity, installer }),
+      statusRoute({ editor, fiber, config, llm, mcp, command, activity, installer }),
       modelsRoute({ llm }),
+      ...setupRoutes({ installer, detect: () => detect(), mcp, activity, required: MCP_VERSION }),
     ]) {
       inner.effect(() => {
         try {

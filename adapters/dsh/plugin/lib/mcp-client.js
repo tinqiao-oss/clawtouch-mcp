@@ -123,6 +123,10 @@ export class McpStdioClient {
       // shell would make a path with a space (very common on Windows) into
       // an argument-splitting bug at best.
       shell: false,
+      // dsh desktop is a GUI process: without this, Windows gives the
+      // console-subsystem clawtouch-mcp.exe a console window of its own,
+      // on the screen the agent is about to click on.
+      windowsHide: true,
     })
     this.child = child
     child.stdout.setEncoding('utf8')

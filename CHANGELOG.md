@@ -7,6 +7,46 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### dsh-clawtouch 0.4.0 — install clawtouch-mcp from the settings page
+
+A person who installs the plugin from dsh's Plugins page has usually never
+heard of clawtouch-mcp, and the status card could only say it does not run.
+Now, when it cannot run or is older than the plugin needs, the page offers to
+fix that — for anyone with Python 3.10+ (it does not install Python itself).
+
+- **Finds** the Pythons on the machine (python.org installs, the Windows
+  launcher, the Python install manager, Homebrew, PATH — never the Windows
+  Store alias, nor macOS's /usr/bin/python3 when that would pop up the
+  Command Line Tools installer), and any clawtouch-mcp already installed with
+  its screenshot support, offered with "Use this".
+- **Installs** with one click into a venv of its own,
+  `<dsh home>/clawtouch-mcp/venv`: `clawtouch-mcp[screenshot,window]` at the
+  version the plugin was tested with (0.6.1), from PyPI and, if that fails or
+  does not answer in time, from the Tsinghua mirror. Then it checks the version
+  and the screenshot dependency and saves the new path the way the form does
+  (an unsaved draft stays a draft; a leftover `-m clawtouch_mcp` in `args` is
+  dropped).
+- pip runs with `--isolated`, no configuration file at all (not the user's,
+  the global one or the venv's), an explicit index, `--no-cache-dir`, and a
+  temp folder inside the install folder: no pip configuration can send the
+  install elsewhere or add sources, and an unwritable system temp folder (a sandbox, a
+  locked-down account) does not leave pip waiting forever on a lock — seen in
+  testing. Python runs with `-X utf8 -E`; children are hidden, have a deadline,
+  and are killed with their whole process tree.
+- One install at a time, across dsh instances too (a lock file in the folder);
+  a folder this plugin did not make, or a link, is never cleared; a plugin
+  reload cancels a running install and starts nothing afterwards. Tool calls
+  and saves are refused while it runs. Output lines shown on the page have
+  credentials in URLs masked.
+- The status card says why the board was not checked when clawtouch-mcp
+  cannot run, instead of "not checked".
+- clawtouch-mcp starts with `windowsHide`: in dsh desktop (a GUI process) it
+  could otherwise open a console window on the screen the agent clicks on.
+
+Verified in a dsh 0.2.2-rc.1 web profile with a fresh dsh home and a Pico 2:
+the card found Python 3.13, Install took about 16 s from PyPI, the path was
+saved and the status card then showed clawtouch-mcp 0.6.1 and the board.
+
 ## [0.6.1] — 2026-11-14 — `device.status` · dsh-clawtouch 0.3.0 (a settings page) · dsh-clawtouch 0.2.0
 
 ### Added — `device.status`: what the board is, asked without pressing anything

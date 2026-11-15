@@ -184,6 +184,17 @@ export function withSettings(current, next, inherited) {
   set('dryRun', true, !next.dryRun)
   set('maxWidth', next.maxWidth, next.maxWidth === DEFAULT_MAX_WIDTH)
   set('command', next.command, next.command === DEFAULT_COMMAND)
+  // `command: python, args: [-m, clawtouch_mcp, ...]` is a valid way to start
+  // the server; switched to the clawtouch-mcp program itself, that `-m
+  // clawtouch_mcp` would reach its argument parser and stop it. Only those
+  // two go; the server's own flags after them stay.
+  const script = /(^|[\\/])clawtouch-mcp(\.exe)?$/i.test(next.command)
+  if (script && Array.isArray(out.args) && out.args[0] === '-m'
+      && /^clawtouch_mcp(\.__main__)?$/.test(String(out.args[1]))) {
+    const rest = out.args.slice(2)
+    if (rest.length) out.args = rest
+    else delete out.args
+  }
 
   const vision = isObject(out.vision) ? { ...out.vision } : {}
   delete vision.provider
