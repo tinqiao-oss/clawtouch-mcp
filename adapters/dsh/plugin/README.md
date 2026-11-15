@@ -164,9 +164,13 @@ Three things therefore cannot live in it:
 ## Install
 
 ```bash
-pip install 'clawtouch-mcp[screenshot,window]>=0.5.0'   # HID, capture, window list
 dsh plugin --profile <your-profile> add dsh-clawtouch
+pip install 'clawtouch-mcp[screenshot,window]>=0.6.1'   # HID, capture, window list
 ```
+
+The second line can also be done from the plugin's settings page (below):
+with Python 3.10+ on the machine, its **Install** button puts clawtouch-mcp
+into a folder of its own under the dsh home and sets the path.
 
 No API key goes to this plugin. The model that looks at the screen is one
 you configure in dsh — by default the one the conversation is using — see
@@ -225,6 +229,16 @@ In dsh, open **Plugins → dsh-clawtouch**. Below the description:
   (`maxWidth`) and the path to `clawtouch-mcp` (`command`).
 - A leftover 0.1.x `vision.endpoint` / `apiKey` / `extraBody` is named (its
   value is never shown) with a button that removes exactly those keys.
+- **Installing clawtouch-mcp**, when it cannot run or is older than the plugin
+  needs. The page looks for Python 3.10+ (and for a clawtouch-mcp already
+  installed, offered with "Use this"), and **Install** creates a venv at
+  `<dsh home>/clawtouch-mcp/venv`, installs
+  `clawtouch-mcp[screenshot,window]` at the version the plugin was tested with,
+  checks it, and saves its path. It downloads from PyPI, and from the Tsinghua
+  mirror if PyPI fails or does not answer in time; pip runs isolated and reads
+  no pip configuration file, so no setting of yours redirects it, and nothing
+  outside that folder is touched. It goes online only when you click. It does not install
+  Python itself: without one, the page says so and links python.org.
 
 Saving reloads the plugin, so it is refused while the agent is in the middle
 of a click or typing, and a call that starts while the save is written is

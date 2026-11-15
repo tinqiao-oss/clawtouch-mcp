@@ -30,8 +30,10 @@ window.__ModuleLoader__.load({
     const SETTINGS_API = 'api/clawtouch/settings'
     const STATUS_API = 'api/clawtouch/status'
     const MODELS_API = 'api/clawtouch/models'
+    const SETUP_API = 'api/clawtouch/setup'
+    const INSTALL_API = 'api/clawtouch/install'
     /** This plugin's version, for the footer; a test keeps it equal to package.json's. */
-    const VERSION = '0.3.0'
+    const VERSION = '0.4.0'
     const ISSUES = 'https://github.com/tinqiao-oss/clawtouch-mcp/issues/new'
     /** Hit rates from the README's "Choosing the eye" (offline, 165 looks per model,
      *  dsh's image note simulated, 2026-11-14). Anything not here was not measured. */
@@ -41,6 +43,8 @@ window.__ModuleLoader__.load({
     const DEFAULT_COMMAND = 'clawtouch-mcp'
     /** How long a save waits, in all, to read its settings back from the reloaded plugin. */
     const READ_BACK_MS = 10000
+    /** The clawtouch-mcp this plugin needs; a test keeps it equal to lib/installer.js's MCP_VERSION. */
+    const REQUIRED_MCP = '0.6.1'
 
     const zh = {
       summary: '看图模型、只看不按、设备状态。',
@@ -67,7 +71,7 @@ window.__ModuleLoader__.load({
       mcpLabel: 'clawtouch-mcp',
       mcpFound: '在运行，版本 {version}',
       mcpRunning: '在运行',
-      mcpMissing: '运行不了「{command}」。先 pip install clawtouch-mcp；装在虚拟环境里的话，在下面「高级」里填它的完整路径。',
+      mcpMissing: '运行不了「{command}」。可以用下面的「安装」，已经装过的话在「高级」里填它的完整路径。',
       boardLabel: '板子',
       boardConnected: '已连接 {port}，固件 {firmware}',
       absOn: '绝对坐标：开（主屏上移动一步到位）',
@@ -79,6 +83,7 @@ window.__ModuleLoader__.load({
       boardOldServer: '这个 clawtouch-mcp 太旧，查不了板子。升级到 0.6.1 或更新：pip install -U clawtouch-mcp',
       boardOldServerPort: '（它说用的是 {port}）',
       boardMock: '模拟模式（mock）：没有板子，什么都不按。',
+      boardNoServer: '要等 clawtouch-mcp 能运行，才查得了板子。',
       boardUnknown: '没查到。',
       dryRunOn: '「只看不按」开着：现在不会按任何东西。',
       eyeTitle: '看图模型',
@@ -122,6 +127,46 @@ window.__ModuleLoader__.load({
       feedbackLead: '遇到问题或有建议：',
       feedbackIssue: '到 GitHub 提 issue',
       readme: '插件说明',
+      setupTitle: "安装 clawtouch-mcp",
+      setupMissing: "插件要靠 clawtouch-mcp（一个 Python 程序）和板子通信，现在它运行不起来。可以用这台电脑上找到的，或者在下面直接装一个。",
+      setupOld: "现在用的 clawtouch-mcp 是 {version}，这一版插件要 {required} 或更新（查板子状态要用到）。",
+      setupLooking: "正在找这台电脑上的 Python 和 clawtouch-mcp…",
+      setupLookFailed: "没找完，点「重新查找」再试。",
+      setupFoundManaged: "dsh 目录里已经装好了 clawtouch-mcp {version}。",
+      setupFound: "找到 clawtouch-mcp {version}：{path}",
+      setupUse: "用这个",
+      setupPickPython: "用哪个 Python 安装",
+      setupPython: "用 Python {version}（{path}）",
+      setupInstall: "安装 clawtouch-mcp {version}",
+      setupRescan: "重新查找",
+      setupInstallHint: "大约一两分钟。只在点安装时联网：先从 PyPI 下载，不行自动换清华镜像。装进 {root}，不动你系统里的 Python。装好会自动填好路径并保存。",
+      setupNoPython: "这台电脑上没找到 Python 3.10 或更新的版本，得先装 Python。Windows 上从 python.org 下载安装包，安装时勾选「Add python.exe to PATH」；装好后点「重新查找」，不用重启 dsh。",
+      setupGetPython: "下载 Python",
+      setupTooOld: "找到的 Python 版本太旧：{list}",
+      setupNoVenv: "找到了 Python，但它缺 venv 模块（Debian、Ubuntu 上要先装 python3-venv）。装好后点「重新查找」。",
+      setupPhaseVenv: "正在建独立的 Python 环境…",
+      setupPhasePip: "正在下载并安装 clawtouch-mcp…",
+      setupPhaseVerify: "正在核对装好的版本…",
+      setupDone: "clawtouch-mcp {version} 装好了，正在保存路径…",
+      setupDoneMirror: "clawtouch-mcp {version} 装好了（PyPI 不通，用的清华镜像），正在保存路径…",
+      setupFailVenv: "建 Python 环境失败。看下面的输出；常见原因是磁盘空间不够或者杀毒软件拦了。",
+      setupFailPip: "下载安装失败，PyPI 和清华镜像都没成功。看下面的输出；多半是网络问题，换个网络或开代理后再试。",
+      setupFailVerify: "装完核对不对：版本或程序文件不对。再装一次试试。",
+      setupFailTimeout: "安装超时（超过 8 分钟），已停止。网络慢的话换个时间再试。",
+      setupFailCancelled: "安装被中断了（插件重新加载或 dsh 退出）。再装一次即可，会接着用已经建好的环境。",
+      setupFailNoFolder: "dsh 目录里建不了安装文件夹，检查一下那个目录的权限。",
+      setupProblemBusy: "AI 正在操作电脑，等这一步做完再装。",
+      setupProblemInstalling: "已经在安装了。",
+      setupProblemStale: "这台电脑上的 Python 有变化，已重新查找，请再点一次。",
+      setupProblemNoVenv: "这个 Python 缺 venv 模块，换一个或先补上。",
+      setupProblemFailed: "没能开始安装，刷新页面再试。",
+      boardInstalling: "正在安装 clawtouch-mcp，装好后再查板子。",
+      setupFailLocked: "另一个 dsh（比如命令行里的）正在往同一个文件夹安装，等它装完再试。",
+      setupFailNotOurs: "安装文件夹里已经有一个不是本插件建的 venv（或者它是个链接），为了不误删，没有动它。把它挪走后再装。",
+      setupFailOther: "安装出错了，看下面的输出。",
+      setupProblemReloading: "插件正在重新加载，等页面刷新后再点。",
+      setupFoundNoShot: "找到 clawtouch-mcp {version}（{path}），但它缺截图组件，不能直接用。可以在下面另装一份完整的。",
+      installing: "正在安装 clawtouch-mcp，装好后再保存。",
     }
 
     const en = {
@@ -149,7 +194,7 @@ window.__ModuleLoader__.load({
       mcpLabel: 'clawtouch-mcp',
       mcpFound: 'running, version {version}',
       mcpRunning: 'running',
-      mcpMissing: 'Cannot run "{command}". Install it with pip install clawtouch-mcp; if it lives in a virtual environment, give its full path under Advanced below.',
+      mcpMissing: 'Cannot run "{command}". Install it below, or if it is already installed, give its full path under Advanced.',
       boardLabel: 'Board',
       boardConnected: 'connected on {port}, firmware {firmware}',
       absOn: 'Absolute pointer: on (one step to the target on the primary screen)',
@@ -161,6 +206,7 @@ window.__ModuleLoader__.load({
       boardOldServer: 'This clawtouch-mcp is too old to report the board. Upgrade to 0.6.1 or later: pip install -U clawtouch-mcp',
       boardOldServerPort: ' (it reports {port})',
       boardMock: 'Mock mode: no board, nothing is pressed.',
+      boardNoServer: 'The board can be checked once clawtouch-mcp runs.',
       boardUnknown: 'Could not check.',
       dryRunOn: '"Look, don\'t press" is on: nothing will be pressed.',
       eyeTitle: 'Eye',
@@ -204,6 +250,46 @@ window.__ModuleLoader__.load({
       feedbackLead: 'Problems or suggestions: ',
       feedbackIssue: 'open an issue on GitHub',
       readme: 'README',
+      setupTitle: "Install clawtouch-mcp",
+      setupMissing: "The plugin reaches the board through clawtouch-mcp, a Python program, and it does not run right now. Use one found on this machine, or install one below.",
+      setupOld: "The clawtouch-mcp in use is {version}; this plugin needs {required} or later (for the board check).",
+      setupLooking: "Looking for Python and clawtouch-mcp on this machine…",
+      setupLookFailed: "The search did not finish; click Look again.",
+      setupFoundManaged: "clawtouch-mcp {version} is already installed in dsh's folder.",
+      setupFound: "Found clawtouch-mcp {version}: {path}",
+      setupUse: "Use this",
+      setupPickPython: "Python to install with",
+      setupPython: "With Python {version} ({path})",
+      setupInstall: "Install clawtouch-mcp {version}",
+      setupRescan: "Look again",
+      setupInstallHint: "A minute or two. Goes online only when you click Install: from PyPI, and from the Tsinghua mirror if that fails. Installs into {root}, leaving your own Python alone. When done, the path is filled in and saved.",
+      setupNoPython: "No Python 3.10 or later was found here, so Python comes first. On Windows, get the installer from python.org and tick \"Add python.exe to PATH\"; then click Look again — no need to restart dsh.",
+      setupGetPython: "Download Python",
+      setupTooOld: "Python found but too old: {list}",
+      setupNoVenv: "Python was found, but without its venv module (on Debian and Ubuntu, install python3-venv). Then click Look again.",
+      setupPhaseVenv: "Creating a Python environment of its own…",
+      setupPhasePip: "Downloading and installing clawtouch-mcp…",
+      setupPhaseVerify: "Checking what was installed…",
+      setupDone: "clawtouch-mcp {version} is installed; saving its path…",
+      setupDoneMirror: "clawtouch-mcp {version} is installed (PyPI was unreachable, so from the Tsinghua mirror); saving its path…",
+      setupFailVenv: "Creating the Python environment failed. See the output below; a full disk or an antivirus program is the usual cause.",
+      setupFailPip: "Downloading failed from PyPI and from the Tsinghua mirror. See the output below; it is usually the network — try another network or a proxy.",
+      setupFailVerify: "What was installed does not check out (version or program file). Install again.",
+      setupFailTimeout: "The install took over 8 minutes and was stopped. Try again when the network is faster.",
+      setupFailCancelled: "The install was interrupted (the plugin reloaded or dsh quit). Install again; the environment already made is reused.",
+      setupFailNoFolder: "The install folder cannot be created in dsh's folder; check its permissions.",
+      setupProblemBusy: "The agent is working the computer; install once this step is done.",
+      setupProblemInstalling: "An install is already running.",
+      setupProblemStale: "The Pythons on this machine changed; the page looked again. Click once more.",
+      setupProblemNoVenv: "That Python has no venv module; pick another or add it.",
+      setupProblemFailed: "The install could not start; reload the page and try again.",
+      boardInstalling: "clawtouch-mcp is being installed; the board is checked after.",
+      setupFailLocked: "Another dsh (one in a terminal, say) is installing into the same folder; try again once it is done.",
+      setupFailNotOurs: "The install folder already holds a venv this plugin did not make (or a link), so it was left alone. Move it away and install again.",
+      setupFailOther: "The install went wrong; see the output below.",
+      setupProblemReloading: "The plugin is reloading; click again once the page has refreshed.",
+      setupFoundNoShot: "Found clawtouch-mcp {version} ({path}), but without its screenshot support, so it is not offered. Install a complete copy below.",
+      installing: "clawtouch-mcp is being installed; save after it is done.",
     }
 
     const README = {
@@ -383,12 +469,14 @@ window.__ModuleLoader__.load({
         case 'no-answer': return row('warn', t('boardNoAnswer'))
         case 'old-server': return row('warn', t('boardOldServer') + (board.port ? t('boardOldServerPort', { port: board.port }) : ''))
         case 'mock': return row('warn', t('boardMock'))
+        case 'no-server': return row('neutral', t('boardNoServer'))
+        case 'installing': return row('neutral', t('boardInstalling'))
         default: return row('warn', t('boardUnknown'), h(Detail, { text: board.detail }))
       }
     }
 
     /** What the eye and the device look like now. Checked on open and on request; never presses. */
-    function StatusCard({ t, dryRun, generation }) {
+    function StatusCard({ t, dryRun, generation, onStatus }) {
       const [state, setState] = useState({ phase: 'checking' })
       const alive = useRef(true)
       const running = useRef(false)
@@ -417,6 +505,7 @@ window.__ModuleLoader__.load({
           return
         }
         setState(next)
+        if (next.phase === 'done') onStatus?.(next.data)
       }, [])
       // again after every save: the plugin reloaded, possibly with another command or eye
       useEffect(() => { check() }, [check, generation])
@@ -525,7 +614,7 @@ window.__ModuleLoader__.load({
       }, [adopt])
       useEffect(() => { load() }, [load])
 
-      const save = async (next, { dropLegacy = false } = {}) => {
+      const save = async (next, { dropLegacy = false, keepDraft = dropLegacy, takeCommand = false } = {}) => {
         if (saving.current || state.phase !== 'ready') return
         saving.current = true
         setBusy(true)
@@ -561,11 +650,13 @@ window.__ModuleLoader__.load({
             }
             if (!alive.current) return
             // removing the old keys alone must not throw away an unsaved draft
-            if (fresh !== undefined) adopt(fresh, { keepDraft: dropLegacy })
+            if (fresh !== undefined) adopt(fresh, { keepDraft, takeCommand })
             setBanner(fresh !== undefined && landed(fresh)
               ? { tone: 'ok', text: t('saved') }
               : { tone: 'error', text: t('savedUnconfirmed') })
             onSaved?.()
+          } else if (result.error === 'installing') {
+            setBanner({ tone: 'error', text: t('installing') })
           } else if (result.error === 'busy') {
             setBanner({ tone: 'error', text: t('busy') })
           } else if (result.error === 'stale' || result.error === 'expression') {
@@ -586,7 +677,208 @@ window.__ModuleLoader__.load({
           if (alive.current) setBusy(false)
         }
       }
-      return { state, busy, banner, setBanner, load, save }
+      /** Whether a save would start now (none under way, the settings read). */
+      const canSave = () => !saving.current && state.phase === 'ready'
+      return { state, busy, banner, setBanner, load, save, canSave }
+    }
+
+    // ── installing clawtouch-mcp ──────────────────────────────────────────
+
+    /** As lib/installer.js compares (a PEP 440 subset): pre-releases and dev builds before
+     *  the release, post releases after it. A test keeps the two in step. */
+    const versionCmp = (a, b) => {
+      const parse = (v) => {
+        const m = /^\s*v?(\d+(?:\.\d+)*)(.*)$/i.exec(String(v))
+        if (!m) return { release: [0], rank: 0 }
+        const rest = m[2].toLowerCase()
+        const rank = !rest || rest.startsWith('+') ? 0 : /^[.-]?post/.test(rest) ? 1 : -1
+        return { release: m[1].split('.').map(Number), rank }
+      }
+      const x = parse(a)
+      const y = parse(b)
+      for (let i = 0; i < Math.max(x.release.length, y.release.length); i++) {
+        const d = (x.release[i] ?? 0) - (y.release[i] ?? 0)
+        if (d) return d < 0 ? -1 : 1
+      }
+      return Math.sign(x.rank - y.rank)
+    }
+
+    /** Whether the page should offer to install or upgrade clawtouch-mcp, given a status answer. */
+    const needsSetup = (status) => Boolean(status) && (
+      status.mcp?.found === false
+      || status.board?.state === 'old-server'
+      || status.board?.state === 'installing'
+      || (status.mcp?.version !== undefined && versionCmp(status.mcp.version, REQUIRED_MCP) < 0))
+
+    const FAIL = {
+      venv: 'setupFailVenv', pip: 'setupFailPip', verify: 'setupFailVerify', timeout: 'setupFailTimeout',
+      cancelled: 'setupFailCancelled', 'no-folder': 'setupFailNoFolder', locked: 'setupFailLocked',
+      'not-ours': 'setupFailNotOurs', failed: 'setupFailOther',
+    }
+    const SETUP_PROBLEM = {
+      busy: 'setupProblemBusy', installing: 'setupProblemInstalling', stale: 'setupProblemStale',
+      'no-venv': 'setupProblemNoVenv', reloading: 'setupProblemReloading',
+    }
+    const PHASE = { venv: 'setupPhaseVenv', pip: 'setupPhasePip', verify: 'setupPhaseVerify' }
+
+    /**
+     * Find clawtouch-mcp on this machine, or install it into a venv of the plugin's own.
+     * Shown only when the status says the server cannot run or is too old.
+     */
+    function SetupCard({ t, status, editable, onUse }) {
+      const [look, setLook] = useState({ phase: 'loading' })
+      const [job, setJob] = useState(null)
+      const [choice, setChoice] = useState(undefined)
+      const [problem, setProblem] = useState(undefined)
+      const alive = useRef(true)
+      const used = useRef(null)
+      useEffect(() => () => { alive.current = false }, [])
+
+      const find = useCallback(async () => {
+        setLook({ phase: 'loading' })
+        setProblem(undefined)
+        try {
+          // runs each Python it finds once; on a slow disk that takes a while
+          const r = await request(SETUP_API, { timeout: 60000 })
+          if (!alive.current) return
+          if (!r.ok || !r.body) { setLook({ phase: 'error' }); return }
+          setLook({ phase: 'ready', data: r.body })
+          if (r.body.job) setJob(r.body.job)
+          setChoice(r.body.pythons.find((p) => p.venv)?.id)
+        } catch {
+          if (alive.current) setLook({ phase: 'error' })
+        }
+      }, [])
+      useEffect(() => { find() }, [find])
+
+      // follow a running install until it ends
+      const running = Boolean(job) && job.phase !== 'done' && job.phase !== 'failed'
+      useEffect(() => {
+        if (!running) return undefined
+        let stop = false
+        ;(async () => {
+          while (!stop && alive.current) {
+            await wait(1000)
+            try {
+              const r = await request(INSTALL_API, { timeout: 10000 })
+              if (!alive.current || !r.ok) continue
+              if (!r.body?.job) {
+                // the plugin reloaded under the install (which cancelled it): say so, stop following
+                setJob((j) => ({ ...(j ?? {}), phase: 'failed', error: 'cancelled', lines: j?.lines ?? [] }))
+                break
+              }
+              setJob(r.body.job)
+              if (r.body.job.phase === 'done' || r.body.job.phase === 'failed') break
+            } catch { /* try again */ }
+          }
+        })()
+        return () => { stop = true }
+      }, [running])
+
+      // installed: make it the command, once
+      useEffect(() => {
+        // onUse says whether a save started; while another is under way it did not, and
+        // this runs again on the next render until one does
+        if (job?.phase === 'done' && job.path && used.current !== job.path && onUse(job.path)) {
+          used.current = job.path
+        }
+      }, [job, onUse])
+
+      const install = async () => {
+        setProblem(undefined)
+        try {
+          const r = await request(INSTALL_API, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ python: choice, generation: look.data?.generation }),
+          })
+          if (!alive.current) return
+          if (r.status === 202 && r.body?.job) setJob(r.body.job)
+          else {
+            setProblem(r.body?.error ?? 'failed')
+            if (r.body?.error === 'stale') find()
+          }
+        } catch {
+          if (alive.current) setProblem('failed')
+        }
+      }
+
+      const old = status.board?.state === 'old-server'
+        || (status.mcp?.found && status.mcp.version !== undefined && versionCmp(status.mcp.version, REQUIRED_MCP) < 0)
+      const parts = [
+        h('h3', { className: 'ct-title', key: 'title' }, t('setupTitle')),
+        h('p', { className: 'ct-hint', key: 'intro' }, old
+          ? t('setupOld', { version: status.mcp?.version ?? '?', required: REQUIRED_MCP })
+          : t('setupMissing')),
+      ]
+      const data = look.data
+      if (look.phase === 'loading') parts.push(h('p', { className: 'ct-note', key: 'looking', role: 'status' }, t('setupLooking')))
+      if (look.phase === 'error') {
+        parts.push(h('p', { className: 'ct-note', key: 'lookfail' }, t('setupLookFailed')))
+        parts.push(h('div', { className: 'ct-actions', key: 'lookretry' },
+          h('button', { type: 'button', className: 'ct-btn', onClick: find }, t('setupRescan'))))
+      }
+      if (data) {
+        const current = status.mcp?.command
+        const usable = [
+          ...(data.managed?.version && versionCmp(data.managed.version, REQUIRED_MCP) >= 0 && data.managed.screenshot !== false
+            ? [{ path: data.managed.path, version: data.managed.version, managed: true }] : []),
+          ...data.found.filter((f) => versionCmp(f.version, REQUIRED_MCP) >= 0 && f.screenshot !== false),
+        ].filter((f) => f.path !== current)
+        // found, recent enough, but without what screenshots need: not offered, but said
+        for (const f of data.found.filter((x) => versionCmp(x.version, REQUIRED_MCP) >= 0 && x.screenshot === false)) {
+          parts.push(h('p', { className: 'ct-note', key: `noshot-${f.path}` }, t('setupFoundNoShot', { version: f.version, path: f.path })))
+        }
+        for (const f of usable) {
+          parts.push(h('div', { className: 'ct-actions', key: `use-${f.path}` },
+            h('span', { className: 'ct-hint' }, f.managed
+              ? t('setupFoundManaged', { version: f.version })
+              : t('setupFound', { version: f.version, path: f.path })),
+            h('button', { type: 'button', className: 'ct-btn ct-btn-small', disabled: !editable || running,
+              onClick: () => onUse(f.path) }, t('setupUse'))))
+        }
+        const pythons = data.pythons.filter((p) => p.venv)
+        if (pythons.length > 1) {
+          parts.push(h('select', { className: 'ct-select', key: 'pick', value: String(choice ?? ''), 'aria-label': t('setupPickPython'),
+            disabled: running, onChange: (e) => setChoice(Number(e.target.value)) },
+          pythons.map((p) => h('option', { key: p.id, value: String(p.id) }, t('setupPython', { version: p.version, path: p.executable })))))
+        } else if (pythons.length === 1) {
+          parts.push(h('p', { className: 'ct-note', key: 'py' }, t('setupPython', { version: pythons[0].version, path: pythons[0].executable })))
+        }
+        if (pythons.length) {
+          parts.push(h('div', { className: 'ct-actions', key: 'install' },
+            h('button', { type: 'button', className: 'ct-btn ct-btn-primary', disabled: !editable || running || choice === undefined,
+              onClick: install }, t('setupInstall', { version: REQUIRED_MCP })),
+            h('button', { type: 'button', className: 'ct-btn', disabled: running, onClick: find }, t('setupRescan'))))
+          parts.push(h('p', { className: 'ct-note', key: 'how' }, t('setupInstallHint', { root: data.root })))
+        } else {
+          if (data.pythons.length) parts.push(h('p', { className: 'ct-hint', key: 'novenv' }, t('setupNoVenv')))
+          else parts.push(h('p', { className: 'ct-hint', key: 'nopy' }, t('setupNoPython')))
+          if (data.tooOld?.length) {
+            parts.push(h('p', { className: 'ct-note', key: 'old' },
+              t('setupTooOld', { list: data.tooOld.map((p) => `${p.version} (${p.executable})`).join(', ') })))
+          }
+          parts.push(h('div', { className: 'ct-actions', key: 'getpy' },
+            h('a', { className: 'ct-link', href: 'https://www.python.org/downloads/', target: '_blank', rel: 'noreferrer' },
+              t('setupGetPython')),
+            h('button', { type: 'button', className: 'ct-btn', onClick: find }, t('setupRescan'))))
+        }
+      }
+      if (problem) {
+        parts.push(h('div', { className: 'ct-banner', 'data-tone': 'error', key: 'problem', role: 'status' },
+          t(SETUP_PROBLEM[problem] ?? 'setupProblemFailed')))
+      }
+      if (job) {
+        const text = job.phase === 'done'
+          ? t(job.source === 'tuna' ? 'setupDoneMirror' : 'setupDone', { version: job.version })
+          : job.phase === 'failed' ? t(FAIL[job.error] ?? 'setupFailPip') : t(PHASE[job.phase] ?? 'setupPhasePip')
+        parts.push(h('div', { className: 'ct-banner', key: 'job', role: 'status',
+          'data-tone': job.phase === 'done' ? 'ok' : job.phase === 'failed' ? 'error' : undefined }, text))
+        if (job.phase !== 'done' && job.lines?.length) {
+          parts.push(h('p', { className: 'ct-detail', key: 'lines' }, job.lines.slice(-8).join('\n')))
+        }
+      }
+      return h('section', { className: 'ct-card ct-setup', 'aria-busy': running || look.phase === 'loading' }, ...parts)
     }
 
     /** The package's own page in the Plugins page. */
@@ -595,12 +887,19 @@ window.__ModuleLoader__.load({
       const [width, setWidth] = useState(String(DEFAULT_WIDTH))
       const [command, setCommand] = useState(DEFAULT_COMMAND)
       const [generation, setGeneration] = useState(0)
+      const [status, setStatus] = useState(undefined)
+      const onStatus = useCallback((data) => setStatus(data), [])
       const onAdopt = useCallback((data, options) => {
         const settings = settingsOf(data)
         if (options?.keepDraft) {
           // the draft stays, but a half-set eye was just replaced on disk
           // (removing the 0.1.x settings) and must not linger in it
           setDraft((d) => (d?.eye.mode === 'incomplete' ? { ...d, eye: settings.eye } : d))
+          // a clawtouch-mcp just installed or picked on the page: its path is the new command
+          if (options.takeCommand) {
+            setDraft((d) => (d ? { ...d, command: settings.command } : d))
+            setCommand(settings.command)
+          }
           return
         }
         setDraft(settings)
@@ -608,7 +907,7 @@ window.__ModuleLoader__.load({
         setCommand(settings.command)
       }, [])
       const onSaved = useCallback(() => setGeneration((n) => n + 1), [])
-      const { state, busy, banner, setBanner, load, save } = useSettings(t, onAdopt, onSaved)
+      const { state, busy, banner, setBanner, load, save, canSave } = useSettings(t, onAdopt, onSaved)
       const models = useModels()
       const readme = README[locale] ?? README.en
 
@@ -640,7 +939,14 @@ window.__ModuleLoader__.load({
       const legacy = data.legacy ?? []
 
       return h('div', { className: 'ct-page' },
-        h(StatusCard, { t, dryRun: saved.dryRun, generation }),
+        h(StatusCard, { t, dryRun: saved.dryRun, generation, onStatus }),
+        needsSetup(status) ? h(SetupCard, { t, status, editable,
+          // the saved settings with the new path: an unsaved draft stays a draft
+          onUse: (path) => {
+            if (!canSave()) return false
+            save({ ...saved, command: path }, { keepDraft: true, takeCommand: true })
+            return true
+          } }) : null,
         editable ? null : h('div', { className: 'ct-banner' },
           t(data.readOnly === 'expression' ? 'expression' : 'unavailable')),
         legacy.length ? h(LegacyNotice, { keys: legacy, t, busy, disabled: !editable,

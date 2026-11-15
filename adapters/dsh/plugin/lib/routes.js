@@ -18,6 +18,8 @@
  * Built from injected pieces (the config editor, the llm service, the MCP
  * client, the activity gate) so the tests drive them with stand-ins.
  */
+import { randomBytes } from 'node:crypto'
+
 import {
   describeSettings, parseSave, withSettings, ownEntry, revisionOf, plainSettings,
   editableSettings, legacyOf, imageRoutes,
@@ -74,7 +76,7 @@ const detail = (text) => (text ? String(text).slice(0, DETAIL_MAX) : undefined)
  * @param {object} deps.config                     the config apply() was given
  * @param {import('./activity.js').ActivityGate} deps.activity
  */
-export function settingsRoute({ editor, fiber, config, activity, graceMs = RELOAD_GRACE_MS }) {
+export function settingsRoute({ editor, fiber, config, activity, installer, graceMs = RELOAD_GRACE_MS }) {
   const read = () => {
     const entry = ownEntry(editor(), fiber)
     const raw = entry?.options?.config ?? config
@@ -115,6 +117,7 @@ export function settingsRoute({ editor, fiber, config, activity, graceMs = RELOA
     return json(200, { ok: true })
   }
   const save = async (request) => {
+    if (installer?.running) return json(409, { ok: false, error: 'installing' })
     // Closed before the first await: an execution must not start between
     // this check and the reload, nor an old one go on after it.
     const reopen = activity.closeIfIdle('saving its settings')
@@ -188,7 +191,7 @@ export async function checkDevice(mcp, command, activity, ms = DEVICE_CHECK_MS) 
     }
     const message = String(error?.message ?? error)
     if (/^could not run /.test(message)) {
-      return { mcp: { found: false, command, detail: detail(message) }, board: { state: 'unknown' } }
+      return { mcp: { found: false, command, detail: detail(message) }, board: { state: 'no-server' } }
     }
     return { mcp: { ...serverOf(mcp, command), detail: detail(message) }, board: { state: 'unknown' } }
   }
@@ -252,14 +255,17 @@ function serverOf(mcp, command) {
  * @param {string} deps.command  the executable it runs
  * @param {import('./activity.js').ActivityGate} deps.activity
  */
-export function statusRoute({ editor, fiber, config, llm, mcp, command, activity }) {
+export function statusRoute({ editor, fiber, config, llm, mcp, command, activity, installer }) {
   // Two pages open, or a double click: one check, both answered with it.
   let inflight = null
   const check = async () => {
     const entry = ownEntry(editor(), fiber)
     const raw = entry?.options?.config ?? config
-    const [eye, device] = await Promise.all([checkEye(raw, llm()), checkDevice(mcp, command, activity)])
-    return { eye, ...device }
+    const device = installer?.running
+      ? Promise.resolve({ mcp: serverOf(mcp, command), board: { state: 'installing' } })
+      : checkDevice(mcp, command, activity)
+    const [eye, dev] = await Promise.all([checkEye(raw, llm()), device])
+    return { eye, ...dev }
   }
   return {
     path: STATUS_ROUTE,
@@ -300,6 +306,101 @@ export async function listImageRoutes(llm, ms = MODELS_PER_PROVIDER_MS) {
     }
   })
   return { routes, failed, available: true }
+}
+
+/**
+ * GET  /api/clawtouch/setup    which Pythons and which clawtouch-mcp are here (runs each found
+ *                              interpreter once, briefly; nothing goes online)
+ * POST /api/clawtouch/install  {python: <index from the last setup answer>} starts the one install
+ * GET  /api/clawtouch/install  how that install is going
+ *
+ * While an install runs, tool calls and saves are refused: the venv being
+ * written may be the very one clawtouch-mcp is started from. A save after it
+ * (the page sets `command` to what was installed) goes through the settings
+ * route like any other.
+ */
+export const SETUP_ROUTE = '/api/clawtouch/setup'
+export const INSTALL_ROUTE = '/api/clawtouch/install'
+const SETUP_FRESH_MS = 10_000
+
+export function setupRoutes({ installer, detect, mcp, activity, required }) {
+  // Each detection is a generation: an install names the generation its page
+  // was shown, so an id can never be read against a newer, reordered list —
+  // nor against another plugin instance's list after a reload (the prefix).
+  const instance = randomBytes(6).toString('hex')
+  let generation = 0
+  let last = null // { at, result, generation }
+  let inflight = null
+  const look = () => {
+    if (last && Date.now() - last.at < SETUP_FRESH_MS) return Promise.resolve(last)
+    inflight ??= detect()
+      .then((result) => {
+        generation += 1
+        last = { at: Date.now(), result, generation: `${instance}-${generation}` }
+        return last
+      })
+      .finally(() => { inflight = null })
+    return inflight
+  }
+  const publicPython = (p) => ({ id: p.id, executable: p.executable, version: p.version, venv: p.venv })
+  const setup = {
+    path: SETUP_ROUTE,
+    methods: ['GET'],
+    requestBody: 'buffered',
+    fetch: async () => {
+      let seen
+      try {
+        seen = await look()
+      } catch {
+        return json(500, { ok: false, error: 'failed' })
+      }
+      const { result } = seen
+      return json(200, {
+        required,
+        generation: seen.generation,
+        root: result.root,
+        pythons: result.pythons.map(publicPython),
+        found: result.found,
+        managed: result.managed,
+        tooOld: result.tooOld,
+        job: installer.state(),
+      })
+    },
+  }
+  const start = async (request) => {
+    let body
+    try {
+      body = await request.json()
+    } catch {
+      return json(400, { ok: false, error: 'invalid', field: 'body' })
+    }
+    if (!Number.isInteger(body?.python)) return json(400, { ok: false, error: 'invalid', field: 'python' })
+    if (typeof body?.generation !== 'string') return json(400, { ok: false, error: 'invalid', field: 'generation' })
+    if (installer.closed) return json(409, { ok: false, error: 'reloading' })
+    if (installer.running) return json(409, { ok: false, error: 'installing' })
+    // the list the page chose from, not a fresh one that could be ordered differently
+    if (!last || last.generation !== body.generation) return json(409, { ok: false, error: 'stale' })
+    const python = last.result.pythons[body.python]
+    if (!python) return json(409, { ok: false, error: 'stale' })
+    if (!python.venv) return json(409, { ok: false, error: 'no-venv' })
+    const reopen = activity.closeIfIdle('installing clawtouch-mcp')
+    if (!reopen) return json(409, { ok: false, error: 'busy' })
+    // The running server may be the one being replaced (an upgrade): stop it,
+    // or Windows keeps its .exe locked and pip cannot write it.
+    try { await mcp.stop() } catch { /* not running */ }
+    // The plugin may have been disposed during that await: start nothing then.
+    if (installer.closed) { reopen(); return json(409, { ok: false, error: 'reloading' }) }
+    last = null // what is installed is about to change
+    if (!installer.start(python, reopen)) { reopen(); return json(409, { ok: false, error: 'installing' }) }
+    return json(202, { ok: true, job: installer.state() })
+  }
+  const install = {
+    path: INSTALL_ROUTE,
+    methods: ['GET', 'POST'],
+    requestBody: 'buffered',
+    fetch: (request) => (request.method === 'POST' ? start(request) : json(200, { job: installer.state() })),
+  }
+  return [setup, install]
 }
 
 export function modelsRoute({ llm, freshMs = MODELS_FRESH_MS }) {

@@ -39,8 +39,11 @@ BOOTSEL 盘即可。
 ### 2. Python 端 `clawtouch-mcp` (必须)
 
 ```bash
-pip install 'clawtouch-mcp[screenshot,window]>=0.5.1'
+pip install 'clawtouch-mcp[screenshot,window]>=0.6.1'
 ```
+
+也可以不敲命令：电脑上有 Python 3.10 或更新版本的话,装好插件后打开它的设置页,点「安装」,
+插件会把 clawtouch-mcp 装进 dsh 目录下自己的文件夹,并自动填好路径(见下面「设置页」)。
 
 **两个 extra 都要,不能只写 `[screenshot]`** —— 后者只有 mss + Pillow,
 不含 pyobjc。macOS 上少了它,窗口列表功能直接不可用。
@@ -125,6 +128,13 @@ node probe.js --windows --screen 7680x1440
   的路径(`command`)。
 - 配置里还留着 0.1.x 的 `vision.endpoint` / `apiKey` / `extraBody` 时,页面只写出键名
   (不显示值),并有一个按钮只删这几项。
+- **安装 clawtouch-mcp**:它运行不起来或版本比插件要求的旧时出现。页面先找这台电脑上的
+  Python 3.10+(也找已经装好的 clawtouch-mcp,有的话点「用这个」即可);点「安装」会在
+  `<dsh 目录>/clawtouch-mcp/venv` 建一个独立环境,装上插件测试过的那一版
+  `clawtouch-mcp[screenshot,window]`,核对无误后自动填好路径并保存。先从 PyPI 下载,
+  失败或太久没回应就自动换清华镜像;pip 以隔离模式运行、不读任何 pip 配置文件,你的 pip
+  设置改不了它装到哪、从哪下,那个文件夹以外的东西都不碰。只在点安装时联网。它不负责装 Python:
+  没有的话页面会说明,并给出 python.org 的链接。
 
 保存会让插件重新加载,所以 AI 正在点击或打字时不让保存;保存写入期间新开始的操作会在按下任何东西
 之前被拒绝。保存只改页面上这几项,这一行配置里的其他键原样保留。页面上没有的设置(包括按键拦截,

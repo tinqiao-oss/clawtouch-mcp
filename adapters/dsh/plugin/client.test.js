@@ -182,6 +182,11 @@ async function fastTimers(fn) {
   try { return await fn() } finally { globalThis.setTimeout = real }
 }
 
+/** Whether a status banner on the page says exactly `key` (text of the whole page would match
+ *  "save" + "discard" as "saved"). */
+const bannerSays = (page, key) => findAll(page.tree, (n) => typeof n.props?.className === 'string'
+  && n.props.className.split(' ').includes('ct-banner') && textOf(n) === key).length > 0
+
 /** Settle until `pred(text)` holds: a save's read-back takes a variable number of turns. */
 async function settleUntil(page, pred, rounds = 200) {
   for (let i = 0; i < rounds && !pred(textOf(page.tree)); i++) await page.settle()
@@ -262,9 +267,9 @@ test('client: picking a model and turning dry run on saves the whole form, then 
     await page.settle()
     assert.match(textOf(page.tree), /saveNote/)
     button(page.tree, 'save').props.onClick()
-    await settleUntil(page, (text) => /saved(?!Unconfirmed)/.test(text) && sent.filter((s) => s.url.endsWith('status')).length === 2)
+    await settleUntil(page, () => bannerSays(page, 'saved') && sent.filter((s) => s.url.endsWith('status')).length === 2)
     saved = sent.find((s) => s.method === 'POST' && s.url.endsWith('settings'))
-    assert.match(textOf(page.tree), /saved(?!Unconfirmed)/)
+    assert.ok(bannerSays(page, 'saved'))
     // the status is checked again after the reload
     assert.equal(sent.filter((s) => s.url.endsWith('status')).length, 2)
   })
@@ -309,7 +314,7 @@ test('client: the 0.1.x settings are named, and removing them sends the saved fo
     switchFor(page.tree, 'dryRunTitle').props.onClick() // an unsaved change
     await page.settle()
     button(page.tree, 'legacyDrop').props.onClick()
-    await settleUntil(page, (text) => /saved(?!Unconfirmed)/.test(text))
+    await settleUntil(page, () => bannerSays(page, 'saved'))
     const body = sent.find((s) => s.method === 'POST' && s.url.endsWith('settings')).body
     assert.equal(body.dropLegacy, true)
     assert.equal(body.dryRun, false)
@@ -331,10 +336,10 @@ test('client: a 0.1.x config with vision.model alone can still be cleaned up', a
     })
     assert.match(textOf(page.tree), /legacyHalfEye/)
     button(page.tree, 'legacyDrop').props.onClick()
-    await settleUntil(page, (text) => /saved(?!Unconfirmed)/.test(text))
+    await settleUntil(page, () => bannerSays(page, 'saved'))
     const body = sent.find((s) => s.method === 'POST' && s.url.endsWith('settings')).body
     assert.deepEqual([body.dropLegacy, body.eye], [true, { mode: 'conversation' }])
-    assert.match(textOf(page.tree), /saved(?!Unconfirmed)/)
+    assert.ok(bannerSays(page, 'saved'))
   })
 })
 
@@ -356,7 +361,7 @@ test('client: a save while the first check is still out checks again, and drops 
     switchFor(page.tree, 'dryRunTitle').props.onClick()
     await page.settle()
     button(page.tree, 'save').props.onClick()
-    await settleUntil(page, (text) => /saved(?!Unconfirmed)/.test(text))
+    await settleUntil(page, () => bannerSays(page, 'saved'))
     first()
     await settleUntil(page, (text) => sent.filter((s) => s.url.endsWith('status')).length === 2 && !/checking/.test(text))
     assert.equal(sent.filter((s) => s.url.endsWith('status')).length, 2)
@@ -408,4 +413,210 @@ test('client: each board state reads as a sentence', async () => {
     'POST api/clawtouch/status': { ...STATUS, mcp: { found: false, command: 'clawtouch-mcp', detail: 'spawn ENOENT' } },
   })
   assert.match(textOf(page.tree), /mcpMissing.*spawn ENOENT/)
+})
+
+// ── installing clawtouch-mcp from the page ─────────────────────────────
+
+const INSTALLER_SOURCE = readFileSync(join(HERE, 'lib', 'installer.js'), 'utf8')
+const MISSING = { ...STATUS, mcp: { found: false, command: 'clawtouch-mcp', detail: 'spawn clawtouch-mcp ENOENT' },
+  board: { state: 'no-server' } }
+const SETUP = (patch = {}) => ({ required: '0.6.1', generation: 3, root: 'C:/h/.dsh/clawtouch-mcp',
+  pythons: [{ id: 0, executable: 'C:/Py312/python.exe', version: '3.12.4', venv: true }],
+  found: [], managed: null, tooOld: [], job: null, ...patch })
+
+test('client: the version it asks for is the one the installer installs', () => {
+  const page = /const REQUIRED_MCP = '([^']+)'/.exec(SOURCE)[1]
+  const installer = /export const MCP_VERSION = '([^']+)'/.exec(INSTALLER_SOURCE)[1]
+  assert.equal(page, installer)
+})
+
+test('client: with clawtouch-mcp running and recent enough, no install card', async () => {
+  const { page, sent } = await openPage({
+    'GET api/clawtouch/settings': settingsData(),
+    'GET api/clawtouch/models': MODELS,
+    'POST api/clawtouch/status': STATUS,
+  })
+  assert.doesNotMatch(textOf(page.tree), /setupTitle/)
+  assert.ok(!sent.some((s) => s.url.endsWith('setup')))
+})
+
+test('client: missing clawtouch-mcp — install, follow the job, then save its path keeping the draft', async () => {
+  await fastTimers(async () => {
+    let polls = 0
+    const { page, sent } = await openPage({
+      'GET api/clawtouch/settings': (log) => (log.some((s) => s.method === 'POST' && s.url.endsWith('settings'))
+        ? settingsData({ command: 'C:/h/.dsh/clawtouch-mcp/venv/Scripts/clawtouch-mcp.exe' }) : settingsData()),
+      'POST api/clawtouch/settings': { ok: true },
+      'GET api/clawtouch/models': MODELS,
+      'POST api/clawtouch/status': (log) => (log.some((s) => s.method === 'POST' && s.url.endsWith('settings')) ? STATUS : MISSING),
+      'GET api/clawtouch/setup': SETUP(),
+      'POST api/clawtouch/install': { status: 202, body: { ok: true, job: { phase: 'venv', lines: [], version: '0.6.1' } } },
+      'GET api/clawtouch/install': () => {
+        polls += 1
+        return polls < 2
+          ? { job: { phase: 'pip', lines: ['Collecting clawtouch-mcp'], version: '0.6.1' } }
+          : { job: { phase: 'done', lines: [], version: '0.6.1', source: 'pypi',
+            path: 'C:/h/.dsh/clawtouch-mcp/venv/Scripts/clawtouch-mcp.exe' } }
+      },
+    })
+    const text = textOf(page.tree)
+    assert.match(text, /setupMissing/)
+    assert.match(text, /boardNoServer/)
+    assert.match(text, /setupPython\{"version":"3\.12\.4"/)
+    switchFor(page.tree, 'dryRunTitle').props.onClick() // an unsaved change
+    await page.settle()
+    button(page.tree, 'setupInstall{"version":"0.6.1"}').props.onClick()
+    await settleUntil(page, () => bannerSays(page, 'saved'))
+    const install = sent.find((s) => s.method === 'POST' && s.url.endsWith('install'))
+    assert.deepEqual(install.body, { python: 0, generation: 3 })
+    const save = sent.find((s) => s.method === 'POST' && s.url.endsWith('settings'))
+    assert.equal(save.body.command, 'C:/h/.dsh/clawtouch-mcp/venv/Scripts/clawtouch-mcp.exe')
+    assert.equal(save.body.dryRun, false) // the saved settings went, not the draft
+    assert.equal(switchFor(page.tree, 'dryRunTitle').props['aria-checked'], true) // the draft stayed
+    await settleUntil(page, (t) => !/setupTitle/.test(t)) // the re-check found it running
+    assert.doesNotMatch(textOf(page.tree), /setupTitle/)
+  })
+})
+
+test('client: an install found elsewhere is offered with "use this"; one without screenshots is only named', async () => {
+  await fastTimers(async () => {
+    const { page, sent } = await openPage({
+      'GET api/clawtouch/settings': (log) => (log.some((s) => s.method === 'POST' && s.url.endsWith('settings'))
+        ? settingsData({ command: 'C:/conda/Scripts/clawtouch-mcp.exe' }) : settingsData()),
+      'POST api/clawtouch/settings': { ok: true },
+      'GET api/clawtouch/models': MODELS,
+      'POST api/clawtouch/status': MISSING,
+      'GET api/clawtouch/setup': SETUP({ found: [
+        { path: 'C:/conda/Scripts/clawtouch-mcp.exe', version: '0.6.1', python: 'C:/conda/python.exe', screenshot: true },
+        { path: 'C:/bare/Scripts/clawtouch-mcp.exe', version: '0.6.2', python: 'C:/bare/python.exe', screenshot: false },
+      ] }),
+    })
+    const text = textOf(page.tree)
+    assert.match(text, /setupFound\{"version":"0\.6\.1","path":"C:\/conda/)
+    assert.match(text, /setupFoundNoShot\{"version":"0\.6\.2"/)
+    assert.equal(findAll(page.tree, (n) => n.type === 'button' && textOf(n) === 'setupUse').length, 1)
+    button(page.tree, 'setupUse').props.onClick()
+    await settleUntil(page, () => bannerSays(page, 'saved'))
+    assert.equal(sent.find((s) => s.method === 'POST' && s.url.endsWith('settings')).body.command,
+      'C:/conda/Scripts/clawtouch-mcp.exe')
+  })
+})
+
+test('client: no Python — say so, link python.org, offer to look again', async () => {
+  const { page } = await openPage({
+    'GET api/clawtouch/settings': settingsData(),
+    'GET api/clawtouch/models': MODELS,
+    'POST api/clawtouch/status': MISSING,
+    'GET api/clawtouch/setup': SETUP({ pythons: [], tooOld: [{ executable: 'C:/old/python.exe', version: '3.9.1' }] }),
+  })
+  const text = textOf(page.tree)
+  assert.match(text, /setupNoPython/)
+  assert.match(text, /setupTooOld\{"list":"3\.9\.1 \(C:\/old\/python\.exe\)"\}/)
+  assert.ok(findAll(page.tree, (n) => n.type === 'a' && n.props.href === 'https://www.python.org/downloads/').length === 1)
+  assert.ok(button(page.tree, 'setupRescan'))
+  assert.equal(button(page.tree, 'setupInstall{"version":"0.6.1"}'), undefined)
+})
+
+test('client: an old clawtouch-mcp is named and an install offered', async () => {
+  const { page } = await openPage({
+    'GET api/clawtouch/settings': settingsData(),
+    'GET api/clawtouch/models': MODELS,
+    'POST api/clawtouch/status': { ...STATUS, mcp: { found: true, command: 'clawtouch-mcp', version: '0.6.0' },
+      board: { state: 'old-server' } },
+    'GET api/clawtouch/setup': SETUP(),
+  })
+  assert.match(textOf(page.tree), /setupOld\{"version":"0\.6\.0","required":"0\.6\.1"\}/)
+  assert.ok(button(page.tree, 'setupInstall{"version":"0.6.1"}'))
+})
+
+test('client: an install cut short by a plugin reload is reported, and the page stops following it', async () => {
+  await fastTimers(async () => {
+    let polls = 0
+    const { page } = await openPage({
+      'GET api/clawtouch/settings': settingsData(),
+      'GET api/clawtouch/models': MODELS,
+      'POST api/clawtouch/status': MISSING,
+      'GET api/clawtouch/setup': SETUP(),
+      'POST api/clawtouch/install': { status: 202, body: { ok: true, job: { phase: 'pip', lines: ['Collecting'], version: '0.6.1' } } },
+      'GET api/clawtouch/install': () => { polls += 1; return { job: null } }, // a fresh instance knows of no job
+    })
+    button(page.tree, 'setupInstall{"version":"0.6.1"}').props.onClick()
+    await settleUntil(page, () => bannerSays(page, 'setupFailCancelled'))
+    assert.ok(bannerSays(page, 'setupFailCancelled'))
+    const after = polls
+    for (let i = 0; i < 5; i++) await page.settle()
+    assert.equal(polls, after)
+  })
+})
+
+test('client: a pre-release below the required version still asks for an install', async () => {
+  const { page } = await openPage({
+    'GET api/clawtouch/settings': settingsData(),
+    'GET api/clawtouch/models': MODELS,
+    'POST api/clawtouch/status': { ...STATUS, mcp: { found: true, command: 'clawtouch-mcp', version: '0.6.1rc1' } },
+    'GET api/clawtouch/setup': SETUP(),
+  })
+  assert.match(textOf(page.tree), /setupOld\{"version":"0\.6\.1rc1"/)
+})
+
+test('client: a search that failed can be run again', async () => {
+  let n = 0
+  const { page } = await openPage({
+    'GET api/clawtouch/settings': settingsData(),
+    'GET api/clawtouch/models': MODELS,
+    'POST api/clawtouch/status': MISSING,
+    'GET api/clawtouch/setup': () => (++n === 1 ? { status: 500, body: { ok: false, error: 'failed' } } : SETUP()),
+  })
+  assert.match(textOf(page.tree), /setupLookFailed/)
+  button(page.tree, 'setupRescan').props.onClick()
+  await settleUntil(page, (t) => /setupPython/.test(t))
+  assert.ok(button(page.tree, 'setupInstall{"version":"0.6.1"}'))
+})
+
+test('client: the managed install without screenshot support is not offered', async () => {
+  const { page } = await openPage({
+    'GET api/clawtouch/settings': settingsData(),
+    'GET api/clawtouch/models': MODELS,
+    'POST api/clawtouch/status': MISSING,
+    'GET api/clawtouch/setup': SETUP({ managed: { path: 'C:/h/.dsh/clawtouch-mcp/venv/Scripts/clawtouch-mcp.exe',
+      version: '0.6.1', screenshot: false } }),
+  })
+  assert.doesNotMatch(textOf(page.tree), /setupFoundManaged/)
+  assert.equal(button(page.tree, 'setupUse'), undefined)
+})
+
+test('client: an install that finishes during another save still gets its path saved after it', async () => {
+  await fastTimers(async () => {
+    let releaseFirst
+    let posts = 0
+    const { page, sent } = await openPage({
+      'GET api/clawtouch/settings': (log) => {
+        const saves = log.filter((s) => s.method === 'POST' && s.url.endsWith('settings'))
+        if (!saves.length) return settingsData()
+        const last = saves[saves.length - 1].body
+        return settingsData({ dryRun: last.dryRun, command: last.command })
+      },
+      'POST api/clawtouch/settings': () => {
+        posts += 1
+        return posts === 1 ? new Promise((r) => { releaseFirst = () => r({ ok: true }) }) : { ok: true }
+      },
+      'GET api/clawtouch/models': MODELS,
+      'POST api/clawtouch/status': MISSING,
+      'GET api/clawtouch/setup': SETUP(),
+      'POST api/clawtouch/install': { status: 202, body: { ok: true, job: { phase: 'pip', lines: [], version: '0.6.1' } } },
+      'GET api/clawtouch/install': { job: { phase: 'done', lines: [], version: '0.6.1', source: 'pypi', path: 'C:/new/clawtouch-mcp.exe' } },
+    })
+    switchFor(page.tree, 'dryRunTitle').props.onClick()
+    await page.settle()
+    button(page.tree, 'save').props.onClick() // a save that hangs for now
+    await page.settle()
+    button(page.tree, 'setupInstall{"version":"0.6.1"}').props.onClick()
+    for (let i = 0; i < 3; i++) await page.settle()
+    assert.equal(posts, 1) // the install's save waits its turn
+    releaseFirst()
+    await settleUntil(page, () => posts >= 2)
+    const saves = sent.filter((s) => s.method === 'POST' && s.url.endsWith('settings'))
+    assert.equal(saves.length, 2)
+    assert.equal(saves[1].body.command, 'C:/new/clawtouch-mcp.exe')
+  })
 })
