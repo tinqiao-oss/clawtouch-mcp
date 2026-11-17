@@ -14,6 +14,18 @@ longer maintained, so the README no longer links to it. Typing text through
 the clipboard, which its `paste-text` skill described, is already covered by
 this server's tool descriptions and README.
 
+### dsh-clawtouch 0.4.1 — declares the dsh it needs
+
+`engines.dsh` is now `>=0.2.1-alpha.2`. Plugin markets read this field, and
+without it they labelled the plugin "no host requirement declared". The
+README said "needs dsh 0.2.x", which was too broad: the eye asks dsh's model
+service whether a model accepts images, and only from 0.2.1-alpha.2 does that
+service answer, so on 0.2.0-rc.1, 0.2.0-rc.2 and 0.2.1-alpha.1 every look
+failed. The README now gives the real floor. There is no upper bound, so a
+newer dsh does not refuse the install: dsh 0.2.1-alpha.4 and later check the
+range with prereleases included, and earlier releases do not check it. Still
+no `@deepseek-ai/dsh*` peer (see the note in `index.js`). No code changed.
+
 ### dsh-clawtouch 0.4.0 — install clawtouch-mcp from the settings page
 
 A person who installs the plugin from dsh's Plugins page has usually never

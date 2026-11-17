@@ -121,8 +121,11 @@ and nothing claims it was.
 
 ### dsh versions and dsh's own Computer Use
 
-0.2.0 needs dsh 0.2.x: the eye goes through dsh's own model and attachment
-services. Verified on dsh 0.2.2-rc.1 (2026-11-14): the tools work through
+Since 0.2.0 the eye goes through dsh's own model and attachment services, and
+it needs dsh 0.2.1-alpha.2 or later: earlier 0.2 releases cannot tell it
+whether a model accepts images, so every look fails there. From 0.4.1 the
+package says so in `engines.dsh` (`>=0.2.1-alpha.2`), with no upper bound, so
+a newer dsh does not refuse the install. Verified on dsh 0.2.2-rc.1 (2026-11-14): the tools work through
 the native executor and through PTC (`run_code` calling `tools.computer_*`,
 which get structured results), and the key guard also stops calls made from
 inside a PTC program. dsh also ships an experimental Computer Use of its own. Turn on
