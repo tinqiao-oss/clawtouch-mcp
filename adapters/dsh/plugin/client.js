@@ -33,7 +33,7 @@ window.__ModuleLoader__.load({
     const SETUP_API = 'api/clawtouch/setup'
     const INSTALL_API = 'api/clawtouch/install'
     /** This plugin's version, for the footer; a test keeps it equal to package.json's. */
-    const VERSION = '0.4.0'
+    const VERSION = '0.4.1'
     const ISSUES = 'https://github.com/tinqiao-oss/clawtouch-mcp/issues/new'
     /** Hit rates from the README's "Choosing the eye" (offline, 165 looks per model,
      *  dsh's image note simulated, 2026-11-14). Anything not here was not measured. */
