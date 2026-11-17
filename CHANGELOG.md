@@ -7,6 +7,13 @@ versions adhere to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Docs — `clawtouch-skills` retired
+
+The companion repo `clawtouch-skills` was archived on 2026-11-15 and is no
+longer maintained, so the README no longer links to it. Typing text through
+the clipboard, which its `paste-text` skill described, is already covered by
+this server's tool descriptions and README.
+
 ### dsh-clawtouch 0.4.0 — install clawtouch-mcp from the settings page
 
 A person who installs the plugin from dsh's Plugins page has usually never

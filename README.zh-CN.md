@@ -305,8 +305,6 @@ $ clawtouch-mcp --port COM7
 - [Claude Computer Use → HID](examples/computer_use/claude_demo.py) —— `client.beta.messages.stream` 配合 `computer_20251124` 工具
 - [OpenAI CUA → HID](examples/computer_use/openai_cua_demo.py) —— Responses API + `computer-use-preview`
 
-针对具体应用的 LLM 指南,[`clawtouch-skills`](https://github.com/tinqiao-oss/clawtouch-skills) 是姊妹仓 —— markdown 操作手册集,LLM 在驱动某个应用前可 load 进 context。Skill 是软性指导 —— LLM 仍然自己决定怎么走。
-
 ## 内容生成 —— 不在本仓库范围
 
 `clawtouch-mcp` 把硬件 HID 动作 (鼠标 / 键盘 / 滚轮 / 快捷键 /
@@ -386,20 +384,19 @@ ClawTouch 的不可替代之处是那条**真实硬件 HID 通路**: OS 看到�
 
 ## 开源路线图、参与贡献与 License
 
-固件、线协议、MCP server 与技能模板全部 MIT 开源。
+固件、线协议与 MCP server 全部 MIT 开源。
 
 | 组件 | 状态 |
 |---|---|
 | **clawtouch-mcp**(本仓库) | ✅ 已发布 |
 | **[clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** — 固件 + 协议模块,wire epoch 1 | ✅ 已发布 |
-| **[clawtouch-skills](https://github.com/tinqiao-oss/clawtouch-skills)** — 给 LLM agent 用的 markdown skill 文件 | ✅ 已发布 |
 | **clawtouch-bridge-sdk** — Python + Node HID SDK | 🔵 规划中 |
 
 ### 参与贡献
 
 欢迎 PR:新增映射现有 HID 原语的 MCP 工具、Bug 修复、客户端集成示例、文档改进、非中文 README 翻译。
 
-不接受的 PR:agent 循环逻辑或应用层功能(故意排除在范围外 — 见[可接受用途](#可接受用途)),以及特定应用的适配器(特定应用的操作经验请以 Markdown 形式贡献到 [clawtouch-skills](https://github.com/tinqiao-oss/clawtouch-skills))。
+不接受的 PR:agent 循环逻辑或应用层功能(故意排除在范围外 — 见[可接受用途](#可接受用途)),以及特定应用的适配器。
 
 `clawtouch-mcp` 由 **北京亭桥科技** 维护 —— ClawTouch 产品团队([clawtouch.cn](https://clawtouch.cn))。
 

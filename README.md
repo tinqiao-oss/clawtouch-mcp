@@ -333,8 +333,6 @@ If you're building your own Computer Use loop instead, [`examples/computer_use/`
 - [Claude Computer Use → HID](examples/computer_use/claude_demo.py) — `client.beta.messages.stream` with the `computer_20251124` tool
 - [OpenAI CUA → HID](examples/computer_use/openai_cua_demo.py) — Responses API with `computer-use-preview`
 
-For per-application LLM guidance, [`clawtouch-skills`](https://github.com/tinqiao-oss/clawtouch-skills) is a companion repo of markdown operator manuals an LLM can load before driving a specific app. Skills are soft guidance — the LLM still decides what to do.
-
 ### See it in action
 
 Start the server against your bridge, then any MCP client (Claude
@@ -449,20 +447,19 @@ ClawTouch's irreplaceable edge is the **genuine hardware HID path**: the OS sees
 
 ## Open source roadmap, contributing & license
 
-The firmware, wire protocol, MCP server and skill templates are all MIT-licensed.
+The firmware, wire protocol and MCP server are all MIT-licensed.
 
 | Component | Status |
 |---|---|
 | **clawtouch-mcp** (this repo) | ✅ Released |
 | **[clawtouch-hid](https://github.com/tinqiao-oss/clawtouch-hid)** — firmware + protocol module, wire epoch 1 | ✅ Released |
-| **[clawtouch-skills](https://github.com/tinqiao-oss/clawtouch-skills)** — markdown skill files for LLM agents | ✅ Released |
 | **clawtouch-bridge-sdk** — Python + Node HID SDK | 🔵 Future |
 
 ### Contributing
 
 PRs welcome for: new MCP tools mapping to existing HID primitives, bug fixes, client-integration examples, doc improvements, non-English README translations.
 
-Not taking PRs for: agent-loop logic or application-level features (intentionally out of scope — see [Acceptable use](#acceptable-use)) or adapters for specific applications (app-specific know-how belongs in [clawtouch-skills](https://github.com/tinqiao-oss/clawtouch-skills) as Markdown).
+Not taking PRs for: agent-loop logic or application-level features (intentionally out of scope — see [Acceptable use](#acceptable-use)) or adapters for specific applications.
 
 `clawtouch-mcp` is maintained by **Tinqiao Technology** — the team behind **ClawTouch** ([clawtouch.cn](https://clawtouch.cn)).
 
